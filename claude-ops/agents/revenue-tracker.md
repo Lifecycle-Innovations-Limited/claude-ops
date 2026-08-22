@@ -1,6 +1,6 @@
 ---
 name: revenue-tracker
-description: Revenue, billing, and credits analysis agent. Pulls real revenue data from Stripe (SaaS) and RevenueCat (mobile subs), queries AWS Cost Explorer for spend, and cross-references project revenue stages. Returns structured financial snapshot.
+description: "OPS specialist: Revenue, billing, and credits analysis agent"
 model: claude-sonnet-4-6
 effort: high
 maxTurns: 30

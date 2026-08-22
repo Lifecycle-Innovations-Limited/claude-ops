@@ -1,86 +1,35 @@
 ---
 name: ops
-description: "This skill should be used when the user asks to \"ops command center\", \"/ops:ops\", or \"run the business\". Business operations command center. Routes to the right ops command based on what you need — briefing, inbox, fires, projects, comms, triage, linear, revenue, deploy, or yolo mode."
+description: "This skill should be used when the user asks to \"ops command center\", \"/ops:ops\", or \"run the business\". Single discovery router for all business operations — communications, projects, infrastructure, revenue, marketing, releases, fleet management, automation, or any OPS capability. Loads and invokes only the relevant specialist instructions on demand."
 argument-hint: '[command] [args]'
 allowed-tools:
-  - Bash
   - Read
-  - Grep
-  - Glob
   - Skill
-  - Agent
-  - TeamCreate
-  - SendMessage
 effort: medium
 maxTurns: 20
 ---
 
-## Runtime Context
+# OPS — Lazy Capability Router
 
-Before routing, load:
+This is the single broad discovery entry for the OPS plugin. Specialist skill and agent
+bodies are intentionally absent from startup context.
 
-1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read configured channels to determine available commands
-2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — if `action_needed`, surface before routing
+## Route
 
-# OPS — Business Command Center
+1. If `$ARGUMENTS` is empty, invoke the `ops:ops-dash` skill.
+2. Otherwise, read [the capability index](references/capabilities.json).
+3. Match the user's complete request—not merely one keyword—to exactly one specialist skill.
+4. Invoke that skill through the `Skill` tool using its exact namespaced name:
+   `ops:<skill-name>`. Forward the user's original arguments and intent unchanged.
+5. If two specialists genuinely fit, choose the narrower one. Ask only when the choice
+   would materially change an external action.
 
 Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
-Route `$ARGUMENTS` to the correct ops skill:
+Do not reproduce or summarize a specialist workflow from the index. Invoke the specialist
+so Claude Code loads its full body, allowed tools, effort, hooks, and turn budget on demand.
+Never invoke `ops:ops` from this router; that would recurse.
 
-| Input                                                                                                            | Route to                          |
-| ---------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| (empty), dash, hq                                                                                                | `/ops:ops-dash`                   |
-| go, morning, briefing                                                                                            | `/ops-go`                         |
-| setup, configure, init, install                                                                                  | `/ops:setup $ARGUMENTS`           |
-| inbox, unread, messages                                                                                          | `/ops-inbox`                      |
-| comms, send, whatsapp, email, slack, telegram                                                                    | `/ops-comms $ARGUMENTS`           |
-| fires, incidents, down, sentry                                                                                   | `/ops-fires`                      |
-| projects, dashboard                                                                                              | `/ops-projects`                   |
-| status, health-status                                                                                            | `/ops:ops-status`                 |
-| next, priority, what                                                                                             | `/ops-next`                       |
-| triage, issues                                                                                                   | `/ops-triage`                     |
-| linear, sprint, board                                                                                            | `/ops-linear`                     |
-| revenue, money, mrr, costs                                                                                       | `/ops-revenue`                    |
-| deploy, ship                                                                                                     | `/ops-deploy`                     |
-| merge, prs, ship-prs                                                                                             | `/ops-merge $ARGUMENTS`           |
-| marketing, email, klaviyo, ads, meta, seo, campaigns                                                             | `/ops:ops-marketing $ARGUMENTS`   |
-| ecom, shop, shopify, store, orders, inventory                                                                    | `/ops:ops-ecom $ARGUMENTS`        |
-| voice, call, tts, transcribe, phone                                                                              | `/ops:ops-voice $ARGUMENTS`       |
-| yolo                                                                                                             | `/ops-yolo`                       |
-| doctor, health, fix, diagnose                                                                                    | `/ops:ops-doctor`                 |
-| monitor, apm, alerts, datadog, newrelic, otel                                                                    | `/ops:ops-monitor $ARGUMENTS`     |
-| settings, credentials, creds, config, reconfigure                                                                | `/ops:ops-settings $ARGUMENTS`    |
-| integrate, connect, add-api, saas, partner                                                                       | `/ops:ops-integrate $ARGUMENTS`   |
-| speedup, clean, optimize, cleanup                                                                                | `/ops:ops-speedup`                |
-| orchestrate, subagents, agents, dispatch, run                                                                    | `/ops:ops-orchestrate $ARGUMENTS` |
-| feature, feature-dev, fd, architect-feature, explore-feature                                                     | `/ops:ops-feature-dev $ARGUMENTS` |
-| secret-sync, secrets, doppler-sync, drift                                                                        | `/ops:ops-secret-sync $ARGUMENTS` |
-| home, homey, lights, flow, scene, energy, climate, presence, alarm, smart-home, iot, thermostat, dim, door, lock | `/ops:ops-home $ARGUMENTS`        |
-| statusline, status-line, cockpit                                                                                 | `/ops:statusline $ARGUMENTS`      |
-
-If `$ARGUMENTS` is empty, launch the interactive dashboard: invoke `/ops:ops-dash` directly.
-
-## Agent Teams support
-
-If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when building dashboard sections in parallel. This enables:
-
-- Agents share context and can coordinate mid-flight
-- You can steer priorities in real-time
-- Agents report progress as they complete
-
-**Team setup** (only when flag is enabled):
-
-```
-TeamCreate("ops-team")
-Agent(team_name="ops-team", name="daily-ops", prompt="Gather fires, inbox, and unread comms status")
-Agent(team_name="ops-team", name="engineering", prompt="Gather PRs, CI status, and deploy state")
-Agent(team_name="ops-team", name="business", prompt="Gather revenue, Linear sprint, and project progress")
-Agent(team_name="ops-team", name="automation", prompt="Check cron jobs, daemon health, and scheduled tasks")
-```
-
-If the flag is NOT set, use standard fire-and-forget subagents.
-
-## CLI/API Reference
-
-This skill is a router only — it does not call CLI tools directly. All tool usage is delegated to the target skill after routing. See the referenced skill's `## CLI/API Reference` section for details.
+The capability index is routing metadata, not authority to perform an action. All approval,
+secrets, outbound-message, destructive-operation, and worktree gates remain owned by the
+selected specialist and the global hooks.

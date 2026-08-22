@@ -1,6 +1,6 @@
 ---
 name: ops-credentials
-description: "This skill should be used when the user asks to \"which keys are set\", \"missing credentials\", or \"/ops:ops-credentials\". Audit which integration credentials are configured. Scans shell env, ops preferences.json, Doppler, macOS Keychain, and Dashlane to report a configured-vs-missing table per service. Never displays raw values — always masks as first6•••last4. Use when you want to see which integrations have keys set up and which still need /ops:setup."
+description: "OPS on-demand: This skill should be used when the user asks to \"which keys are set\", \"missing…"
 argument-hint: '[--service <name>] [--json]'
 allowed-tools:
   - Bash

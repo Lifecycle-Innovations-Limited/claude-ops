@@ -1,6 +1,6 @@
 ---
 name: ops-merge
-description: "This skill should be used when the user asks to \"merge PRs\", \"salvage branches\", or \"/ops:ops-merge\". Autonomous salvage + PR merge pipeline. FIRST scans every repo in every org for orphan worktrees, feature branches without PRs, uncommitted/staged/stashed work, and unpushed commits — dispatches subagents to finish/PR all loose local work. THEN scans all open PRs, dispatches fixers for CI/conflicts/reviews, and merges. Use --main to also sync dev↔main branches. Use --no-salvage to skip Phase 0 (PR-only mode). Use --salvage-only to stop after Phase 0."
+description: "OPS on-demand: This skill should be used when the user asks to \"merge PRs\", \"salvage branches\", or…"
 argument-hint: '[--main] [--repo org/repo] [--dry-run] [--no-salvage] [--salvage-only]'
 allowed-tools:
   - Bash

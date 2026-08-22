@@ -1,6 +1,6 @@
 ---
 name: ops-rules
-description: "This skill should be used when running any ops skill, or when the user asks to \"ops rules\", \"plugin rules\", \"Rule 6\", \"send gate\", or \"harness fallbacks\". Standing rules for the ops plugin — public-repo hygiene, outbound approval, WhatsApp MCP names, and Hermes/Grok fallbacks."
+description: "OPS on-demand: This skill should be used when running any ops skill, or when the user asks to \"ops…"
 argument-hint: ''
 allowed-tools:
   - Read

@@ -1,6 +1,6 @@
 ---
 name: setup
-description: "This skill should be used when the user asks to \"/ops:setup\", \"configure ops\", or \"connect WhatsApp/email\". Interactive setup wizard for the claude-ops plugin. Installs missing CLIs, configures env vars for each channel (Telegram, WhatsApp, Email, Slack, Notion, Linear, Sentry, Vercel), builds the project registry, and saves user preferences. Run once after installing the plugin or any time to reconfigure."
+description: "OPS on-demand: This skill should be used when the user asks to \"/ops:setup\", \"configure ops\", or…"
 argument-hint: '[section]'
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: ops-comms
-description: "This skill should be used when the user asks to \"send a message\", \"whatsapp/email/slack\", or \"/ops:ops-comms\". Send and read messages across all channels. Routes based on arguments — whatsapp, email, slack, telegram, discord, notion, or natural language like \"send [msg] to [contact]\". WhatsApp via mcp__whatsapp__* (Baileys bridge)."
+description: "OPS on-demand: This skill should be used when the user asks to \"send a message\"…"
 argument-hint: '[channel] | send [message] to [contact] | read [channel] | notion [search query]'
 allowed-tools:
   - Bash

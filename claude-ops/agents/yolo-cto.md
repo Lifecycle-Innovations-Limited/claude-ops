@@ -1,6 +1,6 @@
 ---
 name: yolo-cto
-description: Technical health agent. Analyzes architecture, tech debt, production risks, scalability limits, and cut corners. Brutally honest about what will break.
+description: "OPS specialist: Technical health agent"
 model: claude-opus-4-6
 effort: high
 maxTurns: 40
