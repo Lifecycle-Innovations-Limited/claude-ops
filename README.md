@@ -274,7 +274,7 @@ claude-ops/                        ← marketplace root (this repo, this README)
     ├── telegram-server/           # bundled MCP server (gram.js)
     ├── templates/                 # Shopify Admin + app scaffolding
     ├── tests/                     # bash validation · test-no-secrets.sh
-    └── .mcp.json                  # MCP server declarations
+    └── .mcp.json                  # empty on purpose — MCP starts on demand, not per session
 ```
 
 ---

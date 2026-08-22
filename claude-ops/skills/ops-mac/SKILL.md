@@ -1,6 +1,6 @@
 ---
 name: ops-mac
-description: "This skill should be used when the user asks to \"/ops:ops-mac\", \"run ops-mac\", or \"use ops-mac\". macOS diagnose-and-fix command center. Wraps the macos-toolkit CLI suite (machealth, netwhiz, pstop, macdog, lanchr, macbroom, macctl, macfig, updater) behind one entrypoint — self-installs the suite on first use, runs a read-only baseline audit (security, launch agents, processes, network, disk, system health), and applies guarded fixes (stale daemons, cache cleanup) with per-action confirmation. The application firewall is reported only and changed solely on an explicit request."
+description: "This skill should be used when the user asks to \"mac is slow\", \"macos fix\", or \"/ops:ops-mac\". macOS diagnose-and-fix command center. Wraps the macos-toolkit CLI suite (machealth, netwhiz, pstop, macdog, lanchr, macbroom, macctl, macfig, updater) behind one entrypoint — self-installs the suite on first use, runs a read-only baseline audit (security, launch agents, processes, network, disk, system health), and applies guarded fixes (stale daemons, cache cleanup) with per-action confirmation. The application firewall is reported only and changed solely on an explicit request."
 argument-hint: '[audit|health|net|disk|procs|security|launchd|fix|ensure|update]'
 allowed-tools:
   - Bash

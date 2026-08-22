@@ -1,6 +1,6 @@
 ---
 name: tonight
-description: "This skill should be used when the user asks to \"/ops:tonight\", \"run tonight\", or \"use tonight\". Evening tomorrow-brief. Reads the Ops Ledger, calendar, and People DB. Surfaces tomorrow's meetings with prep status, birthdays hitting tomorrow, overdue outreach, top 3 priorities, and any unresolved decisions from today. Push notification if anything is genuinely time-sensitive."
+description: "This skill should be used when the user asks to \"tomorrow brief\", \"evening wrap\", or \"/ops:tonight\". Evening tomorrow-brief. Reads the Ops Ledger, calendar, and People DB. Surfaces tomorrow's meetings with prep status, birthdays hitting tomorrow, overdue outreach, top 3 priorities, and any unresolved decisions from today. Push notification if anything is genuinely time-sensitive."
 argument-hint: ''
 allowed-tools:
   - Bash

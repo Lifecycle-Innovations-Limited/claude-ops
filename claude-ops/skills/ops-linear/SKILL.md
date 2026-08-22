@@ -1,6 +1,6 @@
 ---
 name: ops-linear
-description: "This skill should be used when the user asks to \"/ops:ops-linear\", \"run ops-linear\", or \"use ops-linear\". Linear command center. Shows current sprint, creates/updates issues, manages priorities, syncs with GSD phases."
+description: "This skill should be used when the user asks to \"linear sprint\", \"create a ticket\", or \"/ops:ops-linear\". Linear command center. Shows current sprint, creates/updates issues, manages priorities, syncs with GSD phases."
 argument-hint: '[sprint|create|update|sync|backlog|issue-id]'
 allowed-tools:
   - Bash

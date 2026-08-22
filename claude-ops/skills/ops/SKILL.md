@@ -1,6 +1,6 @@
 ---
 name: ops
-description: "This skill should be used when the user asks to \"/ops:ops\", \"run ops\", or \"use ops\". Business operations command center. Routes to the right ops command based on what you need — briefing, inbox, fires, projects, comms, triage, linear, revenue, deploy, or yolo mode."
+description: "This skill should be used when the user asks to \"ops command center\", \"/ops:ops\", or \"run the business\". Business operations command center. Routes to the right ops command based on what you need — briefing, inbox, fires, projects, comms, triage, linear, revenue, deploy, or yolo mode."
 argument-hint: '[command] [args]'
 allowed-tools:
   - Bash

@@ -9,6 +9,8 @@
 #   1. claude-ops/.claude-plugin/plugin.json       .version
 #   2. .claude-plugin/marketplace.json (repo root)  .plugins[name==ops].version   <- the marketplace registry
 #   3. package.json (auto-detected: claude-ops/ or repo root)   .version
+#   3b. claude-ops/hermes-plugin/plugin.yaml         version
+#   3c. installer/src/config.mjs DEFAULT_CONFIG.source.ref  vX.Y.Z
 #   4. claude-ops/CHANGELOG.md                       new "## [X.Y.Z] - DATE" section
 #                                                    (AI-written from the commit range — see --no-ai)
 #   5. docs counts/badges                            ops-sync-docs reconciles every skill/agent
@@ -300,6 +302,8 @@ if [ "$dry_run" -eq 1 ]; then
   echo "    $PLUGIN_JSON"
   echo "    $MARKETPLACE_JSON (.plugins[name==$PLUGIN_NAME].version)"
   [ -n "$PACKAGE_REL" ] && echo "    $REPO_ROOT/$PACKAGE_REL"
+  echo "    $PLUGIN_DIR/hermes-plugin/plugin.yaml"
+  echo "    $REPO_ROOT/installer/src/config.mjs (DEFAULT_CONFIG.source.ref)"
   echo "--- would prepend to $CHANGELOG:"
   printf '%s\n' "$changelog_section"
   echo "--- would: branch release/v$NEW -> PR to main$([ "$do_merge" -eq 1 ] && echo ' -> wait for CI -> squash-merge')$([ "$do_tag" -eq 1 ] && echo " -> tag v$NEW")"
@@ -332,6 +336,45 @@ if [ -n "$PACKAGE_REL" ] && [ -f "$WT/$PACKAGE_REL" ]; then
   jq empty "$WT/$PACKAGE_REL" || { echo "ops-release: produced invalid $PACKAGE_REL" >&2; exit 1; }
 fi
 
+wHERMES="$WT/claude-ops/hermes-plugin/plugin.yaml"
+if [ -f "$wHERMES" ]; then
+  python3 - "$wHERMES" "$NEW" <<'PY'
+from pathlib import Path
+import re, sys
+p, ver = Path(sys.argv[1]), sys.argv[2]
+text = p.read_text()
+new, n = re.subn(r'^version:\s*.*$', f'version: "{ver}"', text, count=1, flags=re.M)
+if n != 1:
+    raise SystemExit(f"ops-release: failed to bump hermes-plugin/plugin.yaml version")
+p.write_text(new)
+PY
+fi
+wINST="$WT/installer/src/config.mjs"
+if [ -f "$wINST" ]; then
+  python3 - "$wINST" "$NEW" <<'PY'
+from pathlib import Path
+import re, sys
+p, ver = Path(sys.argv[1]), sys.argv[2]
+text = p.read_text()
+new, n = re.subn(r'ref:\s*"v[0-9]+\.[0-9]+\.[0-9]+"', f'ref: "v{ver}"', text, count=1)
+if n != 1:
+    raise SystemExit(f"ops-release: failed to bump installer DEFAULT_CONFIG.source.ref")
+p.write_text(new)
+PY
+fi
+wINST_README="$WT/installer/README.md"
+if [ -f "$wINST_README" ]; then
+  python3 - "$wINST_README" "$NEW" <<'PY'
+from pathlib import Path
+import re, sys
+p, ver = Path(sys.argv[1]), sys.argv[2]
+text = p.read_text()
+new, n = re.subn(r'(ref:\s*)v[0-9]+\.[0-9]+\.[0-9]+', rf'\1v{ver}', text, count=1)
+if n == 1:
+    p.write_text(new)
+PY
+fi
+
 # 4. prepend CHANGELOG section before the first existing "## [" entry.
 # The section is multi-line; pass it via a temp file (awk -v mangles embedded
 # newlines → "awk: newline in string"), reading it with getline at the insert.
@@ -344,7 +387,7 @@ awk -v secfile="$sec_file" '
 ' "$wCL" >"$wCL.tmp" && mv "$wCL.tmp" "$wCL"
 rm -f "$sec_file"
 
-echo "ops-release: bumped plugin.json + marketplace.json$([ -n "$PACKAGE_REL" ] && echo " + $PACKAGE_REL") + CHANGELOG.md"
+echo "ops-release: bumped plugin.json + marketplace.json$([ -n "$PACKAGE_REL" ] && echo " + $PACKAGE_REL") + hermes-plugin/plugin.yaml + installer ref + CHANGELOG.md"
 
 # 5. reconcile documentation counts/badges to the (now-bumped) tree — deterministic.
 if [ "$do_docs" -eq 1 ] && [ -x "$WT/claude-ops/bin/ops-sync-docs" ]; then

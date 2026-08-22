@@ -2,6 +2,8 @@
 
 Use this when a claude-ops skill names a Claude Code primitive that Hermes does not have. Keep the skill's intent. Swap the primitive. Do not copy Claude-only assumptions into Hermes.
 
+Grok loads the same Claude plugin (`skills/` + `.claude-plugin/`) — there is no separate `.grok-plugin`. Missing Claude-only tools (`AskUserQuestion`, `Workflow`, `TeamCreate`) use the same fallbacks as this table (numbered options, sequential / native subagents). Rule 6 does not change.
+
 | Claude Code | Hermes |
 |---|---|
 | `AskUserQuestion` | Numbered options in chat, then wait. Telegram/gateway: two turns — full draft as its own message, then the Send / Edit / Skip card. Never put the draft only in a clipped preview. Max 4 options per card. |

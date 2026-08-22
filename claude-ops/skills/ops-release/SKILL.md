@@ -1,6 +1,6 @@
 ---
 name: ops-release
-description: "This skill should be used when the user asks to \"/ops:ops-release\", \"run ops-release\", or \"use ops-release\". Publish a new version of the claude-ops (\"ops\") plugin in one command — bump plugin.json + marketplace.json + package.json, prepend the CHANGELOG, open the release PR, wait for CI, squash-merge it to main, and tag vX.Y.Z. Use when shipping a fix/feature that has already merged to main and you want it published so /ops:ops-update can pull it down. This is the publish side; /ops:ops-update is the consume side."
+description: "This skill should be used when the user asks to \"release the plugin\", \"publish ops version\", or \"/ops:ops-release\". Publish a new version of the claude-ops (\"ops\") plugin in one command — bump plugin.json + marketplace.json + package.json, prepend the CHANGELOG, open the release PR, wait for CI, squash-merge it to main, and tag vX.Y.Z. Use when shipping a fix/feature that has already merged to main and you want it published so /ops:ops-update can pull it down. This is the publish side; /ops:ops-update is the consume side."
 argument-hint: '[--type patch|minor|major] [--version X.Y.Z] [--notes "changelog body"] [--no-ai] [--no-docs] [--no-wiki] [--dry-run] [--no-merge] [--no-tag]'
 allowed-tools:
   - Bash

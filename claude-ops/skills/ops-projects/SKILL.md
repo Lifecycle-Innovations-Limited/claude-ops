@@ -1,6 +1,6 @@
 ---
 name: ops-projects
-description: "This skill should be used when the user asks to \"/ops:ops-projects\", \"run ops-projects\", or \"use ops-projects\". Portfolio dashboard for all GSD-tracked projects. Scans ~/Projects and ~/gsd-workspaces for .planning/ directories, shows phase status, git state, blockers, and next actions for every project. Run /ops projects to see the full portfolio."
+description: "This skill should be used when the user asks to \"portfolio dashboard\", \"gsd projects\", or \"/ops:ops-projects\". Portfolio dashboard for all GSD-tracked projects. Scans ~/Projects and ~/gsd-workspaces for .planning/ directories, shows phase status, git state, blockers, and next actions for every project. Run /ops projects to see the full portfolio."
 argument-hint: '[project-alias|--sync|--refresh]'
 allowed-tools:
   - Bash

@@ -142,7 +142,7 @@ After the CLI is configured and authenticated, offer to set up the official `@do
      [Skip MCP server]
    ```
 
-3. **Save token to userConfig**: Write the token to `doppler_token` in the plugin's `userConfig` (this feeds `.mcp.json` at runtime via `${user_config.doppler_token}`). Also save `doppler_project` and `doppler_config` if selected.
+3. **Save token to userConfig**: Write the token to `doppler_token` in the plugin's `userConfig` (and `doppler_project` / `doppler_config` if selected). The plugin `.mcp.json` stays empty — start Doppler MCP on demand (`mcp-toggle` / host `~/.claude.json`), or keep using the Doppler CLI.
 
 4. **Smoke test**: Verify the MCP server can start:
 

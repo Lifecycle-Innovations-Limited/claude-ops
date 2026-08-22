@@ -1,6 +1,6 @@
 ---
 name: ops-daemon
-description: "This skill should be used when the user asks to \"/ops:ops-daemon\", \"run ops-daemon\", or \"use ops-daemon\". Check claude-ops background daemon end-to-end and auto-fix common issues. Detects stale plist paths after plugin upgrades, missing service commands, dead processes, corrupt health files, and bash version mismatches."
+description: "This skill should be used when the user asks to \"daemon health\", \"background services stuck\", or \"/ops:ops-daemon\". Check claude-ops background daemon end-to-end and auto-fix common issues. Detects stale plist paths after plugin upgrades, missing service commands, dead processes, corrupt health files, and bash version mismatches."
 argument-hint: '[check|fix|restart|status|uninstall]'
 allowed-tools:
   - Bash
