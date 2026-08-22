@@ -1,21 +1,19 @@
-<div align="center">
-
 # claude-ops
 
-**Business Operating System plugin for Claude Code**
+## Business Operating System plugin for Claude Code
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blueviolet.svg)
 
-</div>
-
 ## 1) A Character (You) Wants Something
 
-You want one place to run engineering and operations workflows without jumping across ten tools, tabs, and dashboards.
+You want one place to run engineering and operations workflows without
+jumping across tools, tabs, and dashboards.
 
 ## 2) But Has a Problem
 
-Most teams lose momentum to context switching, unclear priorities, and fragmented systems:
+Most teams lose momentum to context switching, unclear priorities, and
+fragmented systems:
 
 - Status lives in different tools
 - Operational checks are manual and easy to miss
@@ -23,7 +21,9 @@ Most teams lose momentum to context switching, unclear priorities, and fragmente
 
 ## 3) Meets a Guide (claude-ops)
 
-`claude-ops` is the marketplace source for the `ops` plugin and companion tooling. It helps you run daily ops from inside Claude Code using reusable skills, agents, hooks, and integrations.
+`claude-ops` is the marketplace source for the `ops` plugin and companion
+tooling. It helps you run daily ops from inside Claude Code using reusable
+skills, agents, hooks, and integrations.
 
 ## 4) Who Gives Them a Plan
 
@@ -45,7 +45,8 @@ From this repository root:
 claude --plugin-dir ./claude-ops
 ```
 
-From the plugin project root (`/home/runner/work/claude-ops/claude-ops/claude-ops`):
+From the plugin project root
+(`/home/runner/work/claude-ops/claude-ops/claude-ops`):
 
 ```bash
 npm ci
@@ -56,16 +57,18 @@ npm test
 ## 5) And Calls Them to Action
 
 - **Install now:** use the quick-start commands above
-- **Contribute safely:** open focused PRs with docs + validation
+- **Contribute safely:** open focused PRs with docs and validation
 - **Learn fast:** start in the documentation index below
 
 ## 6) That Helps Them Avoid Failure
 
-Without an operational system, teams keep paying the tax of fragmented execution: slower handoffs, missed checks, and inconsistent delivery quality.
+Without an operational system, teams keep paying the tax of fragmented
+execution: slower handoffs, missed checks, and inconsistent delivery quality.
 
 ## 7) And Ends in Success
 
-With `claude-ops`, teams get a repeatable operating layer in Claude Code for daily visibility, safer automation, and faster execution.
+With `claude-ops`, teams get a repeatable operating layer in Claude Code for
+daily visibility, safer automation, and faster execution.
 
 ---
 
@@ -75,7 +78,7 @@ With `claude-ops`, teams get a repeatable operating layer in Claude Code for dai
 - `/installer` — multi-CLI installer package
 - `/desktop-act` — companion plugin and CLI tooling
 
-> The plugin project root is `/claude-ops` (one level below this repo root).
+The plugin project root is `/claude-ops` (one level below this repo root).
 
 ---
 
@@ -92,7 +95,8 @@ With `claude-ops`, teams get a repeatable operating layer in Claude Code for dai
 ## Documentation
 
 - Main docs index: [`/claude-ops/docs/INDEX.md`](/claude-ops/docs/INDEX.md)
-- Rules and conventions: [`/claude-ops/skills/ops-rules/SKILL.md`](/claude-ops/skills/ops-rules/SKILL.md)
+- Rules and conventions:
+  [`/claude-ops/skills/ops-rules/SKILL.md`](/claude-ops/skills/ops-rules/SKILL.md)
 - Installer usage: [`/installer/README.md`](/installer/README.md)
 - Release notes: [`/claude-ops/CHANGELOG.md`](/claude-ops/CHANGELOG.md)
 
@@ -100,7 +104,8 @@ With `claude-ops`, teams get a repeatable operating layer in Claude Code for dai
 
 ## Security and disclosure
 
-If you discover a security issue, please report it privately via GitHub Security Advisories rather than opening a public issue.
+If you discover a security issue, report it privately via GitHub Security
+Advisories rather than opening a public issue.
 
 ---
 
