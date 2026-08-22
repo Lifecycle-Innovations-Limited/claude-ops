@@ -288,8 +288,8 @@ path.** Full table: `hermes-plugin/RUNTIME.md`.
 | `AskUserQuestion` | Numbered options in chat, then wait. Telegram/gateway: two turns (full draft as its own message, then the Send / Edit / Skip card). Max 4 options. |
 | `Workflow` | Hermes `delegate_task`, or sequential work in the main session. |
 | `TeamCreate` / agent teams | The harness's own subagent tool (`delegate_task` on Hermes). |
-| `TaskCreate` / `TaskList` | Hermes Kanban, or skip. Do not require Paperclip. |
-| `CronCreate` | `hermes cron`, or skip. |
+| `TaskCreate` / `TaskList` | Hermes Kanban. If that is missing too, say tracking is unavailable and ask what to do instead. Never drop the item silently. Do not require Paperclip. |
+| `CronCreate` | `hermes cron`. If that is missing too, say scheduling is unavailable and ask what to do instead. Never drop the schedule silently. |
 | `mcp__linear__*` | Linear CLI / GraphQL. Resolve real tool names at runtime. |
 | `gh … --admin` | Never. Merge only when required checks pass, the PR is conflict-free, and blocking review threads are resolved. |
 

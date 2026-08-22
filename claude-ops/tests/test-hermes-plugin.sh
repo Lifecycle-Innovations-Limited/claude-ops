@@ -31,7 +31,8 @@ else
   err "missing __init__.py or RUNTIME.md"
 fi
 
-if python3 -m py_compile "$HP/__init__.py"; then
+# Redirect the bytecode cache so py_compile does not drop __pycache__ in the tree.
+if PYTHONPYCACHEPREFIX="$(mktemp -d)" python3 -m py_compile "$HP/__init__.py"; then
   ok "__init__.py compiles"
 else
   err "__init__.py failed to compile"
