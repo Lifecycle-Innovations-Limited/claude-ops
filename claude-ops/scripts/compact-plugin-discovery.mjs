@@ -12,6 +12,17 @@ const indexPath = path.join(skillsDir, 'ops', 'references', 'capabilities.json')
 const checkOnly = process.argv.includes('--check');
 
 const SKILL_PREFIX = 'OPS on-demand: ';
+
+// Read in one syscall: an existsSync/readFileSync pair is a time-of-check/
+// time-of-use race if the file is removed between the two calls.
+function readFileOrNull(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
 const AGENT_PREFIX = 'OPS specialist: ';
 
 function parseScalar(raw) {
@@ -71,8 +82,9 @@ function markdownFiles(directory, nestedSkillFiles = false) {
     .sort();
 }
 
-const previousIndex = fs.existsSync(indexPath)
-  ? JSON.parse(fs.readFileSync(indexPath, 'utf8'))
+const previousIndexRaw = readFileOrNull(indexPath);
+const previousIndex = previousIndexRaw
+  ? JSON.parse(previousIndexRaw)
   : { skills: [], agents: [] };
 const previousSkills = new Map(previousIndex.skills.map((entry) => [entry.name, entry.summary]));
 const previousAgents = new Map(previousIndex.agents.map((entry) => [entry.name, entry.summary]));
@@ -118,12 +130,12 @@ const expectedIndex = `${JSON.stringify(index, null, 2)}\n`;
 if (checkOnly) {
   let failed = false;
   for (const [file, expected] of pendingWrites) {
-    if (fs.readFileSync(file, 'utf8') !== expected) {
+    if (readFileOrNull(file) !== expected) {
       console.error(`Discovery metadata is not compact: ${path.relative(pluginRoot, file)}`);
       failed = true;
     }
   }
-  if (!fs.existsSync(indexPath) || fs.readFileSync(indexPath, 'utf8') !== expectedIndex) {
+  if (readFileOrNull(indexPath) !== expectedIndex) {
     console.error(`Capability index is stale: ${path.relative(pluginRoot, indexPath)}`);
     failed = true;
   }
