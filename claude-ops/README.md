@@ -1,13 +1,13 @@
 # claude-ops
 
-> **v2.11.5** — Autonomy Layer · Deploy Auto-Fix · Safety Hooks · Specialist Agents · Recap Marquee · Multi-Account Rotator · Multi-Workspace Slack · Telegram Bot Push · Linux Headless Browser-Auth · 35 Skills · 18 Agents
+> **v3.6.1** — 64 skills · 21 agents · Claude + Grok + Hermes · ops-rules · empty `.mcp.json`
 
-## What's new in v2.11.5
+## What's new in v3.6.1
 
-- **v2.11.5** — Linux headless browser-auth for the account rotator (Brave Tier-2, Xvnc 1280×800, per-account `gog`, magic-link-only). See [CHANGELOG.md](CHANGELOG.md) for the full list.
-- **v2.11.4** — Account rotator prefers personal accounts over TEAMS/org accounts to avoid org-chooser + Google push-2FA stalls.
-- **v2.11.3** — [`bin/ops-telegram-bot-send`](docs/telegram-bot-send.md): bot-token push to the operator's own Telegram chat. Lower-cost alternative to the user-account MCP path for one-way notifications. Includes the `block-outbound-comms.py` self-channel exception.
-- Older: **v2.2.0** — Audit fixes: plugin validation (install unblocked), deploy-fix test suite (45/45 passing), `set -e` safety, account-rotation stdin handling. See [CHANGELOG.md](CHANGELOG.md) for the full list.
+- **v3.6.1** — Slim `ops-inbox` SKILL.md, real NL skill triggers, Hermes `plugin.yaml` + installer pin locked to `plugin.json`. Grok still loads the Claude plugin. [harness-ports.md](docs/harness-ports.md).
+- **v3.6.0** — Skills match plugin-dev practice: `ops-rules` skill (root `CLAUDE.md` is a pointer), third-person frontmatter, shared preamble, oversized SKILL.md split into `references/`.
+- **v3.5.0** — Native Hermes plugin: slash commands, `skill_view("ops:*")`, Rule 10 harness fallbacks, installer `~/.hermes/plugins/ops`.
+- Older notes: [CHANGELOG.md](CHANGELOG.md).
 
 A Claude Code plugin that turns Claude into a business operating system **and** an autonomy layer. Run `/ops` for the interactive command center — pixel-art dashboard with instant hotkey access to morning briefings, inbox, fires, deploys, revenue, and YOLO mode. Or just keep working — v2's hooks watch every merge, every build, every commit, every push, and every agent dispatch in the background.
 
