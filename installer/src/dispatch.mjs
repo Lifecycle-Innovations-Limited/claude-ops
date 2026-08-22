@@ -55,26 +55,29 @@ export function planAll({
       plan.agents[name] = { skipped: true, reason: "not detected" };
       continue;
     }
-    if (!a.skillsPath) {
-      plan.agents[name] = { skipped: true, reason: "no skillsPath" };
-      continue;
+    // A native plugin path stands on its own: an agent can take the plugin
+    // without mirroring skills, so this must not sit behind the skillsPath gate.
+    let entry;
+    if (a.skillsPath) {
+      entry = planMirror({
+        srcDir,
+        targetDir: a.skillsPath,
+        skillNames,
+        force,
+        dryRun,
+      });
+      if (entry.errors.length) plan.errors.push(...entry.errors);
+    } else {
+      entry = { skipped: true, reason: "no skillsPath" };
     }
-    const mirror = planMirror({
-      srcDir,
-      targetDir: a.skillsPath,
-      skillNames,
-      force,
-      dryRun,
-    });
-    plan.agents[name] = mirror;
-    if (mirror.errors.length) plan.errors.push(...mirror.errors);
+    plan.agents[name] = entry;
     if (a.pluginPath) {
       const pluginPlan = planNativePlugin({
         srcDir,
         pluginPath: a.pluginPath,
         force,
       });
-      plan.agents[name].plugin = pluginPlan;
+      entry.plugin = pluginPlan;
       if (pluginPlan.errors) plan.errors.push(...pluginPlan.errors);
     }
   }
@@ -184,11 +187,12 @@ function applyPluginLink(pluginPlan, { dryRun, onApply }) {
 function applyAll({ plan, dryRun, cfg }) {
   let manifest = loadManifest();
   for (const [name, mirror] of Object.entries(plan.agents)) {
-    if (mirror.skipped) continue;
-    applyActions(mirror.actions, {
-      dryRun,
-      onApply: (to, from) => addSymlink(manifest, to, from),
-    });
+    if (!mirror.skipped) {
+      applyActions(mirror.actions, {
+        dryRun,
+        onApply: (to, from) => addSymlink(manifest, to, from),
+      });
+    }
     if (mirror.plugin) {
       applyPluginLink(mirror.plugin, {
         dryRun,
@@ -196,7 +200,7 @@ function applyAll({ plan, dryRun, cfg }) {
       });
     }
     // Record every applied symlink in the manifest.
-    if (!dryRun) {
+    if (!dryRun && mirror.actions) {
       for (const a of mirror.actions) {
         if (a.status === "applied") {
           try {
