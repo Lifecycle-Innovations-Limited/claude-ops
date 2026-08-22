@@ -2,7 +2,7 @@
 """Paperclip ↔ Linear mirror (Paperclip is SSOT).
 
 Outbound: Paperclip issues with `mirror:linear` or `linear:HEA-N` → update Linear state/comment.
-Inbound: Linear HEA issues labeled `agent-work` (or filter) → create Paperclip if missing.
+Inbound: configured client-team Linear issues labeled `agent-work` (or filter) → create Paperclip if missing.
 
 Never reverse SSOT. Idempotent. State: ~/.hermes/state/paperclip_linear_mirror.json
 """
@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from alignment_lib import (  # noqa: E402
-    PRIMARY_COMPANY_ID,
+    CLIENT_COMPANY_ID,
     PC_TO_LINEAR_STATE,
     add_comment,
     canonical_paperclip_title,
@@ -40,12 +40,13 @@ from alignment_lib import (  # noqa: E402
 HOME = Path.home()
 STATE_PATH = HOME / ".hermes" / "state" / "paperclip_linear_mirror.json"
 LINEAR_GQL = "https://api.linear.app/graphql"
-PRIMARY_TEAM_ID = "7d9c9413-d41d-4226-a041-f935c8d492df"
+CLIENT_TEAM_ID = os.environ.get("LINEAR_CLIENT_TEAM_ID", "")
 
 
 def linear_key() -> str:
     return (
         os.environ.get("LINEAR_API_KEY", "").strip()
+        or os.environ.get("CLIENT_LINEAR_API_KEY", "").strip()
         or os.environ.get("TEAM_LINEAR_API_KEY", "").strip()
     )
 
@@ -126,7 +127,7 @@ def pick_state_id(states: list[dict], pc_status: str) -> Optional[str]:
         "todo": "unstarted",
         "in_progress": "started",
         "in_review": "started",
-        "blocked": "unstarted",  # HEA uses On Hold (unstarted)
+        "blocked": "unstarted",  # client workflow uses On Hold (unstarted)
         "done": "completed",
         "cancelled": "canceled",
     }
@@ -248,7 +249,7 @@ def run_outbound(state: dict, dry_run: bool, limit: int) -> list[str]:
     # Cache Linear team workflow states per team key (HEA vs MES vs DUTCH …)
     states_by_team: dict[str, list[dict]] = {}
     # Always warm HEA as default
-    states_by_team["HEA"] = team_states(PRIMARY_TEAM_ID)
+    states_by_team["HEA"] = team_states(CLIENT_TEAM_ID)
     for row in rows:
         ident = row.get("identifier")
         code, issue = get_issue(ident)
@@ -391,7 +392,7 @@ def inbound_agent_work(state: dict, dry_run: bool, limit: int) -> list[str]:
       }
     }
     """
-    data = linear_gql(q, {"tid": PRIMARY_TEAM_ID, "n": limit})
+    data = linear_gql(q, {"tid": CLIENT_TEAM_ID, "n": limit})
     if data.get("errors"):
         # label may not exist yet — soft fail
         events.append(f"inbound: Linear query note: {data['errors']}")
@@ -436,7 +437,7 @@ LIMIT 3;
         if dry_run:
             events.append(f"DRY inbound create Paperclip for {lin}: {title[:80]}")
             continue
-        code, resp = create_issue(PRIMARY_COMPANY_ID, title, desc, priority="medium", status="todo")
+        code, resp = create_issue(CLIENT_COMPANY_ID, title, desc, priority="medium", status="todo")
         if code in (200, 201) and isinstance(resp, dict):
             pc_id = resp.get("identifier") or resp.get("id")
             events.append(f"inbound created {pc_id} for {lin}")

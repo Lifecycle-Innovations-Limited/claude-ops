@@ -38,9 +38,9 @@ from alignment_lib import (  # noqa: E402
     write_state,
 )
 
-PC_CO = "32375bd0-2a89-4a27-ad4a-e2050459224b"
-HEA = "7d9c9413-d41d-4226-a041-f935c8d492df"
-AGENT = "1972ae8f-ef08-422b-a172-1a728f86abf6"
+PC_CO = os.environ.get("PAPERCLIP_CLIENT_COMPANY_ID", "")
+CLIENT_TEAM_ID = os.environ.get("LINEAR_CLIENT_TEAM_ID", "")
+AGENT = os.environ.get("LINEAR_AGENTCORE_USER_ID", "")
 LINEAR_GQL = "https://api.linear.app/graphql"
 # Positive link markers only — prose like "No linear:HEA-N" must NOT count as linked
 LINEAR_RE = re.compile(r"(?m)(?:^|\n)\s*linear:\s*(HEA-\d+)\b", re.I)
@@ -94,7 +94,12 @@ MATERIAL_PREFIXES = (
 
 
 def personal_key() -> str:
-    return (os.environ.get("LINEAR_API_KEY") or os.environ.get("TEAM_LINEAR_API_KEY") or "").strip()
+    return (
+        os.environ.get("LINEAR_API_KEY")
+        or os.environ.get("CLIENT_LINEAR_API_KEY")
+        or os.environ.get("TEAM_LINEAR_API_KEY")
+        or ""
+    ).strip()
 
 
 def agent_token() -> str:
@@ -140,7 +145,7 @@ def gql(query: str, variables: dict | None = None, token: str | None = None) -> 
 
 def team_states() -> dict[str, str]:
     nodes = (
-        ((gql('query { team(id:"%s"){ states{ nodes{ id name type } } } }' % HEA).get("data") or {}).get("team") or {})
+        ((gql('query { team(id:"%s"){ states{ nodes{ id name type } } } }' % CLIENT_TEAM_ID).get("data") or {}).get("team") or {})
         .get("states")
         or {}
     ).get("nodes") or []
@@ -194,7 +199,7 @@ def create_export(pc: dict, states: dict[str, str]) -> tuple[str | None, str]:
     lin_title = f"[Paperclip {pc_id}] {title}"[:250]
     mut = """mutation($input:IssueCreateInput!){ issueCreate(input:$input){ success issue{ id identifier url } } }"""
     inp = {
-        "teamId": HEA,
+        "teamId": CLIENT_TEAM_ID,
         "title": lin_title,
         "description": desc,
         "priority": prio,
@@ -385,7 +390,7 @@ def main() -> int:
 
     states = team_states()
     if not states.get("On Hold") or not states.get("Todo"):
-        msg = f"ERROR missing HEA states {list(states)[:10]}"
+        msg = f"ERROR missing client team states {list(states)[:10]}"
         print(msg)
         write_state(STATE_PATH, {"updated_at": now_iso(), "error": msg, "auto": auto})
         return 0 if auto else 1

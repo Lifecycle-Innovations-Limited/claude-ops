@@ -45,7 +45,7 @@ from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from alignment_lib import (  # noqa: E402
-    PRIMARY_COMPANY_ID,
+    CLIENT_COMPANY_ID,
     PC_TO_LINEAR_STATE,
     add_comment,
     api_call,
@@ -66,14 +66,13 @@ from alignment_lib import (  # noqa: E402
 HOME = Path.home()
 STATE_PATH = HOME / ".hermes" / "state" / "linear_paperclip_delegate_bridge.json"
 LINEAR_GQL = "https://api.linear.app/graphql"
-DEFAULT_DELEGATE_USER_ID = "1972ae8f-ef08-422b-a172-1a728f86abf6"
-PRIMARY_TEAM_ID = "7d9c9413-d41d-4226-a041-f935c8d492df"
-# HEA inbound Linear→Paperclip: Agent Qiubo routes/owns (Sam 2026-07-19)
-HEA_INBOUND_ASSIGNEE_AGENT_ID = "b33501c1-1cc6-4e44-810c-66cc1f684f2d"
-HEA_INBOUND_ASSIGNEE_NAME = "Agent Qiubo"
+DEFAULT_DELEGATE_USER_ID = os.environ.get("LINEAR_AGENTCORE_USER_ID", "")
+CLIENT_TEAM_ID = os.environ.get("LINEAR_CLIENT_TEAM_ID", "")
+CLIENT_INBOUND_ASSIGNEE_AGENT_ID = os.environ.get("LINEAR_CLIENT_INBOUND_ASSIGNEE_AGENT_ID", "")
+CLIENT_INBOUND_ASSIGNEE_NAME = os.environ.get("LINEAR_CLIENT_INBOUND_ASSIGNEE_NAME", "Agent Router")
 
 TEAM_TO_COMPANY = {
-    "HEA": PRIMARY_COMPANY_ID,
+    "HEA": CLIENT_COMPANY_ID,
     "MES": "71380d2a-b29e-48fc-8f10-49a8df8b2e46",
     "DUTCH": "c4e2ebdd-351c-4bf0-9d96-4c22147ad85d",
     "INB": "6ef96e49-0728-4170-bd2f-13c6b8bdce25",
@@ -81,14 +80,14 @@ TEAM_TO_COMPANY = {
     "FIBER": "968b5198-9e73-418a-b375-edd024426f63",
 }
 
-# Optional company → inbound router agent (only HEA for now)
+# Optional company → inbound router agent for the configured client team.
 INBOUND_ROUTER_AGENT = {
-    PRIMARY_COMPANY_ID: HEA_INBOUND_ASSIGNEE_AGENT_ID,
+    CLIENT_COMPANY_ID: CLIENT_INBOUND_ASSIGNEE_AGENT_ID,
 }
 
 # Paperclip company → Linear team
 COMPANY_TO_TEAM = {
-    PRIMARY_COMPANY_ID: ("HEA", PRIMARY_TEAM_ID),
+    CLIENT_COMPANY_ID: ("HEA", CLIENT_TEAM_ID),
     "71380d2a-b29e-48fc-8f10-49a8df8b2e46": ("MES", "4e5dd03a-1015-4506-b6d0-b408b02ed7c2"),
     "c4e2ebdd-351c-4bf0-9d96-4c22147ad85d": ("DUTCH", "dd6deb04-63ac-43ae-b90b-6a59cc22d8fd"),
     "6ef96e49-0728-4170-bd2f-13c6b8bdce25": ("INB", "58cd5b2c-fb32-4c65-9558-db0346094883"),
@@ -126,6 +125,7 @@ def agent_user_id() -> str:
 def personal_key() -> str:
     return (
         os.environ.get("LINEAR_API_KEY", "").strip()
+        or os.environ.get("CLIENT_LINEAR_API_KEY", "").strip()
         or os.environ.get("TEAM_LINEAR_API_KEY", "").strip()
     )
 
@@ -389,7 +389,7 @@ def pick_state_id(states: list[dict], pc_status: str) -> Optional[str]:
         "todo": "unstarted",
         "in_progress": "started",
         "in_review": "started",
-        "blocked": "unstarted",  # HEA uses On Hold (unstarted), not a started state
+        "blocked": "unstarted",  # client workflow uses On Hold (unstarted), not a started state
         "done": "completed",
         "cancelled": "canceled",
     }
@@ -574,15 +574,15 @@ def route_inbound_to_qiubo(
     do_wakeup: bool = True,
     already_assigned: bool = False,
 ) -> list[str]:
-    """Assign Agent Qiubo + comment (+ optional wakeup) for HEA inbound dual-writes.
+    """Assign the configured inbound router + comment (+ optional wakeup) for dual-writes.
 
     Cost guard: callers should set do_wakeup=False for all-but-last create in a
-    tick so we only burn one Qiubo heartbeat per full-sync batch.
+    tick so we only burn one router heartbeat per full-sync batch.
     """
     events: list[str] = []
     if dry_run:
         events.append(
-            f"DRY route {pc_id}: assignee={HEA_INBOUND_ASSIGNEE_NAME}"
+            f"DRY route {pc_id}: assignee={CLIENT_INBOUND_ASSIGNEE_NAME}"
             + (" + wakeup" if do_wakeup else " (wakeup deferred)")
         )
         return events
@@ -590,7 +590,7 @@ def route_inbound_to_qiubo(
         code, resp = patch_issue(
             pc_id,
             {
-                "assigneeAgentId": HEA_INBOUND_ASSIGNEE_AGENT_ID,
+                "assigneeAgentId": CLIENT_INBOUND_ASSIGNEE_AGENT_ID,
                 "status": "todo",
             },
         )
@@ -609,20 +609,20 @@ def route_inbound_to_qiubo(
             (
                 f"**Inbound Linear→Paperclip route (Sam 2026-07-19)**\n\n"
                 f"- Source Linear: `{lin}` (AgentCore delegate)\n"
-                f"- Assignee: **{HEA_INBOUND_ASSIGNEE_NAME}** (`{HEA_INBOUND_ASSIGNEE_AGENT_ID}`)\n"
+                f"- Assignee: **{CLIENT_INBOUND_ASSIGNEE_NAME}** (`{CLIENT_INBOUND_ASSIGNEE_AGENT_ID}`)\n"
                 f"- Action: triage + route to product/eng/growth as needed\n"
                 f"- Paperclip is agent SSOT; Linear stays product UI\n"
             ),
         )
-        events.append(f"route {pc_id}: assigned {HEA_INBOUND_ASSIGNEE_NAME}")
+        events.append(f"route {pc_id}: assigned {CLIENT_INBOUND_ASSIGNEE_NAME}")
     else:
         events.append(f"route {pc_id}: already routed (no re-comment)")
     if do_wakeup:
         wcode, wresp = wakeup_agent(
-            HEA_INBOUND_ASSIGNEE_AGENT_ID, reason=f"inbound-linear:{lin}->{pc_id}"
+            CLIENT_INBOUND_ASSIGNEE_AGENT_ID, reason=f"inbound-linear:{lin}->{pc_id}"
         )
         if wcode in (200, 201, 202, 204):
-            events.append(f"wakeup {HEA_INBOUND_ASSIGNEE_NAME} ok")
+            events.append(f"wakeup {CLIENT_INBOUND_ASSIGNEE_NAME} ok")
         else:
             events.append(f"wakeup HTTP {wcode} {wresp}")
     else:
@@ -663,19 +663,19 @@ def inbound_dual_write(node: dict, dry_run: bool) -> str:
         f"stage:todo\n"
         f"delegate:paperclip\n"
         f"source:linear-ai-delegate\n"
-        + (f"router:{HEA_INBOUND_ASSIGNEE_NAME}\n" if router else "")
+        + (f"router:{CLIENT_INBOUND_ASSIGNEE_NAME}\n" if router else "")
         + "\n"
         f"Delegated to Paperclip (Linear app actor AgentCore / Paperclip).\n"
         f"Paperclip is the agent execution SSOT; Linear remains product UI.\n"
         + (
-            f"Routed to {HEA_INBOUND_ASSIGNEE_NAME} for triage + assignment.\n\n"
+            f"Routed to {CLIENT_INBOUND_ASSIGNEE_NAME} for triage + assignment.\n\n"
             if router
             else "\n"
         )
         + f"### Linear description\n{desc[:2500]}\n"
     )
     if dry_run:
-        route = f" assignee={HEA_INBOUND_ASSIGNEE_NAME}" if router else ""
+        route = f" assignee={CLIENT_INBOUND_ASSIGNEE_NAME}" if router else ""
         return f"DRY inbound create Paperclip for {lin} → {team_key} prio={prio}{route}"
     code, resp = create_issue(
         company_id,
@@ -706,7 +706,7 @@ def inbound_dual_write(node: dict, dry_run: bool) -> str:
         f"- Paperclip issue: `{pc_id}`\n- Linear: `{lin}`\n"
         f"- Mapping: `linear:{lin}` + `mirror:linear`\n"
         + (
-            f"- Routed to: **{HEA_INBOUND_ASSIGNEE_NAME}** (triage + route)\n\n"
+            f"- Routed to: **{CLIENT_INBOUND_ASSIGNEE_NAME}** (triage + route)\n\n"
             if router
             else "\n"
         )
@@ -795,7 +795,7 @@ SELECT json_agg(row_to_json(t)) FROM (
             continue
         if r.get("marked"):
             out.append(r)
-        elif include_unlinked_open and r.get("company_id") == PRIMARY_COMPANY_ID:
+        elif include_unlinked_open and r.get("company_id") == CLIENT_COMPANY_ID:
             out.append(r)
         if len(out) >= limit:
             break
@@ -1191,7 +1191,7 @@ def sync_pair(
         return events
     lin_uuid = lin["id"]
     team = (lin.get("team") or {})
-    team_id = team.get("id") or PRIMARY_TEAM_ID
+    team_id = team.get("id") or CLIENT_TEAM_ID
     team_key = (team.get("key") or lin_ident.split("-")[0]).upper()
     cur_type = ((lin.get("state") or {}).get("type") or "").lower()
     cur = ((lin.get("state") or {}).get("name") or "")
@@ -1562,15 +1562,15 @@ def main() -> int:
                     if m:
                         created_ids.append(m.group(1))
                     state.setdefault("seen", {})[n.get("identifier")] = {"at": now_iso(), "event": ev}
-            # Cost guard: at most ONE Qiubo wakeup per full-sync tick after batch creates
-            if created_ids and not args.dry_run and PRIMARY_COMPANY_ID in INBOUND_ROUTER_AGENT:
+            # Cost guard: at most one router wakeup per full-sync tick after batch creates.
+            if created_ids and not args.dry_run and CLIENT_COMPANY_ID in INBOUND_ROUTER_AGENT:
                 wcode, wresp = wakeup_agent(
-                    HEA_INBOUND_ASSIGNEE_AGENT_ID,
+                    CLIENT_INBOUND_ASSIGNEE_AGENT_ID,
                     reason=f"inbound-linear-batch:{len(created_ids)}:{','.join(created_ids[:5])}",
                 )
                 if wcode in (200, 201, 202, 204):
                     events.append(
-                        f"inbound batch wakeup {HEA_INBOUND_ASSIGNEE_NAME} for {created} new issue(s)"
+                        f"inbound batch wakeup {CLIENT_INBOUND_ASSIGNEE_NAME} for {created} new issue(s)"
                     )
                 else:
                     events.append(f"inbound batch wakeup FAIL HTTP {wcode} {wresp}")
