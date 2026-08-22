@@ -1,6 +1,6 @@
 ---
 name: ops-comms
-description: Send and read messages across all channels. Routes based on arguments — whatsapp, email, slack, telegram, discord, notion, or natural language like "send [msg] to [contact]". WhatsApp via mcp__whatsapp__* (Baileys bridge).
+description: "This skill should be used when the user asks to \"/ops:ops-comms\", \"run ops-comms\", or \"use ops-comms\". Send and read messages across all channels. Routes based on arguments — whatsapp, email, slack, telegram, discord, notion, or natural language like \"send [msg] to [contact]\". WhatsApp via mcp__whatsapp__* (Baileys bridge)."
 argument-hint: '[channel] | send [message] to [contact] | read [channel] | notion [search query]'
 allowed-tools:
   - Bash
@@ -27,9 +27,12 @@ allowed-tools:
   - mcp__claude_ai_Notion__notion-create-pages
 effort: medium
 maxTurns: 40
+context: fork
 ---
 
 # OPS ► COMMS
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Runtime Context
 
@@ -45,48 +48,6 @@ Before executing, load available context:
    - `donts.md` — restrictions that must not appear in any draft
 
 3. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` for `default_channels` to determine which channel to prefer when multiple are available for a contact.
-
-## CLI/API Reference
-
-### whatsapp-bridge (WhatsApp — mcp**whatsapp**\*)
-
-**Bridge health** — check bridge is running before any WhatsApp operation:
-
-```bash
-lsof -i :8080 | grep LISTEN
-launchctl list com.${USER}.whatsapp-bridge
-```
-
-If not running: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`
-
-| Tool                                 | Params                     | Output                                                        |
-| ------------------------------------ | -------------------------- | ------------------------------------------------------------- |
-| `mcp__whatsapp__list_chats`          | `{sort_by: "last_active"}` | Array of chats with jid, name, last_message_time              |
-| `mcp__whatsapp__list_messages`       | `{chat_jid, limit, query}` | Array of messages with is_from_me, content, timestamp, sender |
-| `mcp__whatsapp__search_contacts`     | `{query}`                  | Contacts matching name or phone                               |
-| `mcp__whatsapp__send_message`        | `{recipient, message}`     | Send result                                                   |
-| `mcp__whatsapp__get_chat`            | `{chat_jid}`               | Chat metadata                                                 |
-| `mcp__whatsapp__get_message_context` | `{chat_jid, message_id}`   | Message context window                                        |
-
-`whatsapp` above is the single-account server name. With one bridge per account the servers are named
-`whatsapp-personal`, `whatsapp-work`, and so on, and plain `mcp__whatsapp__*` does not exist. Resolve
-the real name from the available tools first, and send from the account the thread is already on. See
-CLAUDE.md Rule 8.
-
-### gog CLI (Gmail/Calendar)
-
-| Command                                                                            | Usage                             | Output                |
-| ---------------------------------------------------------------------------------- | --------------------------------- | --------------------- |
-| `gog gmail search "in:inbox" --max 50 -j --results-only --no-input`                | Search inbox                      | JSON array of threads |
-| `gog gmail thread get <threadId> -j`                                               | Get full thread with all messages | Full message JSON     |
-| `gog gmail send --to "user@example.com" --subject "subj" --body "text"`            | Send new email                    | Send result           |
-| `gog gmail send --reply-to-message-id <msgId> --reply-all --body "text"`           | Reply all                         | Send result           |
-| `gog gmail send --to "a@b.com" --subject "subj" --body "text" --attach /path/file` | With attachment                   | Send result           |
-| `gog gmail archive <messageId> ... --no-input --force`                             | Archive messages                  | Archive result        |
-
----
-
-Parse `$ARGUMENTS` and route immediately:
 
 ## Routing table
 
@@ -524,3 +485,7 @@ ledger write \
   --title "Comms: <channel> — <brief description>" \
   --context "sent via <channel>"
 ```
+
+## Additional resources
+
+CLI detail: `references/cli.md`.

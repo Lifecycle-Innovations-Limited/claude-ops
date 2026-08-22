@@ -1,6 +1,6 @@
 ---
 name: ops-fleet
-description: Read-only Claude + CLIProxyAPI fleet dashboard. Shows sessions, gateway, providers, models, pooled accounts, routing, and traffic.
+description: "This skill should be used when the user asks to \"/ops:ops-fleet\", \"run ops-fleet\", or \"use ops-fleet\". Read-only Claude + CLIProxyAPI fleet dashboard. Shows sessions, gateway, providers, models, pooled accounts, routing, and traffic."
 argument-hint: '[--once] [--tui] [--all] [--models] [--no-pool] [--no-color]'
 allowed-tools:
   - Bash
@@ -10,6 +10,8 @@ maxTurns: 6
 ---
 
 # OPS ► FLEET
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Unified, read-only operational dashboard for:
 

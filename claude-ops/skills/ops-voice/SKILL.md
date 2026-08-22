@@ -1,6 +1,6 @@
 ---
 name: ops-voice
-description: Voice operations — native macOS Phone (Continuity), FaceTime, Zoom, Google Meet, WhatsApp call, Twilio voice + SMS, Bland AI agent calls, ElevenLabs TTS, Whisper transcription. All curl-based, no SDK deps.
+description: "This skill should be used when the user asks to \"/ops:ops-voice\", \"run ops-voice\", or \"use ops-voice\". Voice operations — native macOS Phone (Continuity), FaceTime, Zoom, Google Meet, WhatsApp call, Twilio voice + SMS, Bland AI agent calls, ElevenLabs TTS, Whisper transcription. All curl-based, no SDK deps."
 argument-hint: '[phone|facetime|zoom|meet|whatsapp-call|twilio-call|twilio-sms|bland-call|tts|transcribe|setup]'
 allowed-tools:
   - Bash
@@ -11,6 +11,8 @@ allowed-tools:
 ---
 
 # OPS:VOICE — Voice Operations
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Voice / phone / video interface. All API calls via curl — no SDK dependencies. Native macOS handlers (Phone.app, FaceTime, Zoom) require no credentials; programmatic channels (Twilio, Bland, ElevenLabs, Groq, Zoom schedule) resolve credentials via:
 

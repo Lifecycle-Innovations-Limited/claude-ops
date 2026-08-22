@@ -1,6 +1,6 @@
 ---
 name: ops-triage
-description: Cross-platform issue triage. Pulls from Sentry (MCP), Linear (MCP), GitHub Issues (gh). Cross-references against code to find already-fixed issues. Auto-resolves fixed ones. Dispatches agents for active issues.
+description: "This skill should be used when the user asks to \"/ops:ops-triage\", \"run ops-triage\", or \"use ops-triage\". Cross-platform issue triage. Pulls from Sentry (MCP), Linear (MCP), GitHub Issues (gh). Cross-references against code to find already-fixed issues. Auto-resolves fixed ones. Dispatches agents for active issues."
 argument-hint: '[project-alias|sentry|linear|github|all]'
 allowed-tools:
   - Bash
@@ -39,6 +39,8 @@ Before triaging, load:
 4. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/topics_active.md` for issue context
 
 # OPS ► CROSS-PLATFORM TRIAGE
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## CLI/API Reference
 

@@ -1,6 +1,7 @@
 ---
 name: people
-description: Sync Apple Contacts to Notion 'People' database. Track last_contacted, relationship_strength, recent_topics, next_nudge_due. Foundation for relationship intelligence — birthdays, anniversaries, overdue-outreach, news-mention nudges.
+description: "This skill should be used when the user asks to \"/ops:people\", \"run people\", or \"use people\". Sync Apple Contacts to Notion 'People' database. Track last_contacted, relationship_strength, recent_topics, next_nudge_due. Foundation for relationship intelligence — birthdays, anniversaries, overdue-outreach, news-mention nudges."
+argument-hint: ''
 allowed-tools:
   - Bash
   - Read
@@ -8,6 +9,8 @@ allowed-tools:
 ---
 
 # /ops:people
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Apple Contacts is source of truth. Notion "People" database is the working layer.
 

@@ -1,6 +1,6 @@
 ---
 name: ops-ecom
-description: Shopify store command center. Orders, inventory, fulfillment, analytics, store health, sales channels, agentic storefronts, and Shop readiness. Works with any Shopify store via Admin API.
+description: "This skill should be used when the user asks to \"/ops:ops-ecom\", \"run ops-ecom\", or \"use ops-ecom\". Shopify store command center. Orders, inventory, fulfillment, analytics, store health, sales channels, agentic storefronts, and Shop readiness. Works with any Shopify store via Admin API."
 argument-hint: '[orders|inventory|fulfillment|health|products|customers|analytics|channels|agentic|shop|setup]'
 allowed-tools:
   - Bash
@@ -16,9 +16,12 @@ allowed-tools:
   - WebSearch
 effort: medium
 maxTurns: 40
+context: fork
 ---
 
 # OPS ► ECOM — Shopify Store Command Center
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Runtime Context
 
@@ -34,29 +37,6 @@ Before executing, load available context:
    - If `action_needed` is not null → surface it before running any store operations
 
 3. **Secrets**: Resolve Shopify credentials via userConfig → env vars → Doppler (see Phase 1 below)
-
-## CLI/API Reference
-
-### Shopify Admin REST API
-
-| Endpoint                                             | Method | Description          |
-| ---------------------------------------------------- | ------ | -------------------- |
-| `/admin/api/2024-10/shop.json`                       | GET    | Store info and plan  |
-| `/admin/api/2024-10/orders.json?status=any&limit=50` | GET    | Recent orders        |
-| `/admin/api/2024-10/products.json?limit=250`         | GET    | Product catalog      |
-| `/admin/api/2024-10/customers.json?limit=50`         | GET    | Customer list        |
-| `/admin/api/2024-10/themes.json`                     | GET    | Theme list           |
-| `/admin/api/2024-10/variants/${ID}.json`             | PUT    | Update variant price |
-
-**Auth header**: `X-Shopify-Access-Token: ${SHOPIFY_TOKEN}`
-
-### ShipBob API (optional)
-
-| Endpoint                                                             | Method | Description       |
-| -------------------------------------------------------------------- | ------ | ----------------- |
-| `https://api.shipbob.com/1.0/shipment?Status=Processing&PageSize=20` | GET    | Pending shipments |
-
-**Auth header**: `Authorization: Bearer ${SHIPBOB_TOKEN}`
 
 ## Agent Teams support
 
@@ -764,3 +744,7 @@ all-zero pattern, fall back to the free direct libraries:
 (analytics), and `scripts/lib/organic-metrics-aggregator.sh` (organic + merchant).
 See [docs/integrations/direct-channel-wiring.md](../../../docs/integrations/direct-channel-wiring.md).
 Never present zeros from a dead source as real metrics.
+
+## Additional resources
+
+CLI detail: `references/cli.md`.

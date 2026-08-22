@@ -1,6 +1,6 @@
 ---
 name: ops-aws-audit
-description: Read-only AWS account hygiene audit — security baseline, unused/orphaned resources, and cost optimization across all configured regions. Produces severity-ranked findings (CRITICAL→LOW) plus a machine-readable findings.json. Cleanup actions are always human-gated, never automatic. Use for cost reviews, security sweeps, recurring account hygiene, or "audit my AWS".
+description: "This skill should be used when the user asks to \"/ops:ops-aws-audit\", \"run ops-aws-audit\", or \"use ops-aws-audit\". Read-only AWS account hygiene audit — security baseline, unused/orphaned resources, and cost optimization across all configured regions. Produces severity-ranked findings (CRITICAL→LOW) plus a machine-readable findings.json. Cleanup actions are always human-gated, never automatic. Use for cost reviews, security sweeps, recurring account hygiene, or \"audit my AWS\"."
 argument-hint: '[--quiet] [--schedule] [region,region]'
 allowed-tools:
   - Bash
@@ -53,6 +53,8 @@ Checks include (2026 baseline):
 
 ```bash
 # one region, current account
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/ops-aws-audit.sh"
 
 # multi-region + named profile

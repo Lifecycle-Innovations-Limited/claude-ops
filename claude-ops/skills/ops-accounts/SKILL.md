@@ -1,6 +1,6 @@
 ---
 name: ops-accounts
-description: Multi-provider AI account manager (Claude, Grok/xAI, OpenAI/Codex, Factory, Cursor). Status, setup, switch, refresh, reauth, util, and the CLIProxyAPI pool. Canonical replacement for /ops:rotate and /ops:rotate-setup (those remain aliases).
+description: "This skill should be used when the user asks to \"/ops:ops-accounts\", \"run ops-accounts\", or \"use ops-accounts\". Multi-provider AI account manager (Claude, Grok/xAI, OpenAI/Codex, Factory, Cursor). Status, setup, switch, refresh, reauth, util, and the CLIProxyAPI pool. Canonical replacement for /ops:rotate and /ops:rotate-setup (those remain aliases)."
 argument-hint: '[status|list|setup|switch|refresh|reauth|util|rotate-now|seats|gateway|help] [provider] [args…]'
 allowed-tools:
   - Bash
@@ -13,6 +13,8 @@ maxTurns: 40
 ---
 
 # OPS ► ACCOUNTS
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 **Canonical** multi-provider seat manager. Same layers Anthropic has for Claude —
 for every provider:
