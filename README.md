@@ -9,34 +9,25 @@
 
 </div>
 
-`claude-ops` helps teams run engineering and operations workflows from inside Claude Code with reusable skills, agents, hooks, and integrations.
+## 1) A Character (You) Wants Something
 
----
+You want one place to run engineering and operations workflows without jumping across ten tools, tabs, and dashboards.
 
-## Why this repository exists
+## 2) But Has a Problem
 
-This repository is the marketplace source for the `ops` plugin and companion tooling. It is designed to support:
+Most teams lose momentum to context switching, unclear priorities, and fragmented systems:
 
-- Daily operational command surfaces (briefings, inbox, deploy, incidents, projects)
-- Automated engineering workflows (triage, merge, fix, orchestration)
-- Integration-first operations across common SaaS and infrastructure tools
-- Repeatable plugin development and release management
+- Status lives in different tools
+- Operational checks are manual and easy to miss
+- Collaboration slows down when context is scattered
 
-For release-by-release details, see [`/claude-ops/CHANGELOG.md`](/claude-ops/CHANGELOG.md).
+## 3) Meets a Guide (claude-ops)
 
----
+`claude-ops` is the marketplace source for the `ops` plugin and companion tooling. It helps you run daily ops from inside Claude Code using reusable skills, agents, hooks, and integrations.
 
-## Repository layout
+## 4) Who Gives Them a Plan
 
-- `/claude-ops` — main plugin project (skills, agents, hooks, docs, scripts)
-- `/installer` — multi-CLI installer package
-- `/desktop-act` — companion plugin and CLI tooling
-
-> The plugin project root is `/claude-ops` (one level below this repo root).
-
----
-
-## Quick start (marketplace install)
+### Quick start (marketplace install)
 
 Inside Claude Code:
 
@@ -46,9 +37,7 @@ Inside Claude Code:
 /ops:setup
 ```
 
----
-
-## Local development
+### Local development plan
 
 From this repository root:
 
@@ -64,21 +53,39 @@ npm run lint
 npm test
 ```
 
-Notes:
+## 5) And Calls Them to Action
 
-- Node 18+ is required (CI uses Node 20).
-- `node_modules/` is intentionally committed in the plugin project.
-- Some daemon/runtime behaviors are macOS-specific, but skills/tests run on Linux.
+- **Install now:** use the quick-start commands above
+- **Contribute safely:** open focused PRs with docs + validation
+- **Learn fast:** start in the documentation index below
+
+## 6) That Helps Them Avoid Failure
+
+Without an operational system, teams keep paying the tax of fragmented execution: slower handoffs, missed checks, and inconsistent delivery quality.
+
+## 7) And Ends in Success
+
+With `claude-ops`, teams get a repeatable operating layer in Claude Code for daily visibility, safer automation, and faster execution.
 
 ---
 
-## Best practices for contributors
+## Repository layout
+
+- `/claude-ops` — main plugin project (skills, agents, hooks, docs, scripts)
+- `/installer` — multi-CLI installer package
+- `/desktop-act` — companion plugin and CLI tooling
+
+> The plugin project root is `/claude-ops` (one level below this repo root).
+
+---
+
+## Contributor best practices
 
 - Keep changes focused and incremental.
-- Prefer existing abstractions over new one-off scripts.
+- Prefer existing abstractions over one-off scripts.
 - Run lint and tests before opening or updating PRs.
 - Do not commit credentials, tokens, or private data.
-- Update docs alongside behavior changes.
+- Update docs when behavior changes.
 
 ---
 
@@ -87,6 +94,7 @@ Notes:
 - Main docs index: [`/claude-ops/docs/INDEX.md`](/claude-ops/docs/INDEX.md)
 - Rules and conventions: [`/claude-ops/skills/ops-rules/SKILL.md`](/claude-ops/skills/ops-rules/SKILL.md)
 - Installer usage: [`/installer/README.md`](/installer/README.md)
+- Release notes: [`/claude-ops/CHANGELOG.md`](/claude-ops/CHANGELOG.md)
 
 ---
 
