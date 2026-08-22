@@ -67,6 +67,22 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.7.0] - 2026-08-22
+
+### Changed
+### Added
+- Added Browser Use OAuth reauthentication 2FA support with 1Password Connect TOTP and human checkpoint modes.
+- Added policy-driven two_factor examples for reauth account configuration.
+
+### Changed
+- Migrated current-facing ops wording from deprecated CRS terminology to cliproxy / CLIProxyAPI while preserving runtime compatibility aliases.
+- Updated account-rotation and ops-account surfaces for the CLIProxyAPI-first flow.
+
+### Fixed
+- Fixed shell syntax validation for the rm -rf safety hook.
+- Removed operator identity literals from Hermes Linear helpers so public secret and PII scans pass.
+
+
 ## [3.6.2] - 2026-08-22
 
 ### Changed

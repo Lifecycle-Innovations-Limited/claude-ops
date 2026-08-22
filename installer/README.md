@@ -56,7 +56,7 @@ version: 1
 source:
   type: git
   url: https://github.com/Lifecycle-Innovations-Limited/claude-ops.git
-  ref: v3.6.2
+  ref: v3.7.0
 
 agents:
   claude:    { enabled: true }
