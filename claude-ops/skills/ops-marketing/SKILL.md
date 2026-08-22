@@ -1,6 +1,6 @@
 ---
 name: ops-marketing
-description: "This skill should be used when the user asks to \"/ops:ops-marketing\", \"run ops-marketing\", or \"use ops-marketing\". Marketing command center. Email campaigns (Klaviyo), paid ads (Meta/Google), analytics (GA4), SEO, and social media metrics. One dashboard for all marketing channels."
+description: "This skill should be used when the user asks to \"klaviyo\", \"ads spend\", or \"/ops:ops-marketing\". Marketing command center. Email campaigns (Klaviyo), paid ads (Meta/Google), analytics (GA4), SEO, and social media metrics. One dashboard for all marketing channels."
 argument-hint: '<project> [email|ads|analytics|seo|social|campaigns|setup|autopilot ...]'
 allowed-tools:
   - Bash

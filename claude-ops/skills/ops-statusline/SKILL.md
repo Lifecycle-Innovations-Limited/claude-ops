@@ -1,6 +1,6 @@
 ---
 name: ops-statusline
-description: "This skill should be used when the user asks to \"/ops:ops-statusline\", \"run ops-statusline\", or \"use ops-statusline\". Statusline command center — preview, configure, switch themes, validate, and reset the Claude Code cockpit statusline. Subcommands: preview, config, theme, doctor, reset."
+description: "This skill should be used when the user asks to \"statusline theme\", \"cockpit\", or \"/ops:ops-statusline\". Statusline command center — preview, configure, switch themes, validate, and reset the Claude Code cockpit statusline. Subcommands: preview, config, theme, doctor, reset."
 argument-hint: "[preview|config|theme <name>|doctor|reset]"
 allowed-tools:
   - Bash
