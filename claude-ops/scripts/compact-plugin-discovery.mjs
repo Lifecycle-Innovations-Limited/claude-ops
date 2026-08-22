@@ -84,9 +84,7 @@ function markdownFiles(directory, nestedSkillFiles = false) {
 
 const previousIndexRaw = readFileOrNull(indexPath);
 const hasPreviousIndex = previousIndexRaw !== null;
-const previousIndex = hasPreviousIndex
-  ? JSON.parse(previousIndexRaw)
-  : { skills: [], agents: [] };
+const previousIndex = hasPreviousIndex ? JSON.parse(previousIndexRaw) : { skills: [], agents: [] };
 const previousSkills = new Map(previousIndex.skills.map((entry) => [entry.name, entry.summary]));
 const previousAgents = new Map(previousIndex.agents.map((entry) => [entry.name, entry.summary]));
 
