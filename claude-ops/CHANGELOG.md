@@ -67,6 +67,15 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.8.0] - 2026-08-22
+
+### Changed
+- Specialist discovery no longer loads every skill's context up front. The `ops` skill now resolves capabilities from a generated reference index and pulls specialist detail only when a command needs it, cutting startup token cost across all `ops-*` skills.
+
+### Fixed
+- Secret scanning no longer fails CI on the published RFC 6238 TOTP test vector, which is a spec example rather than a real credential.
+
+
 ## [3.7.0] - 2026-08-22
 
 ### Changed
