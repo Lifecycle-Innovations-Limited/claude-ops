@@ -1,6 +1,6 @@
 ---
 name: ops-home
-description: "This skill should be used when the user asks to \"/ops:ops-home\", \"run ops-home\", or \"use ops-home\". Smart home command center via Homey Pro. Devices, flows, scenes, energy, climate, presence, alarms. Works via Homey local API (preferred) + Athom cloud API fallback. Configure once via /ops:setup."
+description: "This skill should be used when the user asks to \"homey\", \"smart home\", or \"/ops:ops-home\". Smart home command center via Homey Pro. Devices, flows, scenes, energy, climate, presence, alarms. Works via Homey local API (preferred) + Athom cloud API fallback. Configure once via /ops:setup."
 argument-hint: '[status|devices|flow|scene|energy|climate|presence|alarm|setup]'
 allowed-tools:
   - Bash

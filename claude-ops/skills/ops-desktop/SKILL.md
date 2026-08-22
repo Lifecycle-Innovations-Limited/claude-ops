@@ -1,6 +1,6 @@
 ---
 name: ops-desktop
-description: "This skill should be used when the user asks to \"/ops:ops-desktop\", \"run ops-desktop\", or \"use ops-desktop\". Autonomous desktop + browser control via the desktop-act MCP companion. Acquires an isolated noVNC desktop session, takes screenshots, clicks, types, scrolls, and runs the optional autonomous act() loop. First run auto-bootstraps the desktop-act server into a per-user cache."
+description: "This skill should be used when the user asks to \"control the desktop\", \"click on screen\", or \"/ops:ops-desktop\". Autonomous desktop + browser control via the desktop-act MCP companion. Acquires an isolated noVNC desktop session, takes screenshots, clicks, types, scrolls, and runs the optional autonomous act() loop. First run auto-bootstraps the desktop-act server into a per-user cache."
 argument-hint: "[goal text | 'status' | 'list' | 'release [session_id]']"
 allowed-tools:
   - Bash

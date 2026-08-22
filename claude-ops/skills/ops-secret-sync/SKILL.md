@@ -1,6 +1,6 @@
 ---
 name: ops-secret-sync
-description: "This skill should be used when the user asks to \"/ops:ops-secret-sync\", \"run ops-secret-sync\", or \"use ops-secret-sync\". Detects and syncs Doppler→GitHub secrets drift. Compares last-updated timestamps between Doppler and GH repo secrets; flags stale GH secrets (>24h behind Doppler); confirms with user before writing any changes. Safe to run in CI or locally."
+description: "This skill should be used when the user asks to \"doppler github secrets\", \"secret drift\", or \"/ops:ops-secret-sync\". Detects and syncs Doppler→GitHub secrets drift. Compares last-updated timestamps between Doppler and GH repo secrets; flags stale GH secrets (>24h behind Doppler); confirms with user before writing any changes. Safe to run in CI or locally."
 argument-hint: '[--repo <owner/repo>] [--project <doppler-proj>] [--config <doppler-env>] [--dry-run]'
 allowed-tools:
   - Bash

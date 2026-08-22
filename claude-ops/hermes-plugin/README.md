@@ -1,7 +1,14 @@
 # Hermes plugin (ops)
 
-Native Hermes package for the claude-ops skill tree. Claude Code still loads
-`.claude-plugin/`. Hermes loads this directory.
+Native Hermes package for the claude-ops skill tree. One skill tree, three harnesses:
+
+| Harness | Loads | Skills |
+|---|---|---|
+| Claude Code | `.claude-plugin/` | `../skills/` |
+| Grok | Claude plugin as-is (no `.grok-plugin`) | same `../skills/` |
+| Hermes | this directory | same `../skills/` |
+
+Versions stay in lockstep with `../.claude-plugin/plugin.json`. Do not fork skills here.
 
 ## Install
 
@@ -32,5 +39,5 @@ and `skill_view("ops:ops-inbox")` become available.
 | `RUNTIME.md` | Claude Code → Hermes primitive map |
 | `../skills/` | Canonical SKILL.md tree (unchanged) |
 
-Do not fork skills into this folder. Edit `../skills/` so Claude Code and
-Hermes stay on one source.
+Do not fork skills into this folder. Edit `../skills/` so Claude Code, Grok,
+and Hermes stay on one source.

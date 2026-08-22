@@ -1,6 +1,6 @@
 ---
 name: ops-pocket
-description: "This skill should be used when the user asks to \"/ops:ops-pocket\", \"run ops-pocket\", or \"use ops-pocket\". Pocket voice-memo pipeline command center. Surfaces the watcher → triage → executor → notifier → bridges chain that turns Pocket-recorded voice memos into running Claude tasks, with WhatsApp + email notifications. Routes — status, setup, tasks, test, logs, restart, whatsapp on|off, email on|off."
+description: "This skill should be used when the user asks to \"pocket memos\", \"voice memo pipeline\", or \"/ops:ops-pocket\". Pocket voice-memo pipeline command center. Surfaces the watcher → triage → executor → notifier → bridges chain that turns Pocket-recorded voice memos into running Claude tasks, with WhatsApp + email notifications. Routes — status, setup, tasks, test, logs, restart, whatsapp on|off, email on|off."
 argument-hint: '[status|setup|tasks|test|logs [N]|restart|whatsapp on|off|email on|off]'
 allowed-tools:
   - Bash

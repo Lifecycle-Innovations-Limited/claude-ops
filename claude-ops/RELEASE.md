@@ -30,6 +30,8 @@ After the release lands, refresh the local install:
 | `claude-ops/.claude-plugin/plugin.json`                 | `.version`                      | the plugin's own version                                   |
 | `.claude-plugin/marketplace.json` (repo root)           | `.plugins[name=="ops"].version` | the **marketplace registry** entry Claude Code reads       |
 | `claude-ops/package.json` (auto-detected; or repo root) | `.version`                      | the `claude-ops-bin` npm package (bin-script runtime deps) |
+| `claude-ops/hermes-plugin/plugin.yaml`                  | `version`                       | Hermes native plugin (same skill tree as Claude / Grok)    |
+| `installer/src/config.mjs`                              | `DEFAULT_CONFIG.source.ref`     | installer pin (`vX.Y.Z`) so new installs match the tag     |
 | `claude-ops/CHANGELOG.md`                               | new `## [X.Y.Z] - DATE` section | human-readable history (Keep a Changelog + SemVer)         |
 
 `ops-release` keeps all of these in sync — never bump them by hand, or the
@@ -43,7 +45,7 @@ never touched it; it is now bumped in lockstep.)
 2. Compute the next version (`--type` bump or `--version`).
 3. Create an **isolated worktree** off `origin/main` (the shared main checkout is
    never touched — safe while daemons/other agents are live).
-4. Bump `plugin.json` + `marketplace.json` + `package.json` (via `jq`), prepend
+4. Bump `plugin.json` + `marketplace.json` + `package.json` (via `jq`) plus `hermes-plugin/plugin.yaml` and the installer pin, prepend
    the CHANGELOG section (notes from `--notes`, else commit subjects since the
    last CHANGELOG bump), and validate the JSON.
 5. Commit `release: vX.Y.Z`, push the branch, open a PR to `main`.
@@ -60,7 +62,8 @@ contracts; **minor** = new skill/command/agent or backward-compatible feature;
 ## Manual fallback
 
 If `ops-release` is unavailable, do the same by hand in a worktree off
-`origin/main`: bump the three JSON `version` fields (plugin.json,
-marketplace.json, package.json), add the CHANGELOG section, `commit --no-verify`,
+`origin/main`: bump the JSON `version` fields (plugin.json, marketplace.json,
+package.json), `hermes-plugin/plugin.yaml`, and the installer `source.ref`,
+add the CHANGELOG section, `commit --no-verify`,
 push, `gh pr create --base main`, `gh pr merge --squash`, `git tag
 vX.Y.Z && git push origin vX.Y.Z`.

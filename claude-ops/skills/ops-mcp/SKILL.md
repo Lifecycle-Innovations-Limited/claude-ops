@@ -1,6 +1,6 @@
 ---
 name: ops-mcp
-description: "This skill should be used when the user asks to \"/ops:ops-mcp\", \"run ops-mcp\", or \"use ops-mcp\". MCP server health dashboard and reconnect control. Surfaces the watchdog + keepalive + reauth subsystem as a discoverable slash command. Routes — status, servers, reconnect, reauth, logs, restart, test."
+description: "This skill should be used when the user asks to \"MCP down\", \"reconnect MCP\", or \"/ops:ops-mcp\". MCP server health dashboard and reconnect control. Surfaces the watchdog + keepalive + reauth subsystem as a discoverable slash command. Routes — status, servers, reconnect, reauth, logs, restart, test."
 argument-hint: '[status|servers|reconnect [server]|reauth [server]|logs [N]|restart|test [server]]'
 allowed-tools:
   - Bash

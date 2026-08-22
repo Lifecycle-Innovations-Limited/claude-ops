@@ -1,6 +1,6 @@
 ---
 name: ops-competitors
-description: "This skill should be used when the user asks to \"/ops:ops-competitors\", \"run ops-competitors\", or \"use ops-competitors\". Competitor-intel dashboard and management UI. Tracks brand signals, page-diff alerts, pricing changes, App Store moves, and weekly synthesis reports. Powered by the competitor-intel cron pipeline."
+description: "This skill should be used when the user asks to \"competitor intel\", \"what did they ship\", or \"/ops:ops-competitors\". Competitor-intel dashboard and management UI. Tracks brand signals, page-diff alerts, pricing changes, App Store moves, and weekly synthesis reports. Powered by the competitor-intel cron pipeline."
 argument-hint: '[brand-name|refresh [brand]|add-url <brand> <competitor> <kind> <url>|alerts|help]'
 allowed-tools:
   - Bash

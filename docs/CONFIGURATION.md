@@ -43,46 +43,9 @@ These fields are set through the Claude Code plugin UI (`/plugin` → `ops` → 
 
 ## MCP Servers (`.mcp.json`)
 
-Two MCP servers are wired in `.mcp.json` at the plugin root. They read credentials directly from `userConfig` at runtime — no manual file editing is required.
+The plugin root `.mcp.json` is empty on purpose (`{"mcpServers":{}}`). Bundling Telegram / Doppler / desktop-act as per-session stdio servers multiplied processes across every live Claude session. Those servers now start on demand (`mcp-toggle`, `/ops:setup`, host `~/.claude.json`) rather than at plugin load.
 
-### Telegram MCP Server
-
-```json
-{
-  "mcpServers": {
-    "telegram": {
-      "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/telegram-server/index.js"],
-      "env": {
-        "TELEGRAM_API_ID": "${user_config.telegram_api_id}",
-        "TELEGRAM_API_HASH": "${user_config.telegram_api_hash}",
-        "TELEGRAM_PHONE": "${user_config.telegram_phone}",
-        "TELEGRAM_SESSION": "${user_config.telegram_session}"
-      }
-    }
-  }
-}
-```
-
-### Doppler MCP Server
-
-The official `@dopplerhq/mcp-server` provides direct tool access to Doppler secrets. When `doppler_token` is configured in userConfig, Claude can query secrets via `mcp__doppler__*` tools without shelling out to the Doppler CLI.
-
-```json
-{
-  "mcpServers": {
-    "doppler": {
-      "command": "npx",
-      "args": ["-y", "@dopplerhq/mcp-server"],
-      "env": {
-        "DOPPLER_TOKEN": "${user_config.doppler_token}"
-      }
-    }
-  }
-}
-```
-
-The Doppler CLI remains as a fallback for environments where the MCP server is unavailable.
+Telegram user-auth still lives in `claude-ops/telegram-server/`. Doppler uses the Doppler CLI (or an on-demand MCP). desktop-act is the companion plugin. `/ops:ops-mcp` shows what is actually connected.
 
 `CLAUDE_PLUGIN_ROOT` is resolved at runtime to the plugin's installed cache directory. It is also exported into your shell profile by `/ops:setup` so shell scripts can reference it.
 

@@ -1,6 +1,6 @@
 ---
 name: ops-ecom
-description: "This skill should be used when the user asks to \"/ops:ops-ecom\", \"run ops-ecom\", or \"use ops-ecom\". Shopify store command center. Orders, inventory, fulfillment, analytics, store health, sales channels, agentic storefronts, and Shop readiness. Works with any Shopify store via Admin API."
+description: "This skill should be used when the user asks to \"shopify\", \"orders inventory\", or \"/ops:ops-ecom\". Shopify store command center. Orders, inventory, fulfillment, analytics, store health, sales channels, agentic storefronts, and Shop readiness. Works with any Shopify store via Admin API."
 argument-hint: '[orders|inventory|fulfillment|health|products|customers|analytics|channels|agentic|shop|setup]'
 allowed-tools:
   - Bash

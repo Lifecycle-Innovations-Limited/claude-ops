@@ -1,6 +1,6 @@
 ---
 name: ops-unifi
-description: "This skill should be used when the user asks to \"/ops:ops-unifi\", \"run ops-unifi\", or \"use ops-unifi\". UniFi network command center. Full control across the three official UniFi APIs — Site Manager (cloud multi-site oversight), Network Integration (local per-console device/client control), and Protect Integration (cameras/NVR). Plus a predict mode that flags WAN/AP/client anomalies before they page you. Configure once via /ops:setup."
+description: "This skill should be used when the user asks to \"unifi\", \"cameras\", or \"/ops:ops-unifi\". UniFi network command center. Full control across the three official UniFi APIs — Site Manager (cloud multi-site oversight), Network Integration (local per-console device/client control), and Protect Integration (cameras/NVR). Plus a predict mode that flags WAN/AP/client anomalies before they page you. Configure once via /ops:setup."
 argument-hint: '[status|sites|devices|clients|isp|sdwan|protect|snapshot|restart|block|predict|setup]'
 allowed-tools:
   - Bash

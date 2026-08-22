@@ -1,6 +1,6 @@
 ---
 name: ops-feature-dev
-description: "This skill should be used when the user asks to \"/ops:ops-feature-dev\", \"run ops-feature-dev\", or \"use ops-feature-dev\". Guided feature development — delegates to the feature-dev plugin's 7-phase workflow (explore, architect, implement, review). Use before ad-hoc builds or as pre-work before gsd-execute-phase."
+description: "This skill should be used when the user asks to \"guided feature\", \"feature-dev\", or \"/ops:ops-feature-dev\". Guided feature development — delegates to the feature-dev plugin's 7-phase workflow (explore, architect, implement, review). Use before ad-hoc builds or as pre-work before gsd-execute-phase."
 argument-hint: '[feature description]'
 allowed-tools:
   - Skill

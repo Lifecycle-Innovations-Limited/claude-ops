@@ -96,7 +96,7 @@ claude-ops/
 - **`agents/`** — Background worker layer. Agent `.md` files are spawned by skills using the Claude Agent SDK. They have declared resource budgets (model, maxTurns, effort) and memory scopes.
 - **`bin/`** — Executable layer. Shell and Node.js scripts that interact with external CLIs (`wacli`, `aws`, `gh`, `doppler`, `gog`) and APIs. Skills and agents call these via Bash tool calls.
 - **`scripts/`** — Infrastructure layer. The daemon supervisor, launchd plists, cron scripts, and the project registry live here.
-- **`telegram-server/`** — Bundled MCP server. Provides Telegram access via MTProto (personal account authentication, not bot tokens). Declared in `.mcp.json` and auto-started by Claude Code.
+- **`telegram-server/`** — Bundled Telegram user-auth server (MTProto, not a bot). Not auto-started from `.mcp.json` (that file is empty so sessions do not spawn a stdio MCP each). Started on demand via `/ops:setup` / host config.
 - **`hooks/`** — Automation layer. Three lifecycle hooks: SessionStart (welcome + setup check), PreToolUse/Bash (WhatsApp health check), and Stop (cleanup).
 - **`tests/`** — Validation layer. Bash scripts that check for committed secrets, skill markdown lint, hook schema validity, and bin script executability. Run via `tests/run-all.sh`.
 

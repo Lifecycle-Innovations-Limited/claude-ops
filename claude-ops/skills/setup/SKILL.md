@@ -56,7 +56,7 @@ Every Bash tool call MUST include a short `description` parameter (5-10 words, e
 - All writes go to one of these paths — and nothing else:
   - **`$PREFS_PATH`** — per-user preferences + secrets. Resolves to `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`. Lives in Claude Code's plugin data dir so it survives plugin reinstalls and version bumps. Never committed to git.
   - **`${CLAUDE_PLUGIN_ROOT}/scripts/registry.json`** — per-user project registry (gitignored in the source repo). `mkdir -p` its parent if missing.
-  - **`${CLAUDE_PLUGIN_ROOT}/.mcp.json`** — only to add `${user_config.*}` placeholders, never hardcoded tokens.
+  - **`${CLAUDE_PLUGIN_ROOT}/.mcp.json`** — leave empty (`{"mcpServers":{}}`). MCP servers start on demand in host config, not at plugin load. Never hardcoded tokens.
   - The user's shell profile (`~/.zshrc` etc.) — append-only, never rewrite.
 - At the top of every wizard step, make sure `$PREFS_PATH`'s parent directory exists: `mkdir -p "$(dirname "$PREFS_PATH")"`. Claude Code creates `~/.claude/plugins/data/ops-ops-marketplace/` on plugin install but don't assume.
 

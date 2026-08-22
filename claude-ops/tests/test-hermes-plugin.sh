@@ -25,6 +25,17 @@ else
   err "plugin.yaml name must be ops"
 fi
 
+plugin_ver="$(python3 -c "import json; print(json.load(open('$PLUGIN_ROOT/.claude-plugin/plugin.json'))['version'])")"
+hermes_ver="$(awk -F'"' '/^version:/{print $2; exit}' "$HP/plugin.yaml")"
+if [[ -z "$hermes_ver" ]]; then
+  hermes_ver="$(awk '/^version:/{gsub(/[" ]/,""); sub(/^version:/,""); print; exit}' "$HP/plugin.yaml")"
+fi
+if [[ "$plugin_ver" == "$hermes_ver" ]]; then
+  ok "hermes-plugin version matches plugin.json ($plugin_ver)"
+else
+  err "hermes-plugin version '$hermes_ver' != plugin.json '$plugin_ver'"
+fi
+
 if [[ -f "$HP/__init__.py" && -f "$HP/RUNTIME.md" ]]; then
   ok "__init__.py and RUNTIME.md exist"
 else

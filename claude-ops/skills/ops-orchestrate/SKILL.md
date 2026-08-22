@@ -1,6 +1,6 @@
 ---
 name: ops-orchestrate
-description: "This skill should be used when the user asks to \"/ops:ops-orchestrate\", \"run ops-orchestrate\", or \"use ops-orchestrate\". Autonomous multi-project orchestration engine. Audits all registered projects, structures work into dependency-wired tasks, dispatches parallel agents (subagents or Agent Teams), audits completions, and ships PRs. Registry-driven — works for any user with a configured project registry."
+description: "This skill should be used when the user asks to \"orchestrate projects\", \"dispatch agents\", or \"/ops:ops-orchestrate\". Autonomous multi-project orchestration engine. Audits all registered projects, structures work into dependency-wired tasks, dispatches parallel agents (subagents or Agent Teams), audits completions, and ships PRs. Registry-driven — works for any user with a configured project registry."
 argument-hint: '[--teams|--subagents|--hybrid|--dry-run|--project alias|--fires-only|--max-waves N]'
 allowed-tools:
   - Bash

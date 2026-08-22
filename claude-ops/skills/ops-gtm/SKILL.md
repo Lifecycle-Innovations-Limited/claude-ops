@@ -1,6 +1,6 @@
 ---
 name: ops-gtm
-description: "This skill should be used when the user asks to \"/ops:ops-gtm\", \"run ops-gtm\", or \"use ops-gtm\". Go-to-market strategy planner. Generates a complete GTM plan across paid, unpaid, marketing, sales, and AI-automation channels for any project — and hands executable campaigns off to /marketing."
+description: "This skill should be used when the user asks to \"go to market\", \"GTM plan\", or \"/ops:ops-gtm\". Go-to-market strategy planner. Generates a complete GTM plan across paid, unpaid, marketing, sales, and AI-automation channels for any project — and hands executable campaigns off to /marketing."
 argument-hint: '[plan|paid|unpaid|sales|automation|launch|brief|setup]'
 allowed-tools:
   - Bash

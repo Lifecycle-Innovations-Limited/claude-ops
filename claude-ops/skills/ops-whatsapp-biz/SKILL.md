@@ -1,6 +1,6 @@
 ---
 name: ops-whatsapp-biz
-description: "This skill should be used when the user asks to \"/ops:ops-whatsapp-biz\", \"run ops-whatsapp-biz\", or \"use ops-whatsapp-biz\". WhatsApp Business Cloud API — send approved template messages at scale, manage templates with approval tracking, and integrate product catalogs. Separate from wacli personal WhatsApp."
+description: "This skill should be used when the user asks to \"whatsapp business\", \"template message\", or \"/ops:ops-whatsapp-biz\". WhatsApp Business Cloud API — send approved template messages at scale, manage templates with approval tracking, and integrate product catalogs. Separate from wacli personal WhatsApp."
 argument-hint: '[send-template|list-templates|create-template|check-template|catalog|setup]'
 allowed-tools:
   - Bash

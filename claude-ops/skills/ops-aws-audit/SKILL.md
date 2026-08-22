@@ -1,6 +1,6 @@
 ---
 name: ops-aws-audit
-description: "This skill should be used when the user asks to \"/ops:ops-aws-audit\", \"run ops-aws-audit\", or \"use ops-aws-audit\". Read-only AWS account hygiene audit — security baseline, unused/orphaned resources, and cost optimization across all configured regions. Produces severity-ranked findings (CRITICAL→LOW) plus a machine-readable findings.json. Cleanup actions are always human-gated, never automatic. Use for cost reviews, security sweeps, recurring account hygiene, or \"audit my AWS\"."
+description: "This skill should be used when the user asks to \"audit AWS\", \"unused AWS resources\", or \"/ops:ops-aws-audit\". Read-only AWS account hygiene audit — security baseline, unused/orphaned resources, and cost optimization across all configured regions. Produces severity-ranked findings (CRITICAL→LOW) plus a machine-readable findings.json. Cleanup actions are always human-gated, never automatic. Use for cost reviews, security sweeps, recurring account hygiene, or \"audit my AWS\"."
 argument-hint: '[--quiet] [--schedule] [region,region]'
 allowed-tools:
   - Bash

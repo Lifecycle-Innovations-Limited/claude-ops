@@ -1,6 +1,6 @@
 ---
 name: ops-recap
-description: "This skill should be used when the user asks to \"/ops:ops-recap\", \"run ops-recap\", or \"use ops-recap\". Manage the multi-session recap marquee daemon — a background process that synthesizes a one-line digest across all parallel Claude Code sessions and shell activity, displayed in tmux status-right. Subcommands status/tail/configure/restart."
+description: "This skill should be used when the user asks to \"recap daemon\", \"tmux marquee\", or \"/ops:ops-recap\". Manage the multi-session recap marquee daemon — a background process that synthesizes a one-line digest across all parallel Claude Code sessions and shell activity, displayed in tmux status-right. Subcommands status/tail/configure/restart."
 argument-hint: '[status|tail|configure|restart]'
 allowed-tools:
   - Bash

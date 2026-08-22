@@ -1,6 +1,6 @@
 ---
 name: ops-rotate-setup
-description: "This skill should be used when the user asks to \"/ops:ops-rotate-setup\", \"run ops-rotate-setup\", or \"use ops-rotate-setup\". Fail-closed legacy Claude setup alias that directs operators to separately approved staged enrollment."
+description: "This skill should be used when the user asks to \"rotate setup\", \"enroll Claude seat\", or \"/ops:ops-rotate-setup\". Fail-closed legacy Claude setup alias that directs operators to separately approved staged enrollment."
 argument-hint: ''
 allowed-tools:
   - Read

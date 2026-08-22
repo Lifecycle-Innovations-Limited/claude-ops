@@ -1,6 +1,6 @@
 ---
 name: ops-settings
-description: "This skill should be used when the user asks to \"/ops:ops-settings\", \"run ops-settings\", or \"use ops-settings\". Post-setup credential manager. Shows current integration status (configured/missing/expired) and lets you update individual credentials without re-running the full setup wizard. Runs a smoke test after each update."
+description: "This skill should be used when the user asks to \"update credentials\", \"ops settings\", or \"/ops:ops-settings\". Post-setup credential manager. Shows current integration status (configured/missing/expired) and lets you update individual credentials without re-running the full setup wizard. Runs a smoke test after each update."
 argument-hint: '[integration-name] [--status]'
 allowed-tools:
   - Bash

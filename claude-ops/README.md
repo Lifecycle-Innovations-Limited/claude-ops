@@ -406,7 +406,7 @@ Tools:
 - `send_message` — send a message to a chat
 - `search_messages` — full-text search across all your chats
 
-See [telegram-server/README.md](telegram-server/README.md) for first-run auth flow and troubleshooting. The plugin's `.mcp.json` wires all four env vars (`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_PHONE`, `TELEGRAM_SESSION`) from your `user_config` in Claude Code plugin settings — you never paste tokens into files directly.
+See [telegram-server/README.md](telegram-server/README.md) for first-run auth flow and troubleshooting. Register it on demand in host `~/.claude.json` / plugin settings — the plugin `.mcp.json` stays empty so every session does not spawn a Telegram stdio process. Never paste tokens into files.
 
 ## Contributing
 
