@@ -91,7 +91,7 @@ DANGER=$(set -f; while IFS= read -r seg; do
     # so that was every stock macOS install. Keep these as plain string tests.
 
     # Skip flags.
-    if [ "${tok#-}" != "$tok" ]; then
+    if [[ "$tok" == -* ]]; then
       continue
     fi
     # Strip surrounding quotes for comparison.
@@ -103,12 +103,12 @@ DANGER=$(set -f; while IFS= read -r seg; do
     # `/` and `*`, never a glob over everything under root.
     is_danger=0
     for anchor in '' '/' '/*' '/.' '~' '~/' '~/*' '$HOME' '$HOME/' '$HOME/*' '..' '../' '../*' '.'; do
-      if [ "$bare" = "$anchor" ]; then
+      if [[ "$bare" == "$anchor" ]]; then
         is_danger=1
         break
       fi
     done
-    if [ "$is_danger" -eq 1 ]; then
+    if [[ "$is_danger" -eq 1 ]]; then
       DANGER="$bare"
       break
     fi

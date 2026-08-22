@@ -1,0 +1,16 @@
+[Unit]
+Description=cliproxy periodic reauth check (auto_reauth.py)
+After=network.target
+
+[Service]
+# Legacy deployed service account/path retained for compatibility.
+Type=oneshot
+User=crsproxy
+Group=crsproxy
+WorkingDirectory=/opt/crsproxy
+Environment=HOME=/opt/crsproxy
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/crsproxy/venv/bin/python /opt/crsproxy/auto_reauth.py
+
+[Install]
+WantedBy=multi-user.target

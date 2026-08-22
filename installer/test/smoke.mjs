@@ -139,6 +139,28 @@ try {
     "undetected agent target directory is not created",
   );
 
+  // A plugin path must still be planned when the agent mirrors no skills.
+  const pluginOnlyTo = path.join(scratch, "plugin-only", "ops");
+  const pluginOnlyPlan = planAll({
+    cfg: { bin: null },
+    srcDir: SRC,
+    agents: {
+      hermes: { installed: true, pluginPath: pluginOnlyTo },
+    },
+    force: false,
+    dryRun: true,
+    skipUndetected: true,
+  });
+  assert(
+    pluginOnlyPlan.agents.hermes?.skipped &&
+      pluginOnlyPlan.agents.hermes.reason === "no skillsPath",
+    "agent without skillsPath is still reported as skipped for skills",
+  );
+  assert(
+    pluginOnlyPlan.agents.hermes?.plugin?.action?.op === "symlink",
+    "native plugin is planned even when skillsPath is absent",
+  );
+
   const pluginTo = path.join(scratch, "hermes-plugins", "ops");
   const pluginPlan = planNativePlugin({
     srcDir: SRC,
@@ -146,7 +168,7 @@ try {
     force: false,
   });
   assert(
-    pluginPlan && !pluginPlan.skipped && pluginPlan.action?.op === "symlink",
+    !pluginPlan.skipped && pluginPlan.action?.op === "symlink",
     "hermes native plugin symlink is planned",
   );
   assert(

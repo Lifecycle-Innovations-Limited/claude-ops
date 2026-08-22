@@ -183,4 +183,8 @@ regexes = [
   #   echo "api_secret:ga4.api_secret"  /  marketing.projects.<p>.ga4.property_id
   '''ga4\.api_secret''',
   '''ga4\.property_id''',
+  # RFC 6238 published TOTP test vector: base32 of "12345678901234567890",
+  # which the RFC pairs with the expected code 94287082. A standards-document
+  # constant asserted by scripts/crsproxy-reauth/test_bu_2fa.py, not a secret.
+  '''GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ''',
 ]
