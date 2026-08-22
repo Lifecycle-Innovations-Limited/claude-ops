@@ -64,6 +64,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.5.0] - 2026-08-22
+
+### Changed
+Native Hermes plugin: slash commands, skill_view("ops:*"), Rule 10 harness fallbacks, installer ~/.hermes/plugins/ops.
+
+
 ## [3.4.4] - 2026-08-18
 
 ### Changed
