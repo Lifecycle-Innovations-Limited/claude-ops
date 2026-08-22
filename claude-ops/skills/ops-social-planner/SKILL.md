@@ -1,6 +1,6 @@
 ---
 name: ops-social-planner
-description: Visual, engine-agnostic planner for all scheduled social posts and ads across every identity and project. Auto-generates the current state of ops-socials + ops-marketing planned content per project, per channel, regardless of posting engine (Typefully, upload-post, Meta, Google Ads), and serves a clean local web UI. Use when the user says social planner, content calendar, what's scheduled, planned posts, show my queue, posting schedule, social dashboard, or runs /ops-social-planner. Read-only — never publishes (mutation stays in /ops-socials + /ops-marketing behind per-message approval).
+description: "This skill should be used when the user asks to \"content calendar\", \"what is scheduled\", or \"/ops:ops-social-planner\". Visual, engine-agnostic planner for all scheduled social posts and ads across every identity and project. Auto-generates the current state of ops-socials + ops-marketing planned content per project, per channel, regardless of posting engine (Typefully, upload-post, Meta, Google Ads), and serves a clean local web UI. Use when the user says social planner, content calendar, what's scheduled, planned posts, show my queue, posting schedule, social dashboard, or runs /ops-social-planner. Read-only — never publishes (mutation stays in /ops-socials + /ops-marketing behind per-message approval)."
 argument-hint: '[--project <id>] [--collect-only] [--port <n>] [--no-open]'
 allowed-tools:
   - Bash
@@ -17,6 +17,8 @@ maxTurns: 25
 ---
 
 # /ops-social-planner — engine-agnostic planned-content viewer
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Read-only dashboard of **every** scheduled post and ad, grouped **identity/project → channel → time**,
 **regardless of posting engine**. Personal/founder identity and project brands stay strictly separated

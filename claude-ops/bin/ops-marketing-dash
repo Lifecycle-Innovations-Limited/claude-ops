@@ -140,7 +140,7 @@ fi
 # Amplitude (product analytics: signups / new + active users). Dashboard REST API
 # uses HTTP Basic (api_key:secret_key). EU data-residency projects MUST hit
 # analytics.eu.amplitude.com; US hits amplitude.com (server_zone selects host).
-# Creds resolve from the project-scoped prefs tier first (doppler:healify/prd/…),
+# Creds resolve from the project-scoped prefs tier first (doppler:<project>/prd/…),
 # then env, then owner-level channels.marketing.amplitude.*_key Doppler refs.
 AMPLITUDE_API_KEY="$(get_cred 'amplitude.api_key' AMPLITUDE_API_KEY amplitude_api_key AMPLITUDE_API_KEY amplitude api_key_key)"
 AMPLITUDE_SECRET_KEY="$(get_cred 'amplitude.secret_key' AMPLITUDE_SECRET_KEY amplitude_secret_key AMPLITUDE_SECRET_KEY amplitude secret_key_key)"
@@ -160,7 +160,7 @@ APPSFLYER_APP_ID="$(get_cred 'appsflyer.app_id' APPSFLYER_APP_ID appsflyer_app_i
 # RevenueCat (GROUND-TRUTH real app users: customers/subscriptions/MRR). v2 secret
 # key (sk_…) + project id. This is the authoritative "real people" source — it
 # counts actual app identities with store receipts, unlike Amplitude event counts.
-REVENUECAT_KEY="$(get_cred 'revenuecat.api_key' REVENUECAT_HEALIFY_API_KEY revenuecat_api_key REVENUECAT_HEALIFY_API_KEY revenuecat api_key_key)"
+REVENUECAT_KEY="$(get_cred 'revenuecat.api_key' REVENUECAT_API_KEY revenuecat_api_key REVENUECAT_API_KEY revenuecat api_key_key)"
 REVENUECAT_PROJECT="$(get_cred 'revenuecat.project_id' REVENUECAT_PROJECT_ID revenuecat_project_id)"
 
 # Meta ad-account id: prefs carries only the Business Manager id (bm_id_key), not
@@ -271,9 +271,10 @@ gather_meta() {
   APP_INSTALLS=$(echo "$INSIGHTS" | jq -r '[.data[0].actions[]? | select(.action_type | test("mobile_app_install|app_install|omni_app_install")) | .value] | map(tonumber) | add // 0 | tostring' 2>/dev/null || echo "0")
   REGISTRATIONS=$(echo "$INSIGHTS" | jq -r '[.data[0].actions[]? | select(.action_type | test("complete_registration")) | .value] | map(tonumber) | add // 0 | tostring' 2>/dev/null || echo "0")
 
-  # Account currency — Meta reports spend in the ad-account currency (Healify = USD,
-  # NOT EUR). Fetch once so the statusline labels spend with the real symbol instead
-  # of assuming €. Cheap single call; falls back to empty (renderer omits symbol).
+  # Account currency — Meta reports spend in the ad-account currency, which is not
+  # always the owner's local currency. Fetch once so the statusline labels spend with
+  # the real symbol instead of assuming one. Cheap single call; falls back to empty
+  # (renderer omits symbol).
   CURRENCY=$(curl -gsS --max-time 5 "https://graph.facebook.com/v21.0/${META_ACCOUNT}?fields=currency${META_PROOF_QS}" \
     -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null | jq -r '.currency // ""' 2>/dev/null || echo "")
 

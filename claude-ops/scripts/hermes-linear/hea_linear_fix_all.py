@@ -97,7 +97,7 @@ def personal_key() -> str:
     return (
         os.environ.get("LINEAR_API_KEY")
         or os.environ.get("CLIENT_LINEAR_API_KEY")
-        or os.environ.get("HEA" + "LIFY_LINEAR_API_KEY")
+        or os.environ.get("TEAM_LINEAR_API_KEY")
         or ""
     ).strip()
 

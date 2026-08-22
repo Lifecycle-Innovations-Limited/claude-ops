@@ -1,6 +1,6 @@
 ---
 name: ops
-description: Business operations command center. Routes to the right ops command based on what you need — briefing, inbox, fires, projects, comms, triage, linear, revenue, deploy, or yolo mode.
+description: "This skill should be used when the user asks to \"ops command center\", \"/ops:ops\", or \"run the business\". Business operations command center. Routes to the right ops command based on what you need — briefing, inbox, fires, projects, comms, triage, linear, revenue, deploy, or yolo mode."
 argument-hint: '[command] [args]'
 allowed-tools:
   - Bash
@@ -23,6 +23,8 @@ Before routing, load:
 2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — if `action_needed`, surface before routing
 
 # OPS — Business Command Center
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Route `$ARGUMENTS` to the correct ops skill:
 

@@ -1,6 +1,6 @@
 ---
 name: ops-package
-description: 'Ship parcels via any configured carrier — MyParcel, Sendcloud, DHL Parcel NL, PostNL, DPD, UPS, FedEx. Auto-selects the first carrier whose credentials are configured, or pass --carrier <name> to override. Verbs: ship, label, track, list, carriers.'
+description: "This skill should be used when the user asks to \"ship a parcel\", \"print a label\", or \"/ops:ops-package\". Ship parcels via any configured carrier — MyParcel, Sendcloud, DHL Parcel NL, PostNL, DPD, UPS, FedEx. Auto-selects the first carrier whose credentials are configured, or pass --carrier <name> to override. Verbs: ship, label, track, list, carriers."
 argument-hint: '[--carrier <name>] <ship|label|track|list|carriers> [args...]'
 allowed-tools:
   - Bash
@@ -15,6 +15,8 @@ disallowedTools:
 ---
 
 # OPS ► PACKAGE — multi-carrier shipping
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 One skill, seven carriers. The router picks the carrier automatically based on which credentials are configured.
 

@@ -66,7 +66,6 @@ function fixture(legacy = false) {
     'macos-plist': join(root, 'generated', 'rotator.plist'),
     'runtime-inventory': join(trustRoot, 'account-inventory.json'),
     'authoritative-consumer-inventory': join(trustRoot, 'consumer-inventory.json'),
-    'linux-token-feed-unit': join(root, 'generated', 'crs-token-feed.service'),
     'linux-refresh-unit': join(root, 'generated', 'claude-token-refresh.service'),
   };
   const manifestSource = join(trustRoot, 'reviewed-manifest.json');

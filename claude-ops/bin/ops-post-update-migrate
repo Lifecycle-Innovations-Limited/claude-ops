@@ -19,12 +19,54 @@ PLUGIN_JSON="$PLUGIN_ROOT/.claude-plugin/plugin.json"
 VERSION=$(python3 -c "import json,sys; print(json.load(open('$PLUGIN_JSON'))['version'])" 2>/dev/null || echo "unknown")
 SENTINEL_DIR="$DATA_DIR/.migrated"
 SENTINEL="$SENTINEL_DIR/v${VERSION}"
+# Set by a migration (inside the backgrounded subshell, so a file not a variable)
+# when it skipped work that a later session could still complete. Suppresses the
+# sentinel stamp so the next SessionStart retries instead of skipping forever.
+SENTINEL_DEFER_FLAG="$SENTINEL_DIR/.defer-v${VERSION}"
 
 mkdir -p "$SENTINEL_DIR" 2>/dev/null || true
+rm -f "$SENTINEL_DEFER_FLAG" 2>/dev/null || true
 LOG="$DATA_DIR/post-update-migrate.log"
 mkdir -p "$DATA_DIR" 2>/dev/null || true
 
 log() { printf "[%s] %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
+
+# launchd is a per-USER global namespace. It does NOT honour $HOME, so a test that
+# sandboxes HOME (mktemp -d) still writes plists into a fake home but then loads
+# and unloads them in the REAL gui/<uid> domain, under the real ${USER} label.
+#
+# That is not theoretical. On 2026-08-20 tests/test-post-update-migrate-sentinel.sh
+# ran against a temp HOME, and its `launchctl unload/load` re-pointed the live
+# com.<user>.whatsapp-bridge job at a 12-byte `#!/bin/bash` stub in /var/folders.
+# The production WhatsApp bridge was SIGTERMed and stayed dead, with launchd
+# reporting a temp-dir Program, until it was manually re-bootstrapped.
+#
+# Guard the whole class: any launchctl mutation is skipped unless $HOME is the
+# invoking user's real home. A sandboxed run still exercises every path that
+# writes files, which is what the tests actually assert on.
+#
+# FAIL CLOSED. Do not default REAL_HOME to "$HOME" when the lookup fails: that
+# makes the comparison below compare $HOME to itself, which is trivially true
+# for a sandboxed HOME too, and re-enables the exact hazard this guard exists to
+# prevent. An unresolvable real home means we cannot prove we are safe, so we
+# skip the mutation.
+REAL_HOME="$(python3 -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)' 2>/dev/null || true)"
+
+launchctl_guarded() {
+  if [[ "${OPS_MIGRATE_NO_LAUNCHCTL:-0}" == "1" ]]; then
+    log "  skip: launchctl $* (OPS_MIGRATE_NO_LAUNCHCTL=1)"
+    return 0
+  fi
+  if [[ -z "$REAL_HOME" ]]; then
+    log "  skip: launchctl $* (could not resolve real home — failing closed)"
+    return 0
+  fi
+  if [[ "$HOME" != "$REAL_HOME" ]]; then
+    log "  skip: launchctl $* (sandboxed HOME=$HOME, real=$REAL_HOME)"
+    return 0
+  fi
+  launchctl "$@" 2>/dev/null || true
+}
 
 LOCK_DIR="$DATA_DIR/.post-update-migrate.lock"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -165,12 +207,12 @@ run_migrations() {
     local legacy_wa_plist="$HOME/Library/LaunchAgents/com.claude-ops.whatsapp-bridge.plist"
     local legacy_user_plist="$HOME/Library/LaunchAgents/com.<user>.whatsapp-bridge.plist"
     if [[ -f "$legacy_wa_plist" && "$legacy_wa_plist" != "$plist_dst" ]]; then
-      launchctl unload "$legacy_wa_plist" 2>/dev/null || true
+      launchctl_guarded unload "$legacy_wa_plist"
       rm -f "$legacy_wa_plist" 2>/dev/null || true
       log "  ok: removed legacy com.claude-ops whatsapp-bridge LaunchAgent"
     fi
     if [[ -f "$legacy_user_plist" && "$legacy_user_plist" != "$plist_dst" ]]; then
-      launchctl unload "$legacy_user_plist" 2>/dev/null || true
+      launchctl_guarded unload "$legacy_user_plist"
       rm -f "$legacy_user_plist" 2>/dev/null || true
       log "  ok: removed legacy com.<user> whatsapp-bridge LaunchAgent"
     fi
@@ -178,15 +220,31 @@ run_migrations() {
     if [[ -f "$plist_src" ]] && [[ ! -f "$plist_dst" || "$plist_src" -nt "$plist_dst" ]]; then
       mkdir -p "$HOME/Library/LaunchAgents" 2>/dev/null || true
       local bridge_dir="${WHATSAPP_BRIDGE_HOME:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
-      sed -e "s#__BRIDGE_BINARY_PATH__#$bridge_dir/whatsapp-bridge#g" \
-          -e "s#__BRIDGE_WORKING_DIR__#$bridge_dir#g" \
-          -e "s#__HOME__#$HOME#g" \
-          -e "s#__USER__#$USER#g" \
-          "$plist_src" > "$plist_dst" 2>/dev/null && {
-        launchctl unload "$plist_dst" 2>/dev/null || true
-        launchctl load "$plist_dst" 2>/dev/null || true
-        log "  ok: whatsapp-bridge LaunchAgent refreshed"
-      }
+      # The template supervises via run-bridge.sh, which strips --pair so a
+      # logged-out bridge can never re-pair itself unattended (that is what gets
+      # a WhatsApp account banned). If the wrapper is missing, installing the
+      # LaunchAgent would give launchd nothing safe to exec, so skip instead:
+      # better no autostart than an unsupervised pair loop.
+      #
+      # The skip must NOT be sticky. The per-version sentinel is stamped even on
+      # partial failure, and SessionStart exits early once it exists, so a bridge
+      # dir that gains run-bridge.sh later would otherwise never get its
+      # LaunchAgent for this version. Defer the sentinel so the next session
+      # retries.
+      if [[ ! -x "$bridge_dir/run-bridge.sh" ]]; then
+        log "  skip: whatsapp-bridge LaunchAgent (missing $bridge_dir/run-bridge.sh) — will retry next session"
+        : > "$SENTINEL_DEFER_FLAG"
+      else
+        sed -e "s#__BRIDGE_BINARY_PATH__#$bridge_dir/whatsapp-bridge#g" \
+            -e "s#__BRIDGE_WORKING_DIR__#$bridge_dir#g" \
+            -e "s#__HOME__#$HOME#g" \
+            -e "s#__USER__#$USER#g" \
+            "$plist_src" > "$plist_dst" 2>/dev/null && {
+          launchctl_guarded unload "$plist_dst"
+          launchctl_guarded load "$plist_dst"
+          log "  ok: whatsapp-bridge LaunchAgent refreshed"
+        }
+      fi
     fi
   fi
 
@@ -194,7 +252,7 @@ run_migrations() {
   if [[ "$(uname -s)" == "Darwin" ]]; then
     local stale_plist="$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
     if [[ -f "$stale_plist" ]]; then
-      launchctl unload "$stale_plist" 2>/dev/null || true
+      launchctl_guarded unload "$stale_plist"
       rm -f "$stale_plist" 2>/dev/null || true
       log "  ok: removed deprecated wacli-keepalive LaunchAgent"
     fi
@@ -220,5 +278,15 @@ wait "$MIGRATE_PID" 2>/dev/null || true
 
 # Stamp sentinel even on partial failure — individual migrations log their own state.
 # Re-run forced by deleting the sentinel or bumping plugin.json version.
+#
+# Exception: a migration that deliberately skipped recoverable work sets the defer
+# flag. Stamping then would make the skip permanent for this version, since the
+# early-exit above never re-enters run_migrations. Leave the sentinel unwritten so
+# the next SessionStart retries.
+if [[ -f "$SENTINEL_DEFER_FLAG" ]]; then
+  rm -f "$SENTINEL_DEFER_FLAG" 2>/dev/null || true
+  log "post-update-migrate DEFERRED sentinel version=$VERSION (a migration will retry next session)"
+  exit 0
+fi
 touch "$SENTINEL"
 exit 0

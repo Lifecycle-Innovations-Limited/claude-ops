@@ -126,7 +126,7 @@ def personal_key() -> str:
     return (
         os.environ.get("LINEAR_API_KEY", "").strip()
         or os.environ.get("CLIENT_LINEAR_API_KEY", "").strip()
-        or os.environ.get("HEA" + "LIFY_LINEAR_API_KEY", "").strip()
+        or os.environ.get("TEAM_LINEAR_API_KEY", "").strip()
     )
 
 
@@ -295,7 +295,7 @@ def desired_linear_label_ids(pc_ident: str, lin: dict) -> tuple[Optional[list[st
     """Compute Linear labelIds: keep current + add mapped PC labels.
 
     Additive for product taxonomy. Exception: strip banned priority/security-noise
-    labels (Priority:*, P1, priority-*, Security - Client) so they cannot return.
+    labels (Priority:*, P1, priority-*, Security - <company>) so they cannot return.
     Returns (label_ids_or_None_if_no_change, note).
     """
     try:
@@ -1562,7 +1562,7 @@ def main() -> int:
                     if m:
                         created_ids.append(m.group(1))
                     state.setdefault("seen", {})[n.get("identifier")] = {"at": now_iso(), "event": ev}
-            # Cost guard: at most one router wakeup per full-sync tick after batch creates
+            # Cost guard: at most one router wakeup per full-sync tick after batch creates.
             if created_ids and not args.dry_run and CLIENT_COMPANY_ID in INBOUND_ROUTER_AGENT:
                 wcode, wresp = wakeup_agent(
                     CLIENT_INBOUND_ASSIGNEE_AGENT_ID,

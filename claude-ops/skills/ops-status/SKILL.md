@@ -1,6 +1,6 @@
 ---
 name: ops-status
-description: Lightweight green/red status panel for every configured integration. No gather, no actions.
+description: "This skill should be used when the user asks to \"ops status\", \"/ops:ops-status\", or \"are integrations green\". Lightweight green/red status panel for every configured integration. No gather, no actions."
 argument-hint: '[--json]'
 allowed-tools:
   - Bash
@@ -12,6 +12,8 @@ maxTurns: 10
 ---
 
 # OPS ► STATUS
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Compact health panel for every configured integration. Much lighter than `/ops:go` — **no gathering, no actions, no heavy API probes.** Each row is tagged with `✓` (ok) / `○` (not configured) / `✗` (missing) / `─` (category unused).
 

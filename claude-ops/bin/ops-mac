@@ -237,7 +237,7 @@ audit() {
   echo
   echo "── SYSTEM HEALTH (machealth, ${MACHEALTH_TIMEOUT}s cap) ──"; p_health
   echo
-  echo "Tip: this is read-only. Remediate with /ops:mac fix (firewall, stale daemons, cache clean)."
+  echo "Tip: this is read-only. Remediate with /ops:mac fix (stale daemons, cache clean)."
 }
 
 # ─── dispatch ────────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 [Unit]
 Description=Claude account rotation daemon (plugin-first)
-After=network-online.target crs-compose.service
-Wants=network-online.target crs-compose.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple

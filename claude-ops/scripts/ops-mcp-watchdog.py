@@ -64,6 +64,10 @@ REAUTH_SCRIPT = Path(__file__).resolve().parent / "ops-mcp-reauth.py"
 
 UA_HEADER = "ops-mcp-watchdog/0.1 (Mozilla/5.0)"
 
+# These providers require an owner-present browser login. Starting them from a
+# cron tick leaves a browser on a localhost callback after its listener exits.
+INTERACTIVE_ONLY_OAUTH_HOSTS = {"mcp.carrier.llc", "mcp.esimmcp.com"}
+
 # MCPs that use a Bearer API key (not OAuth). The key lives in keychain under
 # the listed `keychain_service` name; we'll inject it as Authorization: Bearer.
 API_KEY_MCPS = {
@@ -535,6 +539,10 @@ def main() -> int:
     if AUTO_REAUTH and REAUTH_SCRIPT.exists():
         for name, info in cur_state.items():
             if info.get("state") != "needs_bootstrap":
+                continue
+            host = (urlparse.urlparse(info["url"]).hostname or "").lower()
+            if host in INTERACTIVE_ONLY_OAUTH_HOSTS:
+                log(f"{name}: interactive OAuth only; skipping background auto-reauth")
                 continue
             log(f"{name}: attempting Playwright auto-reauth")
             try:

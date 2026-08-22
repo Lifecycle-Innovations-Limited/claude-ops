@@ -1,0 +1,12 @@
+[Unit]
+Description=Run CLIProxy autonomous quota healer every 2 minutes
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=120s
+AccuracySec=15s
+Persistent=true
+Unit=cliproxy-heal.service
+
+[Install]
+WantedBy=timers.target

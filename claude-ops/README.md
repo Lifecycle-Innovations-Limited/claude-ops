@@ -1,13 +1,13 @@
 # claude-ops
 
-> **v2.11.5** — Autonomy Layer · Deploy Auto-Fix · Safety Hooks · Specialist Agents · Recap Marquee · Multi-Account Rotator · Multi-Workspace Slack · Telegram Bot Push · Linux Headless Browser-Auth · 35 Skills · 18 Agents
+> **v3.6.1** — 64 skills · 21 agents · Claude + Grok + Hermes · ops-rules · empty `.mcp.json`
 
-## What's new in v2.11.5
+## What's new in v3.6.1
 
-- **v2.11.5** — Linux headless browser-auth for the account rotator (Brave Tier-2, Xvnc 1280×800, per-account `gog`, magic-link-only). See [CHANGELOG.md](CHANGELOG.md) for the full list.
-- **v2.11.4** — Account rotator prefers personal accounts over TEAMS/org accounts to avoid org-chooser + Google push-2FA stalls.
-- **v2.11.3** — [`bin/ops-telegram-bot-send`](docs/telegram-bot-send.md): bot-token push to the operator's own Telegram chat. Lower-cost alternative to the user-account MCP path for one-way notifications. Includes the `block-outbound-comms.py` self-channel exception.
-- Older: **v2.2.0** — Audit fixes: plugin validation (install unblocked), deploy-fix test suite (45/45 passing), `set -e` safety, account-rotation stdin handling. See [CHANGELOG.md](CHANGELOG.md) for the full list.
+- **v3.6.1** — Slim `ops-inbox` SKILL.md, real NL skill triggers, Hermes `plugin.yaml` + installer pin locked to `plugin.json`. Grok still loads the Claude plugin. [harness-ports.md](docs/harness-ports.md).
+- **v3.6.0** — Skills match plugin-dev practice: `ops-rules` skill (root `CLAUDE.md` is a pointer), third-person frontmatter, shared preamble, oversized SKILL.md split into `references/`.
+- **v3.5.0** — Native Hermes plugin: slash commands, `skill_view("ops:*")`, Rule 10 harness fallbacks, installer `~/.hermes/plugins/ops`.
+- Older notes: [CHANGELOG.md](CHANGELOG.md).
 
 A Claude Code plugin that turns Claude into a business operating system **and** an autonomy layer. Run `/ops` for the interactive command center — pixel-art dashboard with instant hotkey access to morning briefings, inbox, fires, deploys, revenue, and YOLO mode. Or just keep working — v2's hooks watch every merge, every build, every commit, every push, and every agent dispatch in the background.
 
@@ -29,7 +29,7 @@ Purely additive — no v1 behaviour changes by default. Full migration guide: [`
 | Direct main-push warning          | `git push *` on `main`/`master`/`prod`            | `permissionDecision: ask` to confirm                                                                     | (always-on)                                                                                          | —                                                     | [safety-hooks.md](docs/safety-hooks.md)                      |
 | Task\* tracking nudge             | every Nth non-Task tool call                      | One-line `additionalContext` reminder                                                                    | (transparent)                                                                                        | `task_reminder_enabled` (default `true`)              | [CHANGELOG](CHANGELOG.md#4-universal-task-tracking-nudge)    |
 | Recap marquee                     | every 30s                                         | Multi-session digest in tmux `status-right` / `statusLine`                                               | [`/ops:recap`](skills/ops-recap/SKILL.md)                                                            | `recap_marquee_enabled` (default `true`)              | [recap.md](docs/recap.md)                                    |
-| Multi-account Claude Max rotator  | quota approaching cap                             | launchd daemon swaps `Claude Code-credentials` keychain entry to next account                            | [`/ops:rotate`](skills/ops-rotate/SKILL.md), [`/ops:rotate-setup`](skills/ops-rotate-setup/SKILL.md) | `account_rotation_enabled` (default `false` — opt-in) | [CHANGELOG](CHANGELOG.md#6-multi-account-claude-max-rotator) |
+| Multi-account Claude Max rotator  | quota approaching cap                             | launchd daemon swaps `Claude Code-credentials` keychain entry to next account, and writes CLIProxyAPI seat files for pooled setups | [`/ops:rotate`](skills/ops-rotate/SKILL.md), [`/ops:rotate-setup`](skills/ops-rotate-setup/SKILL.md) | `account_rotation_enabled` (default `false` — opt-in) | [CHANGELOG](CHANGELOG.md#6-multi-account-claude-max-rotator) |
 
 ### v2 quick start — deploy auto-fix in 60 seconds
 
@@ -60,8 +60,6 @@ Per-repo budget caps (default 3/hour), single-flight locks, content-hash dedup, 
 | ------------------- | --------------------------------------------------------------------------------- |
 | `/ops`              | Interactive command center dashboard (visual HQ)                                  |
 | `/ops:dash`         | Same as `/ops` — pixel-art dashboard with hotkey navigation                       |
-| `ops-client-dash`  | Dedicated client KPI, growth, App Store, reliability, infra, repo, agent, MCP, and plugin command center |
-| `ops-client-bi-refresh` | Warms the client BI cache used by `ops-client-dash` from EAS, ASC, AppsFlyer, Amplitude, Sentry, BetterStack, Linear, QA, and ops-dashboard sources |
 | `/ops:setup`        | Interactive setup wizard — installs CLIs, configures channels, builds registry    |
 | `/ops:go`           | Morning briefing — all systems in one dashboard                                   |
 | `/ops:next`         | Priority-ordered next action (fires > comms > PRs > sprint > GSD)                 |
@@ -142,7 +140,7 @@ The background memory extractor now prefers the Claude Code OAuth token stored i
 
 ### Full Plugin Feature Adoption
 
-- All 62 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
+- All 64 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
 - All 21 agents: `memory` (cross-session learning), `initialPrompt`, `isolation`
 - PreToolUse hooks for WhatsApp health checks and MCP auto-reconnect
 - Runtime Context loading in every skill (preferences, daemon health, memories, secrets)
@@ -408,7 +406,7 @@ Tools:
 - `send_message` — send a message to a chat
 - `search_messages` — full-text search across all your chats
 
-See [telegram-server/README.md](telegram-server/README.md) for first-run auth flow and troubleshooting. The plugin's `.mcp.json` wires all four env vars (`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_PHONE`, `TELEGRAM_SESSION`) from your `user_config` in Claude Code plugin settings — you never paste tokens into files directly.
+See [telegram-server/README.md](telegram-server/README.md) for first-run auth flow and troubleshooting. Register it on demand in host `~/.claude.json` / plugin settings — the plugin `.mcp.json` stays empty so every session does not spawn a Telegram stdio process. Never paste tokens into files.
 
 ## Contributing
 

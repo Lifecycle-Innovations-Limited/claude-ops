@@ -6,7 +6,7 @@
 
 | Typical required context | Notes |
 |--------------------------|--------|
-| **`CI Summary`** (if present) | Only required context on many Healify `dev` branches |
+| **`CI Summary`** (if present) | Often the only required context on a `dev` branch |
 | Else: branch-protection required checks | `gh api repos/.../branches/<branch>/protection` |
 
 When required green + no conflicts:

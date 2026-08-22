@@ -33,16 +33,28 @@ function pickAgents(cfg, onlyNames) {
       installed: det.installed,
       skillsPath,
       nested: conf.nested || null,
+      pluginPath: conf.plugin || null,
     };
   }
   return out;
 }
 
-function planAll({ cfg, srcDir, agents, force, dryRun }) {
+export function planAll({
+  cfg,
+  srcDir,
+  agents,
+  force,
+  dryRun,
+  skipUndetected = false,
+}) {
   const skillNames = listSourceSkills(srcDir);
   const binNames = listSourceBin(srcDir);
   const plan = { agents: {}, bin: null, errors: [] };
   for (const [name, a] of Object.entries(agents)) {
+    if (skipUndetected && !a.installed) {
+      plan.agents[name] = { skipped: true, reason: "not detected" };
+      continue;
+    }
     if (!a.skillsPath) {
       plan.agents[name] = { skipped: true, reason: "no skillsPath" };
       continue;
@@ -56,6 +68,15 @@ function planAll({ cfg, srcDir, agents, force, dryRun }) {
     });
     plan.agents[name] = mirror;
     if (mirror.errors.length) plan.errors.push(...mirror.errors);
+    if (a.pluginPath) {
+      const pluginPlan = planNativePlugin({
+        srcDir,
+        pluginPath: a.pluginPath,
+        force,
+      });
+      plan.agents[name].plugin = pluginPlan;
+      if (pluginPlan.errors) plan.errors.push(...pluginPlan.errors);
+    }
   }
   if (cfg.bin && cfg.bin.path) {
     plan.bin = planBinLinks({
@@ -70,6 +91,96 @@ function planAll({ cfg, srcDir, agents, force, dryRun }) {
   return plan;
 }
 
+export function planNativePlugin({ srcDir, pluginPath, force }) {
+  const from = path.join(srcDir, "hermes-plugin");
+  const to = pluginPath;
+  const errors = [];
+  if (!pluginPath) {
+    return { skipped: true, reason: "no plugin path", errors };
+  }
+  if (!fs.existsSync(path.join(from, "plugin.yaml"))) {
+    return { skipped: true, reason: "hermes-plugin missing", errors };
+  }
+  let existing = null;
+  try {
+    existing = fs.lstatSync(to);
+  } catch (_e) {
+    /* absent */
+  }
+  if (existing) {
+    if (existing.isSymbolicLink()) {
+      const cur = fs.readlinkSync(to);
+      if (cur === from || cur === from + "/") {
+        return {
+          skipped: false,
+          action: {
+            op: "skip",
+            from,
+            to,
+            reason: "already correct",
+          },
+          errors,
+        };
+      }
+      return {
+        skipped: false,
+        action: {
+          op: "symlink",
+          from,
+          to,
+          reason: "replace existing symlink",
+        },
+        errors,
+      };
+    }
+    if (!force) {
+      errors.push({
+        path: to,
+        op: "symlink",
+        error: "target is real (refused without --force)",
+      });
+      return {
+        skipped: false,
+        action: {
+          op: "refuse",
+          from,
+          to,
+          reason: "target is a real file/dir; pass --force to overwrite",
+        },
+        errors,
+      };
+    }
+  }
+  return {
+    skipped: false,
+    action: { op: "symlink", from, to },
+    errors,
+  };
+}
+
+function applyPluginLink(pluginPlan, { dryRun, onApply }) {
+  if (!pluginPlan || pluginPlan.skipped || !pluginPlan.action) return;
+  const a = pluginPlan.action;
+  if (a.op === "skip" || a.op === "refuse") {
+    a.status = a.op === "skip" ? "skipped" : "refused";
+    return;
+  }
+  if (a.op !== "symlink" || dryRun) {
+    a.status = dryRun ? "planned" : "noop";
+    return;
+  }
+  fs.mkdirSync(path.dirname(a.to), { recursive: true });
+  try {
+    fs.lstatSync(a.to);
+    fs.rmSync(a.to, { recursive: true, force: true });
+  } catch (_e) {
+    /* absent */
+  }
+  fs.symlinkSync(a.from, a.to);
+  a.status = "applied";
+  if (onApply) onApply(a.to, a.from);
+}
+
 function applyAll({ plan, dryRun, cfg }) {
   let manifest = loadManifest();
   for (const [name, mirror] of Object.entries(plan.agents)) {
@@ -78,6 +189,12 @@ function applyAll({ plan, dryRun, cfg }) {
       dryRun,
       onApply: (to, from) => addSymlink(manifest, to, from),
     });
+    if (mirror.plugin) {
+      applyPluginLink(mirror.plugin, {
+        dryRun,
+        onApply: (to, from) => addSymlink(manifest, to, from),
+      });
+    }
     // Record every applied symlink in the manifest.
     if (!dryRun) {
       for (const a of mirror.actions) {
@@ -120,6 +237,15 @@ function emit(plan, asJson) {
       for (const a of m.actions) {
         const arrow = a.status ? `${a.op}->${a.status}` : a.op;
         process.stdout.write(`  ${arrow}  ${a.skill}\n`);
+      }
+      if (m.plugin) {
+        if (m.plugin.skipped) {
+          process.stdout.write(`  plugin skipped: ${m.plugin.reason}\n`);
+        } else if (m.plugin.action) {
+          const a = m.plugin.action;
+          const arrow = a.status ? `${a.op}->${a.status}` : a.op;
+          process.stdout.write(`  ${arrow}  plugin ${a.to}\n`);
+        }
       }
     }
     if (plan.bin && plan.bin.planned) {
@@ -188,6 +314,7 @@ export async function runInstall(flags) {
     agents,
     force: !!flags.force,
     dryRun: !!flags.dryRun,
+    skipUndetected: !flags.agents || flags.agents.length === 0,
   });
   applyAll({ plan, dryRun: !!flags.dryRun, cfg });
   emit(plan, !!flags.json);

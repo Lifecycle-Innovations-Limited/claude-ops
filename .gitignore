@@ -11,9 +11,21 @@ node_modules/
 .pii-denylist
 
 # Local, owner-specific prefs/overrides — never commit (see docs/LOCAL-PREFS.md)
+# Preferences belong in the plugin data dir ($PREFS_PATH) or $HOME/.config,
+# never in the repo. tests/test-no-secrets.sh fails the build if any of these
+# become tracked, so adding a pattern here is not on its own sufficient.
 ops.local.json
 *.local.json
 .ops-prefs.json
+ops-prefs.json
+preferences.json
+contact-registry.json
+daemon-health.json
+daemon-services.json
+pii-denylist.txt
+registry.json
+!scripts/registry.example.json
+!claude-ops/scripts/registry.example.json
 
 # Runtime message/session stores written by local bridges (WhatsApp whatsmeow,
 # etc). These hold real conversation content and pairing state and must never

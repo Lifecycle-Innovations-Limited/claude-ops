@@ -2137,7 +2137,14 @@ FIXQ_STATUS_REPLACEMENT = """\t// claude-ops Fix Q: GET /api/app_state_status â€
 \t\t}
 \t}()
 }"""
-FIXQ_STATUS_SENTINEL = "claude-ops Fix Q: GET /api/app_state_status"
+# Gate on the route registration, NOT on the comment above it. Fix Y later rewrote that
+# comment to "claude-ops Fix Q/Y: GET /api/app_state_status", so a comment-based sentinel
+# stopped matching on any tree that had taken Fix Y, and this patch re-appended a second
+# http.HandleFunc for the same path. Go panics at startup on a duplicate pattern
+# ("http: multiple registrations for /api/app_state_status"), so the bridge died on the
+# next `go build`. The handler line is stable across every variant and is exactly the
+# thing that must not appear twice.
+FIXQ_STATUS_SENTINEL = 'http.HandleFunc("/api/app_state_status"'
 
 # Q2: kick the full regular_low sync on Connected and flip readiness when done.
 # Anchors on the closing two lines of the auto-backfill goroutine

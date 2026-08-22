@@ -113,17 +113,25 @@ export function renderDashboard(snapshot, { width = 100, selectedIdx = 0, status
   const total = agents.length;
   const needs = agents.filter((a) => a.status === 'needs-sam').length;
   const fra = snapshot.hosts?.fra || {};
-  const fraTag = fra.stale
-    ? `${C.red}stale${C.reset}`
-    : fra.cached
-      ? `${C.gray}cached${C.reset}`
-      : `${C.green}live${C.reset}`;
+  const fraUnknown = fra.known === false || fra.count === null || fra.count === undefined;
+  const fraTag = fraUnknown
+    ? `${C.red}unreachable${C.reset}`
+    : fra.source === 'not-configured'
+      ? `${C.gray}not configured${C.reset}`
+      : fra.stale
+        ? `${C.red}stale${C.reset}`
+        : fra.cached
+          ? `${C.gray}cached${C.reset}`
+          : `${C.green}live${C.reset}`;
+  // "?" not "0": an unreachable host has an unknown agent count, and printing a
+  // number there is indistinguishable from a genuinely idle host.
+  const fraCount = fraUnknown ? '?' : fra.count;
 
   // header
   lines.push(
     `${C.bold}${C.cyan}AGENT-DASH${C.reset}  ${C.bold}${total}${C.reset} agents` +
       `  ${C.dim}·${C.reset} mac ${snapshot.hosts?.mac?.count ?? 0}` +
-      `  ${C.dim}·${C.reset} fra ${fra.count ?? 0} (${fraTag})` +
+      `  ${C.dim}·${C.reset} fra ${fraCount} (${fraTag})` +
       (needs ? `  ${C.brightYellow}${C.bold}◆ ${needs} need you${C.reset}` : '') +
       `  ${C.gray}${new Date(snapshot.ts).toLocaleTimeString()}${C.reset}`,
   );

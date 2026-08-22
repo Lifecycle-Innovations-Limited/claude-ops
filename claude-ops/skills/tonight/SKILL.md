@@ -1,12 +1,15 @@
 ---
 name: tonight
-description: Evening tomorrow-brief. Reads the Ops Ledger, calendar, and People DB. Surfaces tomorrow's meetings with prep status, birthdays hitting tomorrow, overdue outreach, top 3 priorities, and any unresolved decisions from today. Push notification if anything is genuinely time-sensitive.
+description: "This skill should be used when the user asks to \"tomorrow brief\", \"evening wrap\", or \"/ops:tonight\". Evening tomorrow-brief. Reads the Ops Ledger, calendar, and People DB. Surfaces tomorrow's meetings with prep status, birthdays hitting tomorrow, overdue outreach, top 3 priorities, and any unresolved decisions from today. Push notification if anything is genuinely time-sensitive."
+argument-hint: ''
 allowed-tools:
   - Bash
   - Read
 ---
 
 # /ops:tonight
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 The "before-bed brief." Counterpart to `/ops:go` (morning).
 

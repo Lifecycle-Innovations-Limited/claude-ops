@@ -1,6 +1,6 @@
 ---
 name: ops-update
-description: Upgrade the local claude-ops ("ops") plugin to the latest published version in one command — refresh the marketplace catalogue, update the installed plugin (with stale-cache force-reinstall fallback), reapply local cache patches, prune every old cache version, rewrite stale version-pinned paths, run per-version migrations, then prompt to reload. Use when the box is on an older plugin version, after a release, or when the cache looks stale.
+description: "This skill should be used when the user asks to \"update ops plugin\", \"upgrade claude-ops\", or \"/ops:ops-update\". Upgrade the local claude-ops (\"ops\") plugin to the latest published version in one command — refresh the marketplace catalogue, update the installed plugin (with stale-cache force-reinstall fallback), reapply local cache patches, prune every old cache version, rewrite stale version-pinned paths, run per-version migrations, then prompt to reload. Use when the box is on an older plugin version, after a release, or when the cache looks stale."
 argument-hint: '[--dry-run|--force|--to X.Y.Z|--no-prune|--no-patches|--no-rewrite|--no-localsync]'
 allowed-tools:
   - Bash
@@ -10,9 +10,40 @@ allowed-tools:
 
 # OPS ► UPDATE — one-command local plugin upgrade
 
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
+
 Upgrades the local **claude-ops** plugin to the newest version published in the
 `ops-marketplace` catalogue, then leaves the box clean: no stale cache dirs, no
 dangling version-pinned paths.
+
+## Automatic daily check (detect only, never auto-installs)
+
+`bin/ops-update-check` runs daily from the ops daemon (`update-check` service)
+and answers one question: is a newer version published? It writes the verdict to
+`~/.claude/state/ops-update/update-available.json` and exits **3** when an
+update exists, **0** when current.
+
+**It never installs anything.** Detection and application are deliberately split:
+a background job that swapped the plugin out mid-session would break a working
+install at the worst possible moment. Applying is always `ops-update`, run on
+the user's word.
+
+When you see that an update is available — because the state file says so, or
+because the user asks — surface it once and offer to apply it:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/ops-update-check" --json    # current verdict, throttled to daily
+"${CLAUDE_PLUGIN_ROOT}/bin/ops-update-check" --force   # recheck now, ignoring the throttle
+```
+
+Then a single `AskUserQuestion`: `[Update now]` `[Show what changed]` `[Not now]`.
+Only on `Update now` do you run `bin/ops-update`. Never chain the two, and never
+apply an update the user has not just agreed to in that exchange.
+
+Flags: `--json` (verdict on stdout), `--no-fetch` (compare against the catalogue
+already on disk, no network), `--force` (ignore the once-a-day throttle),
+`--quiet` (write state, print nothing — how the daemon runs it). Override the
+cadence with `$OPS_UPDATE_CHECK_INTERVAL` in seconds.
 
 The workhorse is **`${CLAUDE_PLUGIN_ROOT}/bin/ops-update`**. It runs a 9-step loop:
 

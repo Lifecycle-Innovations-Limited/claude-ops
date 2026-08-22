@@ -1,6 +1,6 @@
 ---
 name: ops-statusline
-description: Statusline command center — preview, configure, switch themes, validate, and reset the Claude Code cockpit statusline. Subcommands: preview, config, theme, doctor, reset.
+description: "This skill should be used when the user asks to \"statusline theme\", \"cockpit\", or \"/ops:ops-statusline\". Statusline command center — preview, configure, switch themes, validate, and reset the Claude Code cockpit statusline. Subcommands: preview, config, theme, doctor, reset."
 argument-hint: "[preview|config|theme <name>|doctor|reset]"
 allowed-tools:
   - Bash
@@ -28,6 +28,8 @@ SUGGEST_BIN="${PLUGIN_ROOT}bin/ops-statusline-suggest"
 ---
 
 # OPS ► STATUSLINE
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Manages the Claude Code cockpit statusline — a 3-line terminal status bar showing
 context-window health, quota gauges, burn rate, git branch, fleet state, sys metrics,

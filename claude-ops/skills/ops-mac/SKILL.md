@@ -1,6 +1,6 @@
 ---
 name: ops-mac
-description: macOS diagnose-and-fix command center. Wraps the macos-toolkit CLI suite (machealth, netwhiz, pstop, macdog, lanchr, macbroom, macctl, macfig, updater) behind one entrypoint — self-installs the suite on first use, runs a read-only baseline audit (security, launch agents, processes, network, disk, system health), and applies guarded fixes (firewall, stale daemons, cache cleanup) with per-action confirmation.
+description: "This skill should be used when the user asks to \"mac is slow\", \"macos fix\", or \"/ops:ops-mac\". macOS diagnose-and-fix command center. Wraps the macos-toolkit CLI suite (machealth, netwhiz, pstop, macdog, lanchr, macbroom, macctl, macfig, updater) behind one entrypoint — self-installs the suite on first use, runs a read-only baseline audit (security, launch agents, processes, network, disk, system health), and applies guarded fixes (stale daemons, cache cleanup) with per-action confirmation. The application firewall is reported only and changed solely on an explicit request."
 argument-hint: '[audit|health|net|disk|procs|security|launchd|fix|ensure|update]'
 allowed-tools:
   - Bash
@@ -13,6 +13,8 @@ maxTurns: 30
 ---
 
 # OPS ► MAC — macOS Diagnose & Fix
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 One command for native macOS health: it bundles the [`macos-toolkit`](https://github.com/lu-zhengda/macos-toolkit) CLI suite, **auto-installs it on first use**, runs a read-only baseline, and remediates the common offenders behind explicit confirmations.
 
@@ -93,16 +95,22 @@ Run the audit first to know what's wrong, then offer fixes. **Per plugin Rule 5,
 
 Common offenders and their guarded fixes:
 
-### 1. Firewall off
-```
-macdog reports the application firewall is OFF.
-  [Enable firewall]  [Enable + stealth mode]  [Skip]
-```
-On confirm:
+### 1. Firewall — opt-in only, never offered
+
+The application firewall is **out of scope for `/ops:mac fix`**. Report its state in the audit
+and stop there. Do not offer to enable it, do not add it to a fix menu, and do not list it as a
+recommendation — a firewall that comes on unasked breaks local listeners (dev servers, MCP
+proxies, VNC, tunnels) that the user did not connect the change to.
+
+Touch it only when the user asks for the firewall by name in that turn ("turn the firewall on",
+"enable stealth mode"). Then confirm the single action and run:
+
 ```bash
 sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on
 # stealth (optional): sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode on
 ```
+
+"Run `/ops:mac fix`" is not that request.
 
 ### 2. Stale / crashing launchd user daemons
 For each actionable entry from `lanchr doctor` (missing binary, or repeated `exit 1`), confirm **individually**:
@@ -110,7 +118,7 @@ For each actionable entry from `lanchr doctor` (missing binary, or repeated `exi
 com.example.foo — binary missing at [path]. This launchd job is dead.
   [Show the plist first]  [Remove it]  [Disable (keep file)]  [Skip]
 ```
-Use `lanchr` to remediate where possible; otherwise `launchctl bootout`/`disable` after showing the plist. **Never touch a daemon the user relies on** (CLIProxyAPI/legacy CRS/haproxy, gbrain push, ops-daemon, cloudflared tunnels, watchdogs) without spelling out exactly what it is — cross-check before recommending removal.
+Use `lanchr` to remediate where possible; otherwise `launchctl bootout`/`disable` after showing the plist. **Never touch a daemon the user relies on** (CLIProxyAPI/haproxy, gbrain push, ops-daemon, cloudflared tunnels, watchdogs) without spelling out exactly what it is — cross-check before recommending removal.
 
 ### 3. Reclaimable disk
 ```

@@ -1,6 +1,6 @@
 ---
 name: ops-merge
-description: Autonomous salvage + PR merge pipeline. FIRST scans every repo in every org for orphan worktrees, feature branches without PRs, uncommitted/staged/stashed work, and unpushed commits — dispatches subagents to finish/PR all loose local work. THEN scans all open PRs, dispatches fixers for CI/conflicts/reviews, and merges. Use --main to also sync dev↔main branches. Use --no-salvage to skip Phase 0 (PR-only mode). Use --salvage-only to stop after Phase 0.
+description: "This skill should be used when the user asks to \"merge PRs\", \"salvage branches\", or \"/ops:ops-merge\". Autonomous salvage + PR merge pipeline. FIRST scans every repo in every org for orphan worktrees, feature branches without PRs, uncommitted/staged/stashed work, and unpushed commits — dispatches subagents to finish/PR all loose local work. THEN scans all open PRs, dispatches fixers for CI/conflicts/reviews, and merges. Use --main to also sync dev↔main branches. Use --no-salvage to skip Phase 0 (PR-only mode). Use --salvage-only to stop after Phase 0."
 argument-hint: '[--main] [--repo org/repo] [--dry-run] [--no-salvage] [--salvage-only]'
 allowed-tools:
   - Bash
@@ -20,6 +20,7 @@ allowed-tools:
   - WebSearch
 effort: medium
 maxTurns: 50
+context: fork
 ---
 
 ## Runtime Context
@@ -32,23 +33,7 @@ Before executing, load:
 
 # OPS ► MERGE
 
-## CLI/API Reference
-
-### gh CLI (GitHub)
-
-| Command                                                                                                                   | Usage                | Output                         |
-| ------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------ |
-| `gh pr list --repo <owner/repo> --json number,title,state,headRefName,statusCheckRollup,reviewDecision,mergeable,isDraft` | List PRs with status | JSON array                     |
-| `gh pr view <n> --repo <repo> --json title,body,state,mergeable,reviews`                                                  | PR details           | JSON                           |
-| `gh pr checks <n> --repo <repo>`                                                                                          | CI check status      | Check list                     |
-| `gh pr merge <n> --repo <repo> --squash --admin`                                                                          | Squash merge PR      | Merge result                   |
-| `gh pr create --repo <repo> --title "<t>" --body "<b>" --base dev`                                                        | Create PR            | PR URL                         |
-| `gh run list --repo <repo> --limit 5 --json conclusion,name,headBranch`                                                   | CI runs              | JSON array                     |
-| `gh run view <id> --repo <repo> --log-failed`                                                                             | Failed CI logs       | Log output                     |
-| `gh run watch <run-id> --repo <repo>`                                                                                     | Stream CI run        | Live output (use with Monitor) |
-| `gh api repos/<repo>/pulls/<n>/comments --jq '.[].body'`                                                                  | PR review comments   | Comment text                   |
-
----
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Agent Teams support
 
@@ -159,20 +144,30 @@ If the work lives only on a local branch (no worktree), create one:
 For each finding:
   1. cd into the worktree.
   2. Inspect state: `git status`, `git log <integration>..HEAD --oneline`, `git diff --stat`.
-  3. Read recent commit messages + any TODOs/HEREs in the diff. Decide whether the work is:
+  3. **Stale-copy guard (mandatory, per candidate file before commit):**
+     - Set `BASE=$(git merge-base HEAD origin/<integration_branch>)`.
+     - List files you plan to salvage from the worktree.
+     - For each file `<f>`:
+       - If `git diff --quiet "$BASE..origin/<integration_branch>" -- "<f>"` is **false** (integration changed `<f>` since base), treat `<f>` as high risk.
+       - For high-risk files, inspect both sides before staging:
+         - `git diff "$BASE..origin/<integration_branch>" -- "<f>"`
+         - `git diff "$BASE..HEAD" -- "<f>"`
+       - Only stage hunks that are genuinely new work from the salvage branch. Do **not** stage a wholesale file replacement that drops integration-side hunks.
+       - If you cannot prove the salvage branch is newer for `<f>`, mark the finding `aborted_for_review` (do not commit the file).
+  4. Read recent commit messages + any TODOs/HEREs in the diff. Decide whether the work is:
        (a) complete and just needs commit/push/PR — proceed
        (b) incomplete but obvious next step — finish it
        (c) ambiguous or risky → ABORT this finding and return it for human review.
-  4. If finishing work: make the smallest correct commit. Quality gate locally
+  5. If finishing work: make the smallest correct commit. Quality gate locally
      (per-repo: type-check + lint + relevant tests).
-  5. Commit with a clear message. NEVER use --no-verify unless a hook is genuinely
+  6. Commit with a clear message. NEVER use --no-verify unless a hook is genuinely
      broken and unrelated to your change.
-  6. Push: `git push -u origin <branch>` (or `--force-with-lease` if branch already remote).
-  7. Open PR (only if has_open_pr=false in the brief):
+  7. Push: `git push -u origin <branch>` (or `--force-with-lease` if branch already remote).
+  8. Open PR (only if has_open_pr=false in the brief):
        gh pr create --repo <repo> --base <integration_branch> --head <branch> \
          --title "<derived from commit messages>" \
          --body "Salvaged by /ops:merge Phase 0. <commit summary>"
-  8. Return structured JSON:
+  9. Return structured JSON:
        {
          "repo": "...",
          "branch": "...",
@@ -241,7 +236,7 @@ If user picks "Let me pick", show each PR with `[Merge]` / `[Skip]` options via 
 For each confirmed PR:
 
 1. Verify CI is still green: `gh pr checks <number> --repo <repo>`
-2. If green: `gh pr merge <number> --repo <repo> --squash --admin`
+2. If green: `gh pr merge <number> --repo <repo> --squash` (never `--admin` — see "Never bypass a branch gate" below)
 3. Report: `✓ Merged <repo>#<number> to <base>`
 
 ### Phase 3 — Dispatch fixers for PRs that need work
@@ -374,8 +369,11 @@ For each fixer's JSON report:
 5. **If all checks pass: orchestrator performs the merge.** The fixer never had merge authority. Run:
 
    ```bash
-   gh pr merge <pr> --repo <repo> --squash --admin
+   gh pr merge <pr> --repo <repo> --squash
    ```
+
+   Never add `--admin`. If the merge is refused, that refusal is the gate doing its
+   job — see "Never bypass a branch gate" below.
 
 6. **Verify the merge actually landed.** Immediately after the merge call:
 
@@ -433,7 +431,7 @@ For each repo that has separate `dev` and `main` branches:
 
 3. If confirmed: create sync PR: `gh pr create --repo <repo> --base main --head dev --title "chore: sync dev → main"`
 4. Wait for CI: `gh pr checks <sync-pr-number> --repo <repo> --watch` (background, max 10 min)
-5. If CI green: `gh pr merge <sync-pr-number> --repo <repo> --merge --admin` (merge commit, not squash)
+5. If CI green: `gh pr merge <sync-pr-number> --repo <repo> --merge` (merge commit, not squash; never `--admin`)
 6. Pull main back into dev: `git -C <path> fetch origin && git -C <path> checkout dev && git -C <path> merge origin/main --no-edit`
 
 ### Phase 7 — Final report
@@ -487,20 +485,68 @@ During this command's execution, invoke the following superpower skills at the s
 
 - **NEVER trust a fixer's claim of merge success.** Always verify via `gh pr view --json state,mergedAt,mergeCommit` before marking complete. See Phase 5 verification protocol.
 - **NEVER let a fixer call `gh pr merge`.** Merge is orchestrator-only. Fixers push, orchestrator verifies the push, orchestrator merges, orchestrator verifies the merge.
+- **NEVER merge, or open a PR against, a repo the owner is not a member of.** The registry lists every locally cloned project, so a fork's upstream (`facebookresearch/*`, someone else's OSS) appears in the queue carrying open PRs from unrelated contributors. Those are read-only. Contributing upstream is a deliberate act the owner asks for, one PR at a time, never a pipeline sweep.
+
+  **Check push access immediately before every `gh pr create`, `gh pr merge`, and `git push` — in every phase (0 salvage, 2 merge, 5 verified-merge, 6 main sync):**
+
+  ```bash
+  PERM=$(gh api "repos/$REPO" --jq '.permissions.push' 2>/dev/null || echo error)
+  [ "$PERM" = "true" ] || { echo "refusing: no confirmed push access to $REPO ($PERM)"; exit 1; }
+  ```
+
+  **Fail closed.** Only a literal `true` proceeds. `false`, `null`, a network error, a renamed repo, or an empty response all refuse. The scan filtering the queue is not sufficient on its own: the queue can be stale, hand-edited, or passed in by an operator, and the step after it is a merge. Re-check at the point of action, not once at the start.
+
+  `OPS_MERGE_INCLUDE_EXTERNAL=<owner/name>` authorises exactly one repo for one run, and only when the owner asked. It is a slug, never a boolean — a global on/off would re-open the whole registry to a pipeline whose next call is `gh pr merge`.
 - **NEVER force-push to main/master**
 - **NEVER merge with red CI** — fix root cause first
 - **NEVER bypass review on PRs touching auth, payments, PII, or secrets** — these require `security-reviewer` subagent audit before merge
 - **NEVER run `git reset --hard` on shared branches**
 - **ALWAYS use worktrees** for fixes (multiple agents may be active)
-- **ALWAYS use `--admin` only for squash merges to dev** (not main, unless `--main` flag)
+- **NEVER bypass a branch gate.** Do not pass `--admin` to `gh pr merge`, and do not
+  widen a ruleset, add yourself to a bypass list, or grant yourself admin to get a merge
+  through. A refused merge is the protection working. See "Never bypass a branch gate" below.
+- **ALWAYS confirm the base branch before merging.** Read `baseRefName` from
+  `gh pr view <n> --json baseRefName` in the same step as the merge. A run scoped to one
+  branch must refuse a PR whose base is a different one — a protected branch typically
+  carries a review gate the scoped branch does not.
 - **Max 10 PRs per invocation** to avoid GitHub API throttling
 - **If a PR has > 50 files changed**, flag it for manual review instead of auto-merging
+
+### Never bypass a branch gate
+
+`gh pr merge --admin` merges past branch protection and org rulesets. It is banned in
+this pipeline, in every phase, on every repo. So is any other route to the same outcome:
+editing a ruleset's conditions, adding an actor to a bypass list, or promoting your own
+account to get a merge through.
+
+Why it matters here specifically: a merge queue sweeps many repos at once, and repo
+governance is not uniform. Organisations commonly scope a review gate to a subset of
+repos via a repository custom property, and protect only some branches. The pipeline
+cannot see that policy from the PR alone — but the merge API can, and it enforces it.
+`--admin` throws that enforcement away silently and succeeds, so the violation is only
+discoverable afterwards, from the commit.
+
+Rules:
+
+1. Never pass `--admin` (or `--auto` as a workaround for a refused merge).
+2. Read `baseRefName` in the same step as the merge and refuse any PR whose base is
+   outside the run's declared scope. A default-branch merge and a protected-branch merge
+   are different acts with different approvals.
+3. Treat a refusal as a result, not an obstacle. `mergeStateStatus: BLOCKED` with green
+   checks usually means a required approval or an unresolved review thread. Resolve the
+   findings, request the human reviewer, report the PR as waiting, and move on.
+4. If a merge is genuinely urgent and gated, that is the owner's decision to make, not
+   the pipeline's. Surface it; never route around it.
+
+A merge that landed via bypass cannot be silently undone. Report it immediately, name
+the commit, and say which gate it skipped.
 
 ### Phase 0 (Salvage) Safety Rails
 
 - **NEVER auto-delete a local branch, worktree, or stash** — even if classified `branch-already-merged`. Always surface to the user via `AskUserQuestion`.
 - **NEVER `git stash drop` or `git checkout -- <file>` or `git clean`** in any checkout — uncommitted work is the user's, not the agent's, until they confirm.
 - **NEVER auto-commit ambiguous changes.** If a salvager can't tell whether work is complete, it MUST return `aborted_for_review` and let the user decide.
+- **NEVER commit stale snapshots over integration branch progress.** If integration branch and salvage branch both changed a file since merge-base, stage only provably new hunks (or abort for review).
 - **NEVER share the main checkout between salvager subagents.** Per CLAUDE.md worktree isolation: each agent gets its own `.worktrees/salvage-<branch>` dir. Sharing the main checkout causes branch-switch collisions.
 - **NEVER force-push a branch the salvager didn't originate work on** — salvagers may only push with `--force-with-lease` to branches whose tip they fetched at start of work.
 - **NEVER salvage main/master/dev** — those are integration branches; loose work on them surfaces to the user, never auto-pushed.
@@ -565,3 +611,7 @@ ledger write \
   --title "Merge: <repo>#<number> — <PR title>" \
   --context "merged|skipped: <reason>"
 ```
+
+## Additional resources
+
+CLI detail: `references/cli.md`.

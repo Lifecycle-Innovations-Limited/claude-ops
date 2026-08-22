@@ -11,19 +11,19 @@ Public-repo clean: no host emails, IPs, or personal account lists.
 |--------|------------------------|------------------------|
 | `rotate.mjs` | ~8981 lines | ~5275 lines (after this pass: soft captcha hooks) |
 | Captcha helper stack | Present (full) | **Ported this pass** |
-| CLIProxyAPI/legacy CRS reconcilers / priority | Present (ops + host forks) | Present (portable subset) |
 | Magic-link autoloop + reauth env | Host thicker; plugin has portable `reauth-env.mjs` | Present (PR #723 era) |
 | Production systemd/user units | Still point at **host** path | Templates only (`%h` / `$CLAUDE_PLUGIN_ROOT`) |
 
-**CLIProxyAPI/legacy relay is optional.** Standalone rotate-magic (keychain + `rotate.mjs` /
-`rotate-magic.mjs`) is enough for one or a few accounts. CLIProxyAPI-compatible relay mode is multi-account
-load balancing / rate-limit spreading for a relay pool.
+Standalone rotate-magic (keychain + `rotate.mjs` / `rotate-magic.mjs`) is enough
+for one or a few accounts. To pool several accounts at once, run CLIProxyAPI;
+`rotate.mjs` writes its seat files directly. The relay backend this document
+used to compare against has been removed from the plugin.
 
 ## Line-count delta (key modules)
 
 | File | Host | Plugin (this branch) | Notes |
 |------|------|----------------------|--------|
-| `rotate.mjs` | 8981 | ~5275 | Host has magic-link-auto depth, OAuth harden, CRS sync, vault safety, captcha call sites throughout |
+| `rotate.mjs` | 8981 | ~5275 | Host has magic-link-auto depth, OAuth harden, vault safety, captcha call sites throughout |
 | `captcha-helper.mjs` | 1023 | 1023 | Ported; residualAfterWait + multi-provider |
 | `visual-captcha-solver.mjs` | 496 | ~531 | Ported; portable desktop-act resolve + self-contained Gemini check |
 | `bright-data-cascade.mjs` | 296 | 296 | Ported; env-only zones |
@@ -47,7 +47,7 @@ Minimal set operators still lean on from host for unattended reauth:
 5. `virtual-display.mjs` — headed X seat helpers
 6. `magic-link-cleanup.mjs` — gog trash after reauth
 7. `proxy-helper.mjs` / `oauth-proxy-fetch.mjs` — residential egress helpers
-8. `crs-operator.mjs`, `crs-token-refresher.mjs`, host-only CRS ops scripts
+8. Host-only relay operator scripts (retired along with the relay backend)
 9. One-off captcha debug drivers (`solve-*.mjs`, `click-turnstile*.mjs`, `.tmp-*`) — **not** for port
 10. `refresh-tokens.mjs` — unit `claude-token-refresh.service` still references host
 
@@ -59,7 +59,7 @@ Also host-only (ops noise / personal debug): dozens of `click-*`, `trace-*`,
 - `reauth-env.mjs`, `setup-account.mjs`, `bulk-setup-token.mjs`
 - `provider-env.mjs` / `provider-router.mjs` (multi-provider direction)
 - `vault-linux.mjs`, credit digest / kapture claim helpers
-- `crs-reconciler-state.mjs`, shell wrappers for reconcilers
+- `reconciler-state.mjs`, shell wrappers for reconcilers
 - Public `config.example.json`, launchd templates, install agents
 - `rotate-captcha-soft.mjs`, `ensure-rotate-captcha-hooks.mjs`, `rotate-magic.mjs` ensure-on-start
 
@@ -73,12 +73,7 @@ Do **not** repoint production units in this PR. Observed on a typical box
 | `claude-rotation-daemon.service` | `%h/.claude/scripts/account-rotation/daemon.mjs` |
 | `claude-account-rotation.service` | host `daemon.mjs` + host WorkingDirectory |
 | `claude-token-refresh.service` | host `refresh-tokens.mjs` |
-| `crs-magic-link-autoloop.service` | host `magic-link-autoloop.sh` |
-| `crs-priority.service` | host `crs-priority-daemon.sh` |
-| `crs-token-feed.service` | host `crs-token-feed.sh` |
-| `crs-bedrock-guard.service` | host `crs-bedrock-guard.mjs` |
-| `crs-egress-failover.service` | host `crs-egress-failover.sh` |
-| Drop-ins `20-crs-config.conf` | `CRS_CONFIG=%h/.claude/scripts/account-rotation/config.json` |
+| Retired relay units (`crs-*.service`, `20-crs-config.conf` drop-ins) | host relay scripts; the plugin no longer ships or installs any of them |
 
 Safe later end-state (not this PR): repoint to
 `$CLAUDE_PLUGIN_ROOT/scripts/account-rotation/…` after cascade parity, then
@@ -96,7 +91,7 @@ After this pass, cascade **modules** exist; full host `rotate.mjs` still has:
 6. Residential Chrome / PAC / EFG proxy args for reauth browser
 7. `secrets-bootstrap` before solver use
 8. `virtual-display` ensure for headed seats
-9. Legacy CRS push helpers (`--sync-crs-all` compatibility style)
+9. Relay push helpers (retired; CLIProxyAPI seat files are written inline)
 10. Stricter OAuth callback / credential race handling
 
 ## Minimal port set (standalone plugin rotate-magic)
@@ -115,7 +110,7 @@ After this pass, cascade **modules** exist; full host `rotate.mjs` still has:
   - (keeps after-magic-link verify in `finishMagicLinkLogin`)
 - `rotate-magic.mjs` runs ensure before spawning `rotate.mjs`
 - Thin `rotate-magic.mjs` entry → `rotate.mjs --magic-link`
-- CLIProxyAPI/legacy relay optional UX in `/ops:rotate-setup` and `/ops:rotate` skills
+- Pooling UX in `/ops:rotate-setup` and `/ops:ops-fleet` skills
 - Units: `__tests__/captcha-cascade.test.mjs`, `__tests__/ensure-rotate-captcha-hooks.test.mjs`
 
 **Apply hooks on a checkout**
@@ -134,7 +129,7 @@ node scripts/account-rotation/__tests__/run-captcha-unit-tests.mjs
 - `rotation-safety` / vault harden merge
 - Repoint host systemd → plugin (operator change, not automatic)
 
-## How to run standalone (no CRS)
+## How to run standalone (single seat)
 
 ```bash
 export CLAUDE_PLUGIN_ROOT=/path/to/claude-ops

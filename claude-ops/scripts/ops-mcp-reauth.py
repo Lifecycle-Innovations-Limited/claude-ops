@@ -42,6 +42,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 LOG_PREFIX = "[ops-mcp-reauth]"
 HOME = Path(os.path.expanduser("~"))
@@ -51,6 +52,8 @@ LOG_FILE = STATE_DIR / "run.log"
 
 HEADLESS = os.environ.get("MCP_REAUTH_HEADLESS", "1") == "1"
 TIMEOUT = int(os.environ.get("MCP_REAUTH_TIMEOUT", "90"))
+
+INTERACTIVE_ONLY_OAUTH_HOSTS = {"mcp.carrier.llc", "mcp.esimmcp.com"}
 
 # Regex for the OAuth authorize URL mcp-remote logs
 AUTH_URL_RE = re.compile(r"(https?://[^\s\"'<>]+/authorize\?[^\s\"'<>]+)")
@@ -278,6 +281,10 @@ def main() -> int:
         return 0
 
     url = sys.argv[1]
+    host = (urlparse(url).hostname or "").lower()
+    if host in INTERACTIVE_ONLY_OAUTH_HOSTS:
+        log(f"{host} requires owner-present OAuth; use `claude mcp login carrier`")
+        return 4
     proc, auth_url = spawn_mcp_remote(url)
     try:
         if auth_url is None:

@@ -4,10 +4,10 @@
 
 **Business Operating System for Claude Code**
 
-![Version](https://img.shields.io/badge/version-3.1.2-blue)
+![Version](https://img.shields.io/badge/version-3.6.2-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blueviolet.svg)
-![Skills](https://img.shields.io/badge/skills-62-success)
+![Skills](https://img.shields.io/badge/skills-64-success)
 ![Agents](https://img.shields.io/badge/agents-21-informational)
 ![Integrations](https://img.shields.io/badge/integrations-22-orange)
 ![Auto-fix](https://img.shields.io/badge/v2-auto--fix%20subsystem-ef4444)
@@ -34,6 +34,22 @@
 ```
 
 Turn Claude Code into a complete business operating system — infrastructure health, CI/CD status, unified inbox, open PRs, sprint state, revenue snapshot (Stripe + RevenueCat + AWS), and autonomous C-suite agents that act on your behalf.
+
+---
+
+## What's new in v3.6
+
+**Current: [v3.6.1](https://github.com/Lifecycle-Innovations-Limited/claude-ops/releases/tag/v3.6.1).** One plugin, three harnesses, official skill shape.
+
+| | |
+|---|---|
+| Native Hermes plugin | `hermes-plugin/` → `~/.hermes/plugins/ops`. Slash commands + `skill_view("ops:*")`. |
+| Grok | Loads the Claude plugin as-is. No `.grok-plugin`. |
+| Skills | Third-person trigger descriptions, shared preamble, `ops-rules` (plugin-root `CLAUDE.md` is a pointer). Oversized skills split into `references/`. |
+| Versions | `plugin.json` = Hermes `plugin.yaml` = installer pin. `ops-release` keeps them together. |
+| MCP | Plugin `.mcp.json` is empty. Servers start on demand, not once per session. |
+
+Ports: [`claude-ops/docs/harness-ports.md`](claude-ops/docs/harness-ports.md). Rules: [`skills/ops-rules/SKILL.md`](claude-ops/skills/ops-rules/SKILL.md). Full notes: [`CHANGELOG`](claude-ops/CHANGELOG.md).
 
 ---
 
@@ -94,7 +110,10 @@ Per-repo budget caps (default 3/hour), single-flight locks, and content-hash ded
 ### Cross-CLI install (Claude Code + Codex + Gemini + OpenClaw + Hermes + OpenCode)
 
 ```bash
-npx claude-ops-installer install
+git clone https://github.com/Lifecycle-Innovations-Limited/claude-ops.git
+cd claude-ops/installer
+npm install
+node bin/claude-ops-installer.mjs install
 ```
 
 One command mirrors upstream skills + binstubs into every detected CLI's expected layout from a single central config (`~/.config/claude-ops-installer/config.yaml`). See [`installer/README.md`](./installer/README.md) for the schema, supported agents, and `verify` / `doctor` / `update` / `uninstall` subcommands.
@@ -113,7 +132,7 @@ claude --plugin-dir ./claude-ops/claude-ops
 
 ## Commands
 
-All 62 skills, grouped by category:
+All 64 skills, grouped by category:
 
 | 🧭 Navigation                    | 📊 Daily Ops                           |
 | -------------------------------- | -------------------------------------- |
@@ -271,7 +290,7 @@ claude-ops/                        ← marketplace root (this repo, this README)
     ├── telegram-server/           # bundled MCP server (gram.js)
     ├── templates/                 # Shopify Admin + app scaffolding
     ├── tests/                     # bash validation · test-no-secrets.sh
-    └── .mcp.json                  # MCP server declarations
+    └── .mcp.json                  # empty on purpose — MCP starts on demand, not per session
 ```
 
 ---

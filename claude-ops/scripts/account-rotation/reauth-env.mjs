@@ -2,7 +2,7 @@
  * Portable env builder for unattended re-auth (magic-link-autoloop → rotate.mjs).
  *
  * No host paths, no account emails, no operator names. Everything is driven by
- * process.env (and optional crs.* config keys). Callers merge the returned
+ * process.env (and optional rotation config keys). Callers merge the returned
  * object into child_process.spawn env.
  *
  * See CAPTCHA-CASCADE.md for the captcha stack contract.
@@ -15,7 +15,7 @@ import { homedir } from 'os';
  * Prefer explicit reauth seat vars over the ambient DISPLAY of a headless unit.
  */
 export function resolveReauthDisplay(env = process.env) {
-  return env.CLAUDE_DESKTOP_DISPLAY || env.DESKTOP_ACT_DISPLAY || env.CRS_REAUTH_DISPLAY || env.DISPLAY || ':1';
+  return env.CLAUDE_DESKTOP_DISPLAY || env.DESKTOP_ACT_DISPLAY || env.CLAUDE_REAUTH_DISPLAY || env.DISPLAY || ':1';
 }
 
 /**
@@ -43,23 +43,23 @@ export function resolveReauthPath(env = process.env) {
 /**
  * @param {object} [opts]
  * @param {NodeJS.ProcessEnv} [opts.env]
- * @param {Record<string, unknown>} [opts.crs]  optional loadRotationConfig().crs
+ * @param {Record<string, unknown>} [opts.rotation]  optional rotationSection(loadRotationConfig())
  * @returns {NodeJS.ProcessEnv} env fragment to merge into spawn
  */
 export function buildReauthChildEnv(opts = {}) {
   const env = opts.env || process.env;
-  const crs = opts.crs || {};
+  const cfg = opts.rotation || opts.crs || {};
   const display = resolveReauthDisplay(env);
 
   // Dispatch mode: public plugin default is rotate --setup; forks may set magic-link.
-  const dispatch = env.CRS_MAGIC_LINK_DISPATCH || crs.magicLinkDispatch || 'setup';
+  const dispatch = env.CLAUDE_REAUTH_DISPATCH || env.CRS_MAGIC_LINK_DISPATCH || cfg.magicLinkDispatch || 'setup';
 
-  const headed = env.CLAUDE_ROT_HEADED || (String(crs.magicLinkHeaded ?? '1') === '0' ? '0' : '1');
+  const headed = env.CLAUDE_ROT_HEADED || (String(cfg.magicLinkHeaded ?? '1') === '0' ? '0' : '1');
 
   const fragment = {
     CLAUDE_ROTATION_MAGIC_LINK_AUTO: '1',
     CLAUDE_ROT_STEAL_LOCK: '0',
-    CRS_MAGIC_LINK_DISPATCH: String(dispatch),
+    CLAUDE_REAUTH_DISPATCH: String(dispatch),
 
     // Seat for headed Chrome + desktop-act (must match reauth browser DISPLAY)
     DISPLAY: display,
@@ -75,7 +75,7 @@ export function buildReauthChildEnv(opts = {}) {
     CLAUDE_ROT_DESKTOP_ACT: env.CLAUDE_ROT_DESKTOP_ACT || '1',
     CLAUDE_ROT_VNC_AGENT: env.CLAUDE_ROT_VNC_AGENT || '1',
     CLAUDE_ROT_CAPTCHA_MAX_ATTEMPTS: env.CLAUDE_ROT_CAPTCHA_MAX_ATTEMPTS || '4',
-    CRS_CAPTCHA_BROWSER_WAIT_MS: env.CRS_CAPTCHA_BROWSER_WAIT_MS || '8000',
+    CLAUDE_ROT_CAPTCHA_BROWSER_WAIT_MS: env.CLAUDE_ROT_CAPTCHA_BROWSER_WAIT_MS || '8000',
     // Never leave a one-shot "skip solvers" flag sticky in the reconciler env
     CLAUDE_ROT_SKIP_TOKEN_SOLVERS: env.CLAUDE_ROT_SKIP_TOKEN_SOLVERS || '0',
 
@@ -92,7 +92,7 @@ export function buildReauthChildEnv(opts = {}) {
     'DESKTOP_ACT_MAX_ITERATIONS',
     'CLAUDE_PLUGIN_ROOT',
     'CLAUDE_PLUGIN_DATA_DIR',
-    'CRS_REAUTH_CDP_PORT',
+    'CLAUDE_REAUTH_CDP_PORT',
   ]) {
     if (env[key]) fragment[key] = env[key];
   }
@@ -104,12 +104,9 @@ export function buildReauthChildEnv(opts = {}) {
  * Wall-clock budget for one unattended reauth child.
  * Longer than a pure token refresh: visual + desktop-act layers need room.
  */
-export function resolveReauthTimeoutMs(env = process.env, crs = {}) {
+export function resolveReauthTimeoutMs(env = process.env, cfg = {}) {
   return Number(
-    env.CRS_MAGIC_LINK_ROTATE_TIMEOUT_MS ??
-      env.CRS_MAGIC_LOOP_ROTATE_TIMEOUT_MS ??
-      crs.magicLinkRotateTimeoutMs ??
-      20 * 60_000,
+    env.CLAUDE_REAUTH_TIMEOUT_MS ?? env.CRS_MAGIC_LINK_ROTATE_TIMEOUT_MS ?? cfg.magicLinkRotateTimeoutMs ?? 20 * 60_000,
   );
 }
 

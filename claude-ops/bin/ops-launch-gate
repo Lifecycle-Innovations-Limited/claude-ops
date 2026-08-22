@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ops-launch-gate — Healify marketing launch go/no-go scoreboard
+# ops-launch-gate — marketing launch go/no-go scoreboard
 #
 # Checks distribution, funnel, measurement, and API health for campaign readiness.
 # Exit 0 = all hard gates green; exit 1 = one or more hard gates red.
@@ -9,9 +9,17 @@
 #   ops-launch-gate --json    # machine-readable
 #   ops-launch-gate --quiet   # exit code only
 #
-# Env:
-#   DOPPLER_TOKEN / doppler CLI logged in (healify, healify-api projects)
-#   Optional: PLAY_DWD_SUBJECT (default support@healify.ai)
+# Config — nothing app-specific is baked in; set these in your environment:
+#   OPS_APP_BUNDLE_ID        iOS bundle id and Play package (e.g. com.example.app)
+#   OPS_API_BASE_URL         API origin; health probed at <base>/health
+#   OPS_TRY_URL              funnel redirect URL to probe for a Location header
+#   OPS_LANDING_HOSTS        space-separated landing hosts to probe
+#   OPS_DOPPLER_APP_PROJECT  doppler project holding app/analytics secrets
+#   OPS_DOPPLER_API_PROJECT  doppler project holding API secrets
+#   PLAY_DWD_SUBJECT         Workspace subject for Play domain-wide delegation
+#   DOPPLER_TOKEN / doppler CLI logged in
+#
+# Gates whose config is unset report AMBER rather than failing the run.
 set -euo pipefail
 
 JSON=0
@@ -21,15 +29,22 @@ for arg in "$@"; do
     --json) JSON=1 ;;
     --quiet) QUIET=1 ;;
     -h|--help)
-      sed -n '2,20p' "$0"
+      sed -n '2,22p' "$0"
       exit 0
       ;;
   esac
 done
 
-PLAY_SUBJECT="${PLAY_DWD_SUBJECT:-support@healify.ai}"
-PACKAGE="${PLAY_PACKAGE:-com.healify.healify}"
-IOS_BUNDLE="${IOS_BUNDLE:-com.healify.healify}"
+PLAY_SUBJECT="${PLAY_DWD_SUBJECT:-}"
+PACKAGE="${PLAY_PACKAGE:-${OPS_APP_BUNDLE_ID:-}}"
+IOS_BUNDLE="${IOS_BUNDLE:-${OPS_APP_BUNDLE_ID:-}}"
+API_BASE="${OPS_API_BASE_URL:-}"
+API_BASE="${API_BASE%/}"
+TRY_URL="${OPS_TRY_URL:-}"
+LANDING_HOSTS="${OPS_LANDING_HOSTS:-}"
+DOPPLER_APP_PROJECT="${OPS_DOPPLER_APP_PROJECT:-}"
+DOPPLER_API_PROJECT="${OPS_DOPPLER_API_PROJECT:-}"
+export PLAY_SUBJECT PACKAGE DOPPLER_APP_PROJECT
 HARD_FAIL=0
 
 green() { printf 'GREEN'; }
@@ -65,7 +80,12 @@ add_row() {
 }
 
 # ── G1 iOS public ───────────────────────────────────────────────────────────
-ios_json=$(curl -gsS --max-time 12 "https://itunes.apple.com/lookup?bundleId=${IOS_BUNDLE}&country=us" 2>/dev/null || echo '{}')
+if [[ -z "$IOS_BUNDLE" ]]; then
+  add_row "G1_iOS_public" "AMBER" "OPS_APP_BUNDLE_ID unset"
+  ios_json='{}'
+else
+  ios_json=$(curl -gsS --max-time 12 "https://itunes.apple.com/lookup?bundleId=${IOS_BUNDLE}&country=us" 2>/dev/null || echo '{}')
+fi
 ios_ver=$(printf '%s' "$ios_json" | python3 -c 'import sys,json
 try:
  d=json.load(sys.stdin); r=d.get("results") or []
@@ -78,17 +98,21 @@ try:
 except: print("")' 2>/dev/null || true)
 if [[ -n "$ios_ver" ]]; then
   add_row "G1_iOS_public" "GREEN" "live ${ios_ver} released ${ios_date}"
-else
+elif [[ -n "$IOS_BUNDLE" ]]; then
   add_row "G1_iOS_public" "RED" "iTunes lookup empty for ${IOS_BUNDLE}"
 fi
 
 # ── G2 Play public URL ──────────────────────────────────────────────────────
-play_http=$(curl -gsS -o /dev/null -w '%{http_code}' --max-time 12 \
-  -A 'Mozilla/5.0' "https://play.google.com/store/apps/details?id=${PACKAGE}" 2>/dev/null || echo '000')
-if [[ "$play_http" == "200" ]]; then
-  add_row "G2_Play_public" "GREEN" "store page HTTP 200"
+if [[ -z "$PACKAGE" ]]; then
+  add_row "G2_Play_public" "AMBER" "OPS_APP_BUNDLE_ID unset"
 else
-  add_row "G2_Play_public" "RED" "store page HTTP ${play_http} (need Console first-publish visibility)"
+  play_http=$(curl -gsS -o /dev/null -w '%{http_code}' --max-time 12 \
+    -A 'Mozilla/5.0' "https://play.google.com/store/apps/details?id=${PACKAGE}" 2>/dev/null || echo '000')
+  if [[ "$play_http" == "200" ]]; then
+    add_row "G2_Play_public" "GREEN" "store page HTTP 200"
+  else
+    add_row "G2_Play_public" "RED" "store page HTTP ${play_http} (need Console first-publish visibility)"
+  fi
 fi
 
 # ── G2b Play tracks (DWD) ───────────────────────────────────────────────────
@@ -98,7 +122,14 @@ from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
-def doppler(key, project="healify", config="prd"):
+PROJECT = os.environ.get("DOPPLER_APP_PROJECT", "")
+SUBJECT = os.environ.get("PLAY_SUBJECT", "")
+PKG = os.environ.get("PACKAGE", "")
+if not PROJECT or not SUBJECT or not PKG:
+    print("NO_CONFIG"); raise SystemExit(0)
+
+
+def doppler(key, project=PROJECT, config="prd"):
     r = subprocess.run(
         ["doppler", "secrets", "get", key, "--project", project, "--config", config, "--plain"],
         capture_output=True, text=True,
@@ -109,13 +140,12 @@ raw = doppler("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON") or doppler("PLAY_STORE_SERVICE
 if not raw:
     print("NO_SECRET"); raise SystemExit(0)
 sa = json.loads(raw)
-subject = os.environ.get("PLAY_DWD_SUBJECT", "support@healify.ai")
 creds = service_account.Credentials.from_service_account_info(
-    sa, scopes=["https://www.googleapis.com/auth/androidpublisher"], subject=subject
+    sa, scopes=["https://www.googleapis.com/auth/androidpublisher"], subject=SUBJECT
 )
 creds.refresh(Request())
 svc = build("androidpublisher", "v3", credentials=creds, cache_discovery=False)
-pkg = os.environ.get("PLAY_PACKAGE", "com.healify.healify")
+pkg = PKG
 edit = svc.edits().insert(packageName=pkg).execute()
 tracks = svc.edits().tracks().list(packageName=pkg, editId=edit["id"]).execute()
 parts = []
@@ -126,7 +156,9 @@ svc.edits().delete(packageName=pkg, editId=edit["id"]).execute()
 print("; ".join(parts) if parts else "NO_TRACKS")
 PY
 )
-if [[ "$play_tracks" == "NO_SECRET" || -z "$play_tracks" ]]; then
+if [[ "$play_tracks" == "NO_CONFIG" ]]; then
+  add_row "G2b_Play_tracks" "AMBER" "set OPS_DOPPLER_APP_PROJECT, PLAY_DWD_SUBJECT, OPS_APP_BUNDLE_ID"
+elif [[ "$play_tracks" == "NO_SECRET" || -z "$play_tracks" ]]; then
   add_row "G2b_Play_tracks" "AMBER" "could not read tracks (doppler/DWD)"
 elif [[ "$play_tracks" == *"production=completed"* ]]; then
   add_row "G2b_Play_tracks" "GREEN" "$play_tracks"
@@ -135,11 +167,14 @@ else
 fi
 
 # ── G3 Attribution ──────────────────────────────────────────────────────────
-attr_secret=$(doppler secrets get ATTRIBUTION_INGEST_SECRET --project healify-api --config prd --plain 2>/dev/null || true)
+attr_secret=""
+if [[ -n "$DOPPLER_API_PROJECT" ]]; then
+  attr_secret=$(doppler secrets get ATTRIBUTION_INGEST_SECRET --project "$DOPPLER_API_PROJECT" --config prd --plain 2>/dev/null || true)
+fi
 token="launch-gate-$(date +%s)"
-if [[ -n "$attr_secret" ]]; then
+if [[ -n "$attr_secret" && -n "$API_BASE" ]]; then
   attr_code=$(curl -gsS -o /dev/null -w '%{http_code}' --max-time 12 \
-    -X POST 'https://ai.healify.ai/api/analytics/attribution/click' \
+    -X POST "${API_BASE}/api/analytics/attribution/click" \
     -H 'Content-Type: application/json' \
     -H "X-Attribution-Secret: ${attr_secret}" \
     -d "{\"clickToken\":\"${token}\",\"utm\":{\"utm_source\":\"launch_gate\",\"utm_medium\":\"qa\",\"utm_campaign\":\"scoreboard\"},\"destination\":\"app_store\",\"clickedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\"}" \
@@ -147,34 +182,46 @@ if [[ -n "$attr_secret" ]]; then
 else
   attr_code='NOSEC'
 fi
-tf_loc=$(curl -gsS -D - -o /dev/null --max-time 12 \
-  'https://try.healify.ai/get?channel=waitlist&utm_source=launch_gate' 2>/dev/null \
-  | awk 'tolower($1)=="location:"{print $2}' | tr -d '\r' | head -1)
+tf_loc=""
+if [[ -n "$TRY_URL" ]]; then
+  tf_loc=$(curl -gsS -D - -o /dev/null --max-time 12 \
+    "$TRY_URL" 2>/dev/null \
+    | awk 'tolower($1)=="location:"{print $2}' | tr -d '\r' | head -1)
+fi
 if [[ "$attr_code" == "201" || "$attr_code" == "200" ]] && [[ -n "$tf_loc" ]]; then
-  add_row "G3_attribution" "GREEN" "click HTTP ${attr_code}; /get → ${tf_loc}"
+  add_row "G3_attribution" "GREEN" "click HTTP ${attr_code}; redirect → ${tf_loc}"
 elif [[ "$attr_code" == "201" || "$attr_code" == "200" ]]; then
-  add_row "G3_attribution" "AMBER" "click HTTP ${attr_code}; /get location missing"
+  add_row "G3_attribution" "AMBER" "click HTTP ${attr_code}; redirect location missing"
+elif [[ -z "$API_BASE" || -z "$DOPPLER_API_PROJECT" ]]; then
+  add_row "G3_attribution" "AMBER" "set OPS_API_BASE_URL, OPS_DOPPLER_API_PROJECT, OPS_TRY_URL"
 else
-  add_row "G3_attribution" "RED" "click HTTP ${attr_code}; /get=${tf_loc:-none}"
+  add_row "G3_attribution" "RED" "click HTTP ${attr_code}; redirect=${tf_loc:-none}"
 fi
 
 # ── G4 API health ───────────────────────────────────────────────────────────
-api_health=$(curl -gsS --max-time 12 'https://ai.healify.ai/health' 2>/dev/null || echo '{}')
-api_ok=$(printf '%s' "$api_health" | python3 -c 'import sys,json
+if [[ -z "$API_BASE" ]]; then
+  add_row "G4_api_health" "AMBER" "OPS_API_BASE_URL unset"
+else
+  api_health=$(curl -gsS --max-time 12 "${API_BASE}/health" 2>/dev/null || echo '{}')
+  api_ok=$(printf '%s' "$api_health" | python3 -c 'import sys,json
 try:
  d=json.load(sys.stdin); print("ok" if d.get("status")=="ok" or d.get("overall")=="healthy" else "bad")
 except: print("bad")' 2>/dev/null || echo bad)
-if [[ "$api_ok" == "ok" ]]; then
-  add_row "G4_api_health" "GREEN" "ai.healify.ai healthy"
-else
-  add_row "G4_api_health" "RED" "ai.healify.ai unhealthy"
+  if [[ "$api_ok" == "ok" ]]; then
+    add_row "G4_api_health" "GREEN" "${API_BASE} healthy"
+  else
+    add_row "G4_api_health" "RED" "${API_BASE} unhealthy"
+  fi
 fi
 
 # ── G5 Amplitude ────────────────────────────────────────────────────────────
 amp=$(python3 - <<'PY' 2>/dev/null || echo FAIL
-import subprocess, base64, urllib.request
+import os, subprocess, base64, urllib.request
+PROJECT=os.environ.get("DOPPLER_APP_PROJECT","")
+if not PROJECT:
+    print("NO_CONFIG"); raise SystemExit(0)
 def g(k):
-    r=subprocess.run(["doppler","secrets","get",k,"--project","healify","--config","prd","--plain"],capture_output=True,text=True)
+    r=subprocess.run(["doppler","secrets","get",k,"--project",PROJECT,"--config","prd","--plain"],capture_output=True,text=True)
     return r.stdout.strip() if r.returncode==0 else ""
 api,sec=g("AMPLITUDE_API_KEY"),g("AMPLITUDE_SECRET_KEY")
 if not api or not sec:
@@ -190,19 +237,27 @@ PY
 )
 if [[ "$amp" == "200" ]]; then
   add_row "G5_amplitude" "GREEN" "EU taxonomy 200"
+elif [[ "$amp" == "NO_CONFIG" ]]; then
+  add_row "G5_amplitude" "AMBER" "OPS_DOPPLER_APP_PROJECT unset"
+elif [[ "$amp" == "NO_SECRET" ]]; then
+  add_row "G5_amplitude" "AMBER" "amplitude keys not in doppler"
 else
   add_row "G5_amplitude" "RED" "EU taxonomy ${amp}"
 fi
 
 # ── G6 Landing ──────────────────────────────────────────────────────────────
-for host in try.healify.ai healify.ai; do
-  code=$(curl -gsS -o /dev/null -w '%{http_code}' --max-time 12 -A 'Mozilla/5.0' "https://${host}/" 2>/dev/null || echo '000')
-  if [[ "$code" == "200" ]]; then
-    add_row "G6_landing_${host//./_}" "GREEN" "HTTP 200"
-  else
-    add_row "G6_landing_${host//./_}" "AMBER" "HTTP ${code}"
-  fi
-done
+if [[ -z "$LANDING_HOSTS" ]]; then
+  add_row "G6_landing" "AMBER" "OPS_LANDING_HOSTS unset"
+else
+  for host in $LANDING_HOSTS; do
+    code=$(curl -gsS -o /dev/null -w '%{http_code}' --max-time 12 -A 'Mozilla/5.0' "https://${host}/" 2>/dev/null || echo '000')
+    if [[ "$code" == "200" ]]; then
+      add_row "G6_landing_${host//./_}" "GREEN" "HTTP 200"
+    else
+      add_row "G6_landing_${host//./_}" "AMBER" "HTTP ${code}"
+    fi
+  done
+fi
 
 # ── Campaign rule summary ───────────────────────────────────────────────────
 if [[ "$JSON" == 1 ]]; then

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * seat-state.mjs — local multi-provider seat state (no CRS required).
+ * seat-state.mjs — local multi-provider seat state.
  *
  * File-backed store used by ops-accounts policy when backend=local.
- * Schema is provider-agnostic; Claude CRS daemons can dual-write later.
+ * Schema is provider-agnostic; other backends can dual-write into it.
  *
  * Usage:
  *   node seat-state.mjs status
@@ -149,7 +149,6 @@ switch (cmd) {
   case 'import-claude-config': {
     // Best-effort: seed emails from rotation config (no tokens)
     const candidates = [
-      process.env.CRS_CONFIG,
       join(DATA, 'account-rotation', 'config.json'),
       join(homedir(), '.claude', 'plugins', 'data', 'ops', 'account-rotation', 'config.json'),
     ].filter(Boolean);

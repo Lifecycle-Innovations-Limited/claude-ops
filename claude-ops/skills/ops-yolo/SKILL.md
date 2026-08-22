@@ -1,6 +1,6 @@
 ---
 name: ops-yolo
-description: YOLO mode. Spawns 4 parallel C-suite agents (CEO, CTO, CFO, COO). Each analyzes the business from their perspective using ALL available data. Produces unfiltered Hard Truths report. After user types YOLO, autonomously runs the business for a day using /loop.
+description: "This skill should be used when the user asks to \"yolo mode\", \"run the business today\", or \"/ops:ops-yolo\". YOLO mode. Spawns 4 parallel C-suite agents (CEO, CTO, CFO, COO). Each analyzes the business from their perspective using ALL available data. Produces unfiltered Hard Truths report. After user types YOLO, autonomously runs the business for a day using /loop."
 argument-hint: '[YOLO|analyze|report]'
 allowed-tools:
   - Bash
@@ -30,6 +30,8 @@ allowed-tools:
 effort: high
 model: claude-opus-4-6
 maxTurns: 50
+disable-model-invocation: true
+context: fork
 ---
 
 ## Runtime Context
@@ -43,26 +45,7 @@ Before YOLO analysis, load:
 
 # OPS ► YOLO MODE
 
-## CLI/API Reference
-
-### aws CLI (Cost Explorer)
-
-**Doctrine:** burn = `RECORD_TYPE=Usage` only. Plain UnblendedCost totals are credit-masked (~$0) and MUST NOT be used as spend.
-
-| Command | Usage | Output |
-| ------- | ----- | ------ |
-| `${CLAUDE_PLUGIN_ROOT}/scripts/aws-usage-cost.sh snapshot` | MTD Usage burn + 7d daily + top services + credit mask | JSON |
-| `aws ce … --filter '{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'` | Raw Usage-only fallback | Cost JSON |
-
-### gh CLI (GitHub)
-
-| Command                                                                                                 | Usage                | Output       |
-| ------------------------------------------------------------------------------------------------------- | -------------------- | ------------ |
-| `gh pr list --repo <owner/repo> --json number,title,statusCheckRollup,reviewDecision,mergeable,isDraft` | Open PRs with status | JSON array   |
-| `gh pr merge <n> --repo <repo> --squash --admin`                                                        | Squash merge PR      | Merge result |
-| `gh run list --limit 20 --json status,conclusion,name,headBranch,createdAt`                             | Recent CI runs       | JSON array   |
-
----
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Agent Teams support
 
@@ -410,3 +393,7 @@ ledger write \
   --title "YOLO session ${SESSION_TS}" \
   --context "N fires fixed, N PRs merged, N deploys triggered"
 ```
+
+## Additional resources
+
+CLI detail: `references/cli.md`.

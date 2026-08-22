@@ -113,18 +113,18 @@ const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const ACTIVE_KEYCHAIN_ACCOUNT = 'unknown';
 const VAULT_KEYCHAIN_ACCOUNT = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
 
-// When Sam's canonical CLIProxyAPI checkout exists, browser reauth should write
+// When a canonical CLIProxyAPI checkout exists, browser reauth should write
 // there directly. CLIProxyAPI owns the per-seat JSON schema and is the sole
 // refresh writer; translating Claude Code's keychain after OAuth creates a
 // second credential plane and was the source of "OAuth succeeded / rotation
-// unverified" failures. All paths remain configurable for other installations.
-const CLIPROXYAPI_DIR = process.env.CLIPROXYAPI_DIR || join(homedir(), 'Developer', 'active', 'cliproxyapi');
+// unverified" failures. Set CLIPROXYAPI_DIR to point at your own checkout.
+const CLIPROXYAPI_DIR = process.env.CLIPROXYAPI_DIR || join(homedir(), 'cliproxyapi');
 const CLIPROXYAPI_BINARY = process.env.CLIPROXYAPI_BINARY || join(CLIPROXYAPI_DIR, 'cli-proxy-api');
 const CLIPROXYAPI_CONFIG = process.env.CLIPROXYAPI_CONFIG || join(CLIPROXYAPI_DIR, 'config', 'config.yaml');
 const CLIPROXYAPI_AUTH_DIR =
   process.env.CLIPROXYAPI_AUTH_DIR || process.env.CLIPROXY_AUTH_DIR || join(CLIPROXYAPI_DIR, 'auths');
 const CLIPROXY_REPLICA_SYNC =
-  process.env.CLIPROXY_REPLICA_SYNC || join(homedir(), '.local', 'bin', 'crsproxy-replica-sync.py');
+  process.env.CLIPROXY_REPLICA_SYNC || join(homedir(), '.local', 'bin', 'cliproxy-replica-sync.py');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -850,17 +850,17 @@ function stopClaudeDaemon() {
 // one with `source ~/.claude/scripts/account-rotation/use-bedrock.sh`.
 async function activateBedrockFallback(reason, dryRun = false) {
   // Kill-switch — mirror daemon.mjs activateBedrockFallbackFromDaemon (disabled
-  // 2026-05-08, Max/CRS plan handles capacity; Bedrock is metered AWS = $600-1.2k/mo
+  // 2026-05-08, the Max plan handles capacity; Bedrock is metered AWS = $600-1.2k/mo
   // bleed). BLOCKED by default; set CLAUDE_DISABLE_BEDROCK_FALLBACK=0 to re-enable.
   // Authoritative here regardless of caller so the rotate path can never silently
-  // flip a CRS/Max-routed box onto metered Bedrock (the bedrockOnExhausted opt
+  // flip a Max-routed box onto metered Bedrock (the bedrockOnExhausted opt
   // defaults ON, unlike the daemon — this is the backstop).
   if (process.env.CLAUDE_DISABLE_BEDROCK_FALLBACK !== '0') {
     log(`[bedrock-fallback] BLOCKED by CLAUDE_DISABLE_BEDROCK_FALLBACK (reason was: ${reason})`);
     if (!dryRun) {
       notify(
         'Bedrock Fallback BLOCKED',
-        'Kill-switch active — Max/CRS-only mode. Wait for reset window or rotate manually.',
+        'Kill-switch active — Max-only mode. Wait for reset window or rotate manually.',
       );
     }
     return false;
@@ -1501,7 +1501,9 @@ function readLatestSMSCode({ maxAgeSec = 300 } = {}) {
     // Apple timestamp = seconds since 2001-01-01, stored as nanoseconds
     const cutoffAppleNs = (Math.floor(Date.now() / 1000) - 978307200 - maxAgeSec) * 1_000_000_000;
     const sql = `SELECT hex(attributedBody), text FROM message WHERE date > ${cutoffAppleNs} AND service IN ('SMS','iMessage') ORDER BY date DESC LIMIT 10;`;
-    const rows = execSync(`sqlite3 "${db}" "${sql}"`, { timeout: 5000 }).toString().split('\n').filter(Boolean);
+    // $HOME feeds `db`, so the old shell string let the environment inject sqlite3 args
+    // or shell syntax. execFileSync passes both as argv entries instead.
+    const rows = execFileSync('sqlite3', [db, sql], { timeout: 5000, encoding: 'utf8' }).split('\n').filter(Boolean);
     for (const row of rows) {
       const [hex, text] = row.split('|');
       // Plain text column (older macOS)

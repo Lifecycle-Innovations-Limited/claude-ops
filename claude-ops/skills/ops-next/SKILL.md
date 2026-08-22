@@ -1,6 +1,6 @@
 ---
 name: ops-next
-description: Business-level "what should I do next". Priority stack — fires > competitor alerts > unread comms > ready-to-merge PRs > Linear sprint > revenue-generating GSD work. Uses pre-gathered data and routes to the right skill.
+description: "This skill should be used when the user asks to \"what should I do next\", \"priority stack\", or \"/ops:ops-next\". Business-level \"what should I do next\". Priority stack — fires > competitor alerts > unread comms > ready-to-merge PRs > Linear sprint > revenue-generating GSD work. Uses pre-gathered data and routes to the right skill."
 argument-hint: '[context]'
 allowed-tools:
   - Bash
@@ -31,6 +31,8 @@ Before advising, load:
 4. **Home automation**: If `home_automation` is configured in `$PREFS_PATH`, probe Homey via `/ops:ops-home status` for active alarms before composing the priority stack.
 
 # OPS ► NEXT ACTION
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## CLI/API Reference
 

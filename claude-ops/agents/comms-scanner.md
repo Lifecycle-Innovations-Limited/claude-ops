@@ -25,6 +25,10 @@ Run all channel scans in parallel:
 
 ```bash
 # WhatsApp — ALL non-archived chats (not just unread)
+# SERVER NAME: mcp__whatsapp__* is the single-account default. One bridge per account means one
+# server per account (whatsapp-personal, whatsapp-work, ...) and no plain mcp__whatsapp__*.
+# Resolve the real name from the available tools, scan every account, and label each result with
+# the account it came from. Pair each with its own WHATSAPP_BRIDGE_DB below. See CLAUDE.md Rule 8.
 # Step 1: list chats — the response includes last_is_from_me (int 0/1) and last_message_time (RFC3339+TZ string)
 mcp__whatsapp__list_chats sort_by=last_active
 

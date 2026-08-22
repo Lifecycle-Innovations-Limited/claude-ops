@@ -1,12 +1,14 @@
 ---
 name: ops-resume
-description: Reopen recently-closed Claude Code sessions, one per Ghostty tab. Finds recent session transcripts in ~/.claude/projects and resumes each in its own new tab via `claude --resume`, from the directory it was running in. macOS + Ghostty only.
+description: "This skill should be used when the user asks to \"resume sessions\", \"reopen ghostty tabs\", or \"/ops:ops-resume\". Reopen recently-closed Claude Code sessions, one per Ghostty tab. Finds recent session transcripts in ~/.claude/projects and resumes each in its own new tab via `claude --resume`, from the directory it was running in. macOS + Ghostty only."
 argument-hint: '[-m minutes | -H hours | -n max | --here | --dry-run]'
 allowed-tools:
   - Bash
 ---
 
 # ops-resume
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Reopen recently-closed Claude Code sessions — **one session per Ghostty tab**.
 

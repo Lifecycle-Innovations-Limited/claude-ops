@@ -47,7 +47,6 @@ const denied = spawnSync(process.execPath, [join(root, 'scripts/account-rotation
     PATH: `${bin}:${process.env.PATH}`,
     CLAUDE_ROTATOR_CONFIG: config,
     CLAUDE_ROTATION_FILE_VAULT: vault,
-    CLAUDE_ROTATION_SKIP_CRS_SYNC: '1',
   },
 });
 assert.equal(denied.status, 0, denied.stderr);
@@ -73,3 +72,6 @@ for (const authArg of ['--setup', '--magic-link']) {
 
 console.log('CLIProxy direct-writer policy tests: PASS');
 NODE
+
+node "$ROOT/scripts/account-rotation/__tests__/cliproxy-heal-policy.test.mjs"
+node "$ROOT/scripts/account-rotation/__tests__/cliproxy-isolate-compat.test.mjs"

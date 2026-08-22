@@ -1,14 +1,17 @@
 ---
 name: ops-rotate-setup
-description: Fail-closed legacy Claude setup alias that directs operators to separately approved staged enrollment.
+description: "This skill should be used when the user asks to \"rotate setup\", \"enroll Claude seat\", or \"/ops:ops-rotate-setup\". Fail-closed legacy Claude setup alias that directs operators to separately approved staged enrollment."
 argument-hint: ''
 allowed-tools:
   - Read
 effort: low
 maxTurns: 5
+disable-model-invocation: true
 ---
 
 # Claude enrollment handoff
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Direct Claude browser, OAuth, magic-link, setup, and unattended authentication
 are disabled. Do not launch a browser, poll email, invoke `rotate.mjs --setup`,

@@ -1,6 +1,6 @@
 ---
 name: ops-go
-description: Token-efficient morning briefing. Pre-gathers all data via shell scripts, then presents a unified business dashboard with prioritized actions.
+description: "This skill should be used when the user asks to \"morning briefing\", \"/ops:ops-go\", or \"what should I do today\". Token-efficient morning briefing. Pre-gathers all data via shell scripts, then presents a unified business dashboard with prioritized actions."
 argument-hint: '[project-alias]'
 allowed-tools:
   - Bash
@@ -30,6 +30,8 @@ maxTurns: 40
 ---
 
 # OPS ► MORNING BRIEFING
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Runtime Context
 

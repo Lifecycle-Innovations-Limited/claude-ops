@@ -44,7 +44,7 @@ Example usage in a skill:
 MEMORIES="${HOME}/.claude/plugins/data/ops-ops-marketplace/memories"
 
 # Load contact profile
-CONTACT_FILE=$(ls "${MEMORIES}/contact_"*deeksha* 2>/dev/null | head -1)
+CONTACT_FILE=$(ls "${MEMORIES}/contact_"*jane-doe* 2>/dev/null | head -1)
 [[ -f "${CONTACT_FILE}" ]] && cat "${CONTACT_FILE}"
 
 # Load user preferences

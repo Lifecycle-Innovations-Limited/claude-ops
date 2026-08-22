@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Approve outbound messages. The owner types `! ok` inside the CLI, which runs this in
+# their own shell, outside the agent's reach.
+#
+#   ok           1 message,   2 minute window
+#   ok 3         3 messages, 15 minute window
+#   ok all       10 messages, 15 minute window   (also: ok these)
+#
+# There is one approval store: /tmp/.claude-outbound-guard.json, managed by
+# outbound_guard.py and read by every CLI that goes through the MCP proxy. Each guard
+# used to keep its own file, so this script had to write two and the counts drifted.
+#
+# One message costs exactly one unit even when it crosses several guards: it is
+# identified by recipient plus content, and a guard that sees a fingerprint another
+# guard already charged lets it through for free.
+#
+# A counter never replaces per-draft approval. The agent still shows every draft and
+# waits for a yes. This only saves retyping the approval for each message.
+set -euo pipefail
+
+# The counter lives next to this script so it works wherever the plugin is installed.
+# OUTBOUND_GUARD_PY overrides that for installs that split the files up.
+GUARD="${OUTBOUND_GUARD_PY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/outbound_guard.py}"
+LEGACY_SINGLE=/tmp/.claude-send-ok
+LEGACY_BATCH=/tmp/.claude-send-ok-all
+AUDIT="${OUTBOUND_OK_AUDIT:-$HOME/.claude/state/ok-token-audit.log}"
+MAXN=10
+
+arg="${1:-1}"
+case "$arg" in
+  all|these) n=$MAXN ;;
+  ''|*[!0-9]*) echo "usage: ok [N|all]" >&2; exit 2 ;;
+  *) n="$arg" ;;
+esac
+[ "$n" -lt 1 ] && n=1
+if [ "$n" -gt "$MAXN" ]; then
+  echo "capped at $MAXN per approval, reduced from $n." >&2
+  n=$MAXN
+fi
+
+if [ "$n" -eq 1 ]; then ttl=120; window="2 min"; else ttl=900; window="15 min"; fi
+
+python3 "$GUARD" mint "$n" "$ttl" >/dev/null
+
+# Fallback for guards that have not been migrated yet. The canonical state wins; these
+# exist only so an older code path does not suddenly block everything.
+: >"$LEGACY_SINGLE"
+printf '%s' "$n" >"$LEGACY_BATCH"
+chmod 600 "$LEGACY_SINGLE" "$LEGACY_BATCH"
+
+mkdir -p "$(dirname "$AUDIT")"
+printf '%s armed=%s window=%s ppid=%s tty=%s\n' \
+  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$n" "$window" "$PPID" "$(tty 2>/dev/null || echo none)" >>"$AUDIT"
+
+if [ "$n" -eq 1 ]; then
+  echo "outbound approval armed for ONE send. Window: $window."
+else
+  echo "outbound approval armed for $n sends. Window: $window."
+  echo "Every draft is still shown to you individually before it goes."
+fi

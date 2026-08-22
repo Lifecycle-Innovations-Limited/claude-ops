@@ -1,14 +1,17 @@
 ---
 name: ops-ship
-description: One-command full release chain for the claude-ops ("ops") plugin — sweep and admin-merge every open PR, then publish a new version (bump plugin.json + marketplace.json registry + package.json + CHANGELOG, open release PR, admin-merge, tag), then pull it onto the box. Use when you have one or more merged-ready PRs and want to ship a new published version in a single step instead of merging PRs by hand and then releasing. Combines the PR sweep + /ops:ops-release + /ops:ops-update.
+description: "This skill should be used when the user asks to \"ship ops plugin\", \"merge all PRs and release\", or \"/ops:ops-ship\". One-command full release chain for the claude-ops (\"ops\") plugin — sweep and admin-merge every open PR, then publish a new version (bump plugin.json + marketplace.json registry + package.json + CHANGELOG, open release PR, admin-merge, tag), then pull it onto the box. Use when you have one or more merged-ready PRs and want to ship a new published version in a single step instead of merging PRs by hand and then releasing. Combines the PR sweep + /ops:ops-release + /ops:ops-update."
 argument-hint: '[--type patch|minor|major] [--version X.Y.Z] [--notes "changelog body"] [--base BRANCH] [--no-update] [--dry-run]'
 allowed-tools:
   - Bash
   - Read
   - AskUserQuestion
+disable-model-invocation: true
 ---
 
 # OPS ► SHIP — merge-all-PRs → release → update, in one command
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 The whole release chain in a single shot:
 

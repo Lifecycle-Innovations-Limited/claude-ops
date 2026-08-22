@@ -17,18 +17,19 @@ export const DEFAULT_CONFIG = {
   source: {
     type: "git",
     url: "https://github.com/Lifecycle-Innovations-Limited/claude-ops.git",
-    ref: "v2.43.0",
+    ref: "v3.6.2",
   },
   agents: {
     claude: { enabled: true, type: "marketplace" },
     codex: { enabled: true, type: "flat", path: "~/.codex/skills" },
-    gemini: { enabled: false, type: "flat", path: "~/.gemini/skills" },
+    gemini: { enabled: true, type: "flat", path: "~/.gemini/skills" },
     openclaw: { enabled: true, type: "flat", path: "~/.openclaw/skills" },
     hermes: {
       enabled: true,
       type: "hybrid",
       flat: "~/.hermes/skills",
       nested: "~/.hermes/skills/ops",
+      plugin: "~/.hermes/plugins/ops",
     },
     opencode: {
       enabled: false,
@@ -85,6 +86,7 @@ export function loadConfig(overridePath) {
     if (a.path) a.path = expandHome(a.path);
     if (a.flat) a.flat = expandHome(a.flat);
     if (a.nested) a.nested = expandHome(a.nested);
+    if (a.plugin) a.plugin = expandHome(a.plugin);
   }
   if (cfg.bin && cfg.bin.path) cfg.bin.path = expandHome(cfg.bin.path);
   return cfg;

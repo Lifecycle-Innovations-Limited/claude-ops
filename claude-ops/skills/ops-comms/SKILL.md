@@ -1,6 +1,6 @@
 ---
 name: ops-comms
-description: Send and read messages across all channels. Routes based on arguments — whatsapp, email, slack, telegram, discord, notion, or natural language like "send [msg] to [contact]". WhatsApp via mcp__whatsapp__* (Baileys bridge).
+description: "This skill should be used when the user asks to \"send a message\", \"whatsapp/email/slack\", or \"/ops:ops-comms\". Send and read messages across all channels. Routes based on arguments — whatsapp, email, slack, telegram, discord, notion, or natural language like \"send [msg] to [contact]\". WhatsApp via mcp__whatsapp__* (Baileys bridge)."
 argument-hint: '[channel] | send [message] to [contact] | read [channel] | notion [search query]'
 allowed-tools:
   - Bash
@@ -27,9 +27,12 @@ allowed-tools:
   - mcp__claude_ai_Notion__notion-create-pages
 effort: medium
 maxTurns: 40
+context: fork
 ---
 
 # OPS ► COMMS
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Runtime Context
 
@@ -45,43 +48,6 @@ Before executing, load available context:
    - `donts.md` — restrictions that must not appear in any draft
 
 3. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` for `default_channels` to determine which channel to prefer when multiple are available for a contact.
-
-## CLI/API Reference
-
-### whatsapp-bridge (WhatsApp — mcp**whatsapp**\*)
-
-**Bridge health** — check bridge is running before any WhatsApp operation:
-
-```bash
-lsof -i :8080 | grep LISTEN
-launchctl list com.${USER}.whatsapp-bridge
-```
-
-If not running: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`
-
-| Tool                                 | Params                     | Output                                                        |
-| ------------------------------------ | -------------------------- | ------------------------------------------------------------- |
-| `mcp__whatsapp__list_chats`          | `{sort_by: "last_active"}` | Array of chats with jid, name, last_message_time              |
-| `mcp__whatsapp__list_messages`       | `{chat_jid, limit, query}` | Array of messages with is_from_me, content, timestamp, sender |
-| `mcp__whatsapp__search_contacts`     | `{query}`                  | Contacts matching name or phone                               |
-| `mcp__whatsapp__send_message`        | `{recipient, message}`     | Send result                                                   |
-| `mcp__whatsapp__get_chat`            | `{chat_jid}`               | Chat metadata                                                 |
-| `mcp__whatsapp__get_message_context` | `{chat_jid, message_id}`   | Message context window                                        |
-
-### gog CLI (Gmail/Calendar)
-
-| Command                                                                            | Usage                             | Output                |
-| ---------------------------------------------------------------------------------- | --------------------------------- | --------------------- |
-| `gog gmail search "in:inbox" --max 50 -j --results-only --no-input`                | Search inbox                      | JSON array of threads |
-| `gog gmail thread get <threadId> -j`                                               | Get full thread with all messages | Full message JSON     |
-| `gog gmail send --to "user@example.com" --subject "subj" --body "text"`            | Send new email                    | Send result           |
-| `gog gmail send --reply-to-message-id <msgId> --reply-all --body "text"`           | Reply all                         | Send result           |
-| `gog gmail send --to "a@b.com" --subject "subj" --body "text" --attach /path/file` | With attachment                   | Send result           |
-| `gog gmail archive <messageId> ... --no-input --force`                             | Archive messages                  | Archive result        |
-
----
-
-Parse `$ARGUMENTS` and route immediately:
 
 ## Routing table
 
@@ -167,6 +133,164 @@ Draft created for [recipient]:
 
   [Send now]  [Keep as draft]  [Edit]
 ```
+
+---
+
+## Outbound judgment: verify before you assert
+
+Rule 6 governs *whether* a message may go out. This section governs *whether the
+message is right*. Every item below is a failure mode seen on a real run, where
+the approval gate held and the content was still wrong.
+
+### Research every load-bearing claim
+
+Never state a fact in someone else's inbox from memory. A price, a date, an
+availability, a "who currently holds X" all get a cheap check first: a search, the
+actual thread, the calendar, the invoice.
+
+**Claims about the recipient's own access get probed, not inferred.** Telling a
+colleague their access is broken is a claim about a system you can inspect. A
+wrong diagnosis sends a competent person chasing a non-problem, and they will
+believe you because you appear to hold the admin view. Sort each access item into
+fixed, never broken, or theirs, and say which. Telling someone "that already
+works" stops them building a workaround for a permission they already have.
+
+### Verify the join, not just the endpoints
+
+The hardest fabrications are not invented facts, they are invented *relationships*
+between two real things that share a name, an entity, or a keyword. Each half is
+true, the sentence joining them is not, and it reads as diligence rather than a
+guess.
+
+"X should be coordinated with Y" is itself a factual claim and needs its own
+evidence. A company or person appearing in two matters is weak evidence they are
+the same workstream and often strong evidence of a naming coincidence. Be
+especially suspicious of an advisory clause nobody asked for: the recipient asked
+a yes or no question, and a "let's just align with..." rider is exactly where
+invented linkage hides. When challenged on such a clause, probe and delete it
+rather than rewording it into something defensible.
+
+### Do not absorb the other party's job
+
+An inbound message that mentions a task is not automatically a task for the user.
+When the sender owns the workstream, a heads-up about their own work in progress
+is not an instruction transferring that work.
+
+Before staging any reply containing a first-person commitment ("I'll pick that
+up", "I'll clean that up"), check whose function it is, who has the access, and
+whether the commitment is even wanted. A message that only needs acknowledging
+gets acknowledgement. Volunteering labour reads as helpful and creates real
+obligations nobody tracks. When the work does need doing and the counterparty
+owns it, name it and hand it back rather than quietly taking it on.
+
+### Do not route a decision the counterparty already made
+
+A narrow A/B to the user is right for a real trade-off and wrong when the
+counterparty already supplied the answer inside the message being triaged.
+An identifier a person gives for their **own** account (login, email, phone,
+handle, bank account) is authoritative. A conflict with the admin view means the
+estate is misconfigured, not that they misremembered their own account. Use the
+probing to shape the message, not to defer. Escalate only when the action is
+irreversible and expensive; two systems disagreeing is neither.
+
+The tell that this rule was broken is a closing question to the user whose answer
+is already quoted verbatim in the inbound message.
+
+### A staged draft goes stale
+
+A queue of drafts is researched at one moment and sent over hours. Any draft
+referencing a pending external process (a bank instruction, a signature, a
+shipment, a filing) must have that process re-checked immediately before the
+send, not just at research time. A draft that correctly said "still waiting, no
+news" became wrong when the counterparty's reply landed mid-queue.
+
+Two consequences are easy to miss: the draft's central claim can flip outright,
+and new inbound often creates a *second* outbound that also needs drafting.
+Search results encountered mid-queue get triaged, not skimmed past.
+
+**A parallel session may have already sent it.** Multiple agents can work the
+same inbox and send under the same identity. Treat any outbound from the user's
+own identity that this session did not write as another agent's work: verify its
+claims at the source, report the item closed with that evidence, and move on. Do
+not re-send, and do not assume it was correct just because it exists.
+
+### A counterparty's restatement of your position is not authoritative
+
+When someone replies "which of these did you mean?" or summarises your position
+back before proceeding, do not pick the more plausible reading. Open what the
+user actually sent and read their own words. A partner who guesses wrong and
+proceeds on that guess can commit the user, in writing, to a different deal than
+the one they proposed. Their politeness is not evidence; a soft hedge from a
+competent counterparty is exactly where an unnoticed inversion lives.
+
+### When the user contradicts your draft, check before defending it
+
+Low-confidence pushback ("check, I think we already signed", "I might have
+credentials too") is a hard stop and a research instruction, not a hedge to be
+reassured about. Re-probe the primary source and come back with what it says,
+including "partly, the mechanism is X not Y". Never defend a draft against the
+user's own recollection without checking first.
+
+### Do not trust an audit's verdict over primary evidence
+
+A subagent audit is a research artifact, not a finding. Before acting on a
+cancel-or-delete verdict, open one paid invoice and read the SKU, quantity,
+billing address, and payment history. "No API key in the environment" does not
+mean "unused": no-code SaaS runs entirely in a web UI. A "paused" or free-tier
+notice may belong to an entirely different account than the paid plan.
+
+### Reply to their message, not your parallel checklist
+
+When the user says "just reply", answer only the inbound ask. Do not bolt on
+extra forms, address updates, or multi-item checklists they did not ask for in
+that draft. Extra tracks get a separate message after the send if still needed.
+When the user corrects a draft to be shorter or more spoken, rewrite against
+*their* wording, not a re-packaged version of your own.
+
+### A work handover must match the tracker exactly
+
+When a message tells someone what to work on, do not paraphrase the tracker.
+Re-run the query and enumerate every open item in board order with identifier,
+priority, and state. Vagueness is how items get silently dropped and how the
+recipient invents their own ordering. If something is deliberately excluded, say
+so and why rather than omitting it silently.
+
+### Sequencing irreversible actions: preserve, verify, then destroy
+
+When an action destroys an asset (a contact list, a mailbox, a dataset), order
+the work export, then verify the export is real, then destroy. "Verify" means row
+count and headers inspected against an expectation stated up front, so the check
+is falsifiable. An export returning a few hundred rows from a plan holding tens
+of thousands is a failed export that looks like a successful one. Split it across
+two approvals: the export can run autonomously, the destroy waits for the user.
+
+### Verify the send actually landed
+
+Do not treat a send tool returning without an error as delivery. Confirm on the
+channel: the outbound row appears in the thread, or the message carries the
+`SENT` label. A `DRAFT` is not a delivery, and a broken sender alias can bounce
+seconds later. If verification fails, do not archive; an unverified send is an
+unanswered thread.
+
+### Post-reply disposition, in the same step as the send
+
+Every thread you reply to gets a disposition immediately. There is no "leave it
+and see".
+
+- **Ball in their court** — archive once the send is verified.
+- **User still owes something** — snooze with a dated reminder naming the owed
+  action and the thread, then archive. An unfulfilled commitment must never stay
+  visible as a substitute for tracking it.
+- **Unactionable or already answered** — archive.
+
+Only threads genuinely waiting on the user's own next action stay in the inbox.
+
+### Auto-resume the next staged outbound
+
+After one item is approved, sent, verified, and dispositioned, stage the next
+queue item automatically without waiting for "go" or "next". Stop only for the
+per-draft approval itself, a real decision that is the user's to make, or a
+blocker only a human can clear.
 
 ---
 
@@ -266,6 +390,25 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-voice bland-call  "+1234567890" "<task prompt>" --
 1. Resolve the contact's number/handle (`mcp__whatsapp__search_contacts` or `preferences.json` → `contacts`).
 2. For native calls (`phone`, `facetime`, `zoom`): preview `[Place call via <channel> to <contact>] [Cancel]` then invoke.
 3. For Twilio voice/SMS and Bland AI: stage the full draft (recipient, channel, body or task-prompt) and gate behind one `AskUserQuestion` per message (Rule 6). Never batch.
+
+**How the approval is actually enforced** — see `scripts/outbound-guard/README.md`. One
+store, `/tmp/.claude-outbound-guard.json`, shared by every CLI. The owner arms it from
+their own shell with `! ok` (1 message), `! ok 3`, or `! ok all` (10, capped). A message
+is identified by recipient plus content, so the same message crossing the PreToolUse
+hook and the MCP proxy costs one unit rather than two. A counter does not replace Rule 6:
+you still stage each draft and wait for a yes.
+
+Three traps that have each caused a real bypass:
+
+- **Never let a helper script do the sending.** The Bash guard matches on the text of
+  the command, so a send hidden inside a script is invisible to it. Print the command
+  from a helper if you like, then run the real one inline.
+- **A `SENT` label is not delivery.** A send-as alias with bad SMTP credentials is
+  stamped `SENT` and bounced by `mailer-daemon` seconds later in the same thread. Check
+  for the bounce before reporting a message as delivered.
+- **Match tool names by pattern.** Multi-account installs expose
+  `mcp__whatsapp-<label>__send_message`; an exact-string allowlist silently stops
+  covering them while still appearing to run (Rule 8).
 4. If no credential resolves for a programmatic channel, prompt via `AskUserQuestion` with `[Run /ops:ops-voice setup]` / `[Paste credential now]` / `[Try native instead]` / `[Skip]` (Rule 3 — never silently skip).
 
 ---
@@ -342,3 +485,7 @@ ledger write \
   --title "Comms: <channel> — <brief description>" \
   --context "sent via <channel>"
 ```
+
+## Additional resources
+
+CLI detail: `references/cli.md`.
