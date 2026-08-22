@@ -693,6 +693,17 @@ channels sequentially in the main session.
 prompt MUST say _"You are READ-ONLY. Do NOT send any outbound messages. Return drafts to the
 orchestrator who stages them one-by-one."_ Sending stays in the main session, always.
 
+### Fallback — Hermes (`delegate_task`)
+
+When this skill runs on Hermes (no `Workflow` tool, no `AskUserQuestion`):
+
+- **Fan-out:** `delegate_task` for one read-only scanner per available channel. If that
+  tool is missing, scan sequentially in the main session. Same read-only contract.
+- **Approval:** numbered options in chat. On Telegram, two turns — full draft as its own
+  bubble, then the `[Send]` `[Edit]` `[Skip]` card. Never bundle drafts. Never put the
+  only copy of the draft in a clipped preview.
+- Plugin-wide table: Rule 10 in `CLAUDE.md` and `hermes-plugin/RUNTIME.md`.
+
 ## Pre-gathered data
 
 ```!
