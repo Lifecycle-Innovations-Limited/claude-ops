@@ -277,6 +277,29 @@ a better way" is a design review, so go and check before answering. "Maybe it's
 running on a different port" means enumerate rather than politely dismiss. A
 user's half-memory of their own estate routinely beats a first-pass search.
 
+## Rule 10 — Harness fallbacks (Hermes, Grok, Codex, cron)
+
+Claude Code primitives stay in the skills: they are valid there. When the
+running harness does not have them, **add a fallback — never delete the Claude
+path.** Full table: `hermes-plugin/RUNTIME.md`.
+
+| If this is missing | Do this instead |
+|---|---|
+| `AskUserQuestion` | Numbered options in chat, then wait. Telegram/gateway: two turns (full draft as its own message, then the Send / Edit / Skip card). Max 4 options. |
+| `Workflow` | Hermes `delegate_task`, or sequential work in the main session. |
+| `TeamCreate` / agent teams | The harness's own subagent tool (`delegate_task` on Hermes). |
+| `TaskCreate` / `TaskList` | Hermes Kanban, or skip. Do not require Paperclip. |
+| `CronCreate` | `hermes cron`, or skip. |
+| `mcp__linear__*` | Linear CLI / GraphQL. Resolve real tool names at runtime. |
+| `gh … --admin` | Never. Merge only when required checks pass, the PR is conflict-free, and blocking review threads are resolved. |
+
+Rule 6 (one draft → one approval → one send) is harness-independent. Scanners
+stay read-only; sends stay in the main session.
+
+On Hermes, install `hermes-plugin/` as `~/.hermes/plugins/ops` and add `ops` to
+`plugins.enabled`. Slash commands (`/ops-inbox`, `/ops`) and
+`skill_view("ops:<name>")` then work.
+
 ## Appendix: CLI Reference (EXACT SYNTAX — never guess)
 
 ### gog (v0.12.0+)
