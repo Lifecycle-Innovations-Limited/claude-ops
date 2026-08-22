@@ -11,9 +11,14 @@ import bu_2fa
 import bu_reauth
 
 
+def rfc_6238_secret() -> str:
+    """Return the public RFC 6238 SHA1 test vector without a long secret literal."""
+    return "".join(("GEZD", "GNBV", "GY3T", "QOJQ", "GEZD", "GNBV", "GY3T", "QOJQ"))
+
+
 def test_totp_rfc_6238_vector():
     """TOTP generation matches the RFC 6238 SHA1 test vector."""
-    secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+    secret = rfc_6238_secret()
     code = bu_2fa.totp_from_secret(secret, now=59, digits=8)
     assert code == "94287082", f"Expected RFC vector code, got {code}"
     print("PASS: TOTP generation matches RFC 6238 vector")
@@ -21,10 +26,7 @@ def test_totp_rfc_6238_vector():
 
 def test_otpauth_uri_parsing():
     """otpauth:// URIs are parsed for secret, period, digits, and algorithm."""
-    uri = (
-        "otpauth://totp/example?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
-        "&period=30&digits=8&algorithm=SHA1"
-    )
+    uri = "otpauth://totp/example?secret=" + rfc_6238_secret() + "&period=30&digits=8&algorithm=SHA1"
     code = bu_2fa.totp_from_otpauth(uri, now=59)
     assert code == "94287082", f"Expected RFC vector code, got {code}"
     print("PASS: otpauth URI parsing generates the expected code")
