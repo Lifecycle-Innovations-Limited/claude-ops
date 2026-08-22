@@ -8,7 +8,7 @@ import { loadConfig } from "../src/config.mjs";
 import { listSourceSkills, listSourceBin } from "../src/source.mjs";
 import { planBinLinks, applyBinLinks } from "../src/bin.mjs";
 import { planMirror } from "../src/mirror.mjs";
-import { planAll } from "../src/dispatch.mjs";
+import { planAll, planNativePlugin } from "../src/dispatch.mjs";
 import {
   loadManifest,
   saveManifest,
@@ -137,6 +137,22 @@ try {
   assert(
     !fs.existsSync(undetectedPath),
     "undetected agent target directory is not created",
+  );
+
+  const pluginTo = path.join(scratch, "hermes-plugins", "ops");
+  const pluginPlan = planNativePlugin({
+    srcDir: SRC,
+    pluginPath: pluginTo,
+    force: false,
+  });
+  assert(
+    pluginPlan && !pluginPlan.skipped && pluginPlan.action?.op === "symlink",
+    "hermes native plugin symlink is planned",
+  );
+  assert(
+    pluginPlan.action.from.endsWith(`${path.sep}hermes-plugin`) ||
+      pluginPlan.action.from.endsWith("/hermes-plugin"),
+    "plugin symlink source is hermes-plugin/",
   );
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });

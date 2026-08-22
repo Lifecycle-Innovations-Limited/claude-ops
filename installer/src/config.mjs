@@ -17,7 +17,7 @@ export const DEFAULT_CONFIG = {
   source: {
     type: "git",
     url: "https://github.com/Lifecycle-Innovations-Limited/claude-ops.git",
-    ref: "v3.4.2",
+    ref: "v3.4.4",
   },
   agents: {
     claude: { enabled: true, type: "marketplace" },
@@ -29,6 +29,7 @@ export const DEFAULT_CONFIG = {
       type: "hybrid",
       flat: "~/.hermes/skills",
       nested: "~/.hermes/skills/ops",
+      plugin: "~/.hermes/plugins/ops",
     },
     opencode: {
       enabled: false,
@@ -85,6 +86,7 @@ export function loadConfig(overridePath) {
     if (a.path) a.path = expandHome(a.path);
     if (a.flat) a.flat = expandHome(a.flat);
     if (a.nested) a.nested = expandHome(a.nested);
+    if (a.plugin) a.plugin = expandHome(a.plugin);
   }
   if (cfg.bin && cfg.bin.path) cfg.bin.path = expandHome(cfg.bin.path);
   return cfg;

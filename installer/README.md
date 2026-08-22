@@ -21,7 +21,7 @@ Reads the canonical source (`Lifecycle-Innovations-Limited/claude-ops` at a pinn
 | Codex | Flat `ln -s` | `~/.codex/skills` |
 | Gemini CLI | Flat `ln -s` | `~/.gemini/skills` |
 | OpenClaw | Flat `ln -s` | `~/.openclaw/skills` |
-| Hermes | Hybrid (flat + nested `ops/<name>`) | `~/.hermes/skills` |
+| Hermes | Hybrid skills + native plugin | `~/.hermes/skills` and `~/.hermes/plugins/ops` |
 | OpenCode | Flat `ln -s` | `~/.config/opencode/skills` |
 
 Binstubs from upstream `bin/` are symlinked into `~/bin/` (or `$CLAUDE_OPS_BIN_DIR`).
@@ -56,14 +56,14 @@ version: 1
 source:
   type: git
   url: https://github.com/Lifecycle-Innovations-Limited/claude-ops.git
-  ref: v3.4.2
+  ref: v3.4.4
 
 agents:
   claude:    { enabled: true }
   codex:     { enabled: true,  path: ~/.codex/skills }
   gemini:    { enabled: true,  path: ~/.gemini/skills }
   openclaw:  { enabled: true,  path: ~/.openclaw/skills }
-  hermes:    { enabled: true,  flat: ~/.hermes/skills, nested: ~/.hermes/skills/ops }
+  hermes:    { enabled: true,  flat: ~/.hermes/skills, nested: ~/.hermes/skills/ops, plugin: ~/.hermes/plugins/ops }
   opencode:  { enabled: false, path: ~/.config/opencode/skills }
 
 bin:
