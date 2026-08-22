@@ -83,13 +83,15 @@ function markdownFiles(directory, nestedSkillFiles = false) {
 }
 
 const previousIndexRaw = readFileOrNull(indexPath);
-const previousIndex = previousIndexRaw
+const hasPreviousIndex = previousIndexRaw !== null;
+const previousIndex = hasPreviousIndex
   ? JSON.parse(previousIndexRaw)
   : { skills: [], agents: [] };
 const previousSkills = new Map(previousIndex.skills.map((entry) => [entry.name, entry.summary]));
 const previousAgents = new Map(previousIndex.agents.map((entry) => [entry.name, entry.summary]));
 
 const pendingWrites = new Map();
+const missingSummaries = [];
 const skillIndex = [];
 for (const file of markdownFiles(skillsDir, true)) {
   const content = fs.readFileSync(file, 'utf8');
@@ -97,7 +99,10 @@ for (const file of markdownFiles(skillsDir, true)) {
   const currentDescription = frontmatterDescription(content, file);
   const summary = currentDescription.startsWith(SKILL_PREFIX) ? previousSkills.get(name) : currentDescription;
 
-  if (!summary) throw new Error(`Missing indexed summary for compact skill: ${name}`);
+  if (!summary) {
+    missingSummaries.push(`skill ${name}`);
+    continue;
+  }
   skillIndex.push({ name, summary });
 
   if (name === 'ops') continue;
@@ -112,11 +117,29 @@ for (const file of markdownFiles(agentsDir)) {
   const currentDescription = frontmatterDescription(content, file);
   const summary = currentDescription.startsWith(AGENT_PREFIX) ? previousAgents.get(name) : currentDescription;
 
-  if (!summary) throw new Error(`Missing indexed summary for compact agent: ${name}`);
+  if (!summary) {
+    missingSummaries.push(`agent ${name}`);
+    continue;
+  }
   agentIndex.push({ name, summary });
 
   const compactDescription = `${AGENT_PREFIX}${firstClause(summary, 84)}`;
   pendingWrites.set(file, replaceDescription(content, compactDescription));
+}
+
+if (missingSummaries.length > 0) {
+  const relIndex = path.relative(pluginRoot, indexPath);
+  console.error(
+    hasPreviousIndex
+      ? `Capability index ${relIndex} is missing entries for already-compacted descriptions:`
+      : `Capability index ${relIndex} does not exist, and these descriptions are already compacted:`,
+  );
+  for (const entry of missingSummaries) console.error(`  ${entry}`);
+  console.error(
+    'The full text lives only in that index, so it cannot be rebuilt from the tree. ' +
+      `Restore it with: git checkout -- ${relIndex}`,
+  );
+  process.exit(1);
 }
 
 const index = {

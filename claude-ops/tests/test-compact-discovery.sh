@@ -31,4 +31,36 @@ if (( description_chars > 10000 )); then
   exit 1
 fi
 
+# A missing capability index is unrecoverable: the full text lives only there.
+# The script must say so and exit non-zero without rewriting any SKILL.md.
+missing_index_check() {
+  local work index out status
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' RETURN
+  cp -R "$PLUGIN_ROOT" "$work/plugin"
+  index="$work/plugin/skills/ops/references/capabilities.json"
+  rm -f "$index"
+
+  set +e
+  out="$(node "$work/plugin/scripts/compact-plugin-discovery.mjs" 2>&1)"
+  status=$?
+  set -e
+
+  if (( status == 0 )); then
+    echo "FAIL: missing capability index did not fail the run" >&2
+    exit 1
+  fi
+  if ! grep -q 'does not exist' <<<"$out"; then
+    echo "FAIL: missing capability index did not explain itself: ${out}" >&2
+    exit 1
+  fi
+  if ! diff -q "$PLUGIN_ROOT/skills/ops/SKILL.md" "$work/plugin/skills/ops/SKILL.md" >/dev/null; then
+    echo "FAIL: failed run mutated SKILL.md files" >&2
+    exit 1
+  fi
+}
+
+missing_index_check
+echo "PASS: missing capability index fails cleanly without rewriting skills"
+
 echo "PASS: always-on discovery descriptions total ${description_chars} chars"
