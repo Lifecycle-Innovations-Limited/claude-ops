@@ -927,7 +927,7 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
  Draft reply: "[contextually aware draft based on all above]"
 ```
 
-Stage this per the **PER-DRAFT APPROVAL** principle below: print the block above (it already carries the full draft text and reasoning) as plain chat text, THEN one `AskUserQuestion` for this item alone, single-select `[Send]` `[Edit]` `[Skip]`, with a short (~10-line) `preview` — the `preview` clips, so it is a quick-glance companion to the inline block above, never the only place the draft is shown. Never combine with any other item's approval.
+Stage this per the **PER-DRAFT APPROVAL** principle below. On Telegram/Hermes, deliver the block above as a standalone FINAL draft bubble in TURN 1, with no approval card in that turn. In TURN 2, after the owner's next message or continuation event, show the one-item `[Send]` `[Handle this for me]` `[Edit]` `[Skip]` card. Never combine items.
 
 **When drafting replies:**
 
@@ -1008,15 +1008,16 @@ Everything else in this skill is unchanged and still binding: humanizer before s
 
 **Every staged outbound draft gets its OWN `AskUserQuestion` call — never bundle multiple drafts into one question, and never present a batched list of drafts with an "approve all" / "ok all" style option.** This applies on every channel (email, WhatsApp, iMessage, Slack, Telegram, Discord, Notion) and supersedes any earlier guidance in this skill that showed multiple candidates followed by a single combined approval.
 
-**The `preview` field clips (owner-observed 2026-07-24, live run): it visually cuts off at ~10 short lines, so a full draft + reasoning block does not reliably fit and gets truncated in the box the user actually sees.** So the tool call is never the only place the draft appears:
+**The `preview` field clips (owner-observed 2026-07-24), and Telegram does not render assistant commentary placed immediately before an `AskUserQuestion` / `clarify` tool call as a visible message bubble (owner-confirmed 2026-08-19 and 2026-08-21).** Therefore the draft and approval card MUST use two separate agent turns on Telegram/Hermes:
 
-1. **Print the full draft inline as plain chat text FIRST, before the `AskUserQuestion` tool call.** This means the exact message the recipient will see (to/recipient, subject for email, full body) plus the short "Reasoning / facts verified" block (which thread(s) were read, which related threads were checked, which load-bearing facts were verified and how — e.g. "verified via web search: current EUR/USD"; "verified via Gmail search in:sent: Sam confirmed Spinnin'/WMG holds this master on 2026-05-12"). **This inline text is the source of truth the user actually reads — never rely on the tool's preview pane alone.** If the draft itself is long, split it across multiple chat messages rather than truncating it (same pattern as the existing "split long drafts into separate AskUsers/bubbles" convention) — do not silently cut it.
-2. **Then call `AskUserQuestion`.** Keep its `preview` field short — roughly 10 lines max — since it clips: the full draft if it's genuinely short, otherwise a compact excerpt/summary of the draft plus at most 2 reasoning bullets. The `preview` is a quick-glance companion to the inline text above it, not the only place the draft is shown.
+1. **TURN 1: deliver the exact full draft as the assistant's FINAL response, with NO approval-card tool call in that turn.** Label the recipient/channel and show the exact message boundaries. Include the short "Reasoning / facts verified" block when needed. This standalone Telegram bubble is the source of truth. Commentary text in the same turn as a card does not count because the owner cannot see it. If the draft is long, split it into visible standalone bubbles without truncation.
+2. **TURN 2: only after the owner's next message or an explicit continuation event, show the single-draft approval card.** The card carries `[Send]` `[Handle this for me]` `[Edit]` `[Skip]`. A normal user reply that is not an explicit send instruction is not approval. If the owner already replies `send` / `stuur` after seeing TURN 1, that directly approves the byte-identical staged draft; run the live-tail recheck and send without asking twice.
+3. **Non-Telegram surfaces that provably flush assistant prose before a tool card** may deliver the full draft bubble and card in one turn. Never assume this capability; if unverified, use the two-turn flow above.
 
 **The call, exactly:**
 
 - **Single-select**, options limited to `[Send]` `[Handle this for me]` `[Edit]` `[Skip]` (4 options — exactly the Rule-1 cap). Do not add extra options like "Read full thread" or "Archive" to this specific question — the full-thread read is already mandatory *before* the draft is staged (FULL-THREAD AWARENESS GATE + fact-verified redraft gate above), and archive is a separate, subsequent step once the draft is sent or skipped.
-- One draft → full draft printed inline in chat → one `AskUserQuestion` (short `preview`) → one decision (`Send`/`Edit`/`Skip`) → (if `Send`) **LIVE TAIL RECHECK** → one send → archive → **then and only then** move to the next draft's own inline text + `AskUserQuestion`.
+- On Telegram/Hermes: one draft → standalone FINAL draft bubble (TURN 1) → next message/continuation → one `AskUserQuestion` card (TURN 2) → one decision (`Send`/`Handle this for me`/`Edit`/`Skip`) → (if `Send`) **LIVE TAIL RECHECK** → one send → archive → **then and only then** move to the next draft. On a surface proven to render prose before the card, TURN 1 and TURN 2 may share one agent turn.
 
 **LIVE TAIL RECHECK (BLOCKING — immediately before every send, owner 2026-08-15).** Approval is not a license to fire a stale draft. After `Send`/`ok`/`set` and before the actual send tool/API call, re-read the live thread tail on the real channel (WhatsApp store or MCP thread, `gog gmail thread get`, Slack `conversations.history` + every nonzero `reply_count` thread, iMessage `chat_messages`). Check for:
 
@@ -1344,7 +1345,7 @@ For each NEEDS REPLY chat:
     Thread: [1-line summary of what you're waiting for]
 ```
 
-Per the **PER-DRAFT APPROVAL** principle above: print the full draft text plus a "Reasoning / facts verified" block as plain chat text FIRST — the `preview` pane clips at ~10 lines and is not reliable for a full draft — THEN stage ONE `AskUserQuestion` per chat, single-select `[Send]` `[Edit]` `[Skip]`, with a short `preview` (full draft if short, else a compact excerpt + up to 2 reasoning bullets). Never bundle multiple chats' drafts into one question.
+Per the **PER-DRAFT APPROVAL** principle above: on Telegram/Hermes, deliver the full draft plus "Reasoning / facts verified" as a standalone FINAL bubble in TURN 1, with no card in that turn. In TURN 2, show ONE `[Send]` `[Handle this for me]` `[Edit]` `[Skip]` card for that chat. Never bundle chats.
 
 **When drafting WhatsApp replies:**
 
@@ -1432,7 +1433,7 @@ For each NEEDS REPLY thread:
     Thread: [1-line summary of what you're waiting for]
 ```
 
-Per the **PER-DRAFT APPROVAL** principle above: print the full draft text plus a "Reasoning / facts verified" block as plain chat text FIRST — the `preview` pane clips at ~10 lines and is not reliable for a full draft — THEN stage ONE `AskUserQuestion` per thread, single-select `[Send]` `[Edit]` `[Skip]`, with a short `preview` (full draft if short, else a compact excerpt + up to 2 reasoning bullets). Never bundle multiple threads' drafts into one question.
+Per the **PER-DRAFT APPROVAL** principle above: on Telegram/Hermes, deliver the full draft plus "Reasoning / facts verified" as a standalone FINAL bubble in TURN 1, with no card in that turn. In TURN 2, show ONE `[Send]` `[Handle this for me]` `[Edit]` `[Skip]` card for that thread. Never bundle threads.
 
 **When drafting iMessage replies:**
 
@@ -1608,7 +1609,7 @@ For each NEEDS REPLY thread, gather:
   x) Archive all FYI at once (archiving is not an outbound draft — bulk archive stays fine)
 ```
 
-Per the **PER-DRAFT APPROVAL** principle above: print the FULL draft text (to, subject, body) plus a short "Reasoning / facts verified" block (which thread(s) and related threads were read, which facts were checked) as plain chat text FIRST — the `preview` pane clips at ~10 lines and is not reliable for a full draft. THEN stage ONE `AskUserQuestion` per email, single-select — never a combined `[Read + Reply]`/`[Archive]`/`[Skip]` menu that mixes the send decision with other actions — with a short `preview` (full draft if short, else a compact excerpt + up to 2 reasoning bullets):
+Per the **PER-DRAFT APPROVAL** principle above: on Telegram/Hermes, deliver the FULL email draft (to, subject, body) plus "Reasoning / facts verified" as a standalone FINAL bubble in TURN 1, with no card in that turn. In TURN 2, show ONE `[Send]` `[Handle this for me]` `[Edit]` `[Skip]` card for that email. Never combine emails or mix archive actions into the send decision:
 
 ```
 Reply to [Sender] — [Subject]:
@@ -1811,7 +1812,7 @@ For each page with comments or mentions:
  N. [Page title] — updated by [person] — [time ago]
 ```
 
-Per the **PER-DRAFT APPROVAL** principle above: print the full reply text plus a "Reasoning / facts verified" block as plain chat text FIRST — the `preview` pane clips at ~10 lines and is not reliable for a full draft — THEN stage ONE `AskUserQuestion` per comment, single-select `[Send]` `[Edit]` `[Skip]`, with a short `preview` (full reply if short, else a compact excerpt + up to 2 reasoning bullets). `View page` / `Mark resolved` / `Archive` are separate follow-up actions, not options on the send question. Never bundle multiple comments' replies into one question.
+Per the **PER-DRAFT APPROVAL** principle above: on Telegram/Hermes, deliver the full reply plus "Reasoning / facts verified" as a standalone FINAL bubble in TURN 1, with no card in that turn. In TURN 2, show ONE `[Send]` `[Handle this for me]` `[Edit]` `[Skip]` card for that comment. `View page` / `Mark resolved` / `Archive` remain separate. Never bundle comments.
 
 **When replying to Notion comments:**
 
