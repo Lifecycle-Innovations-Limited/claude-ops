@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "ops-lazy-local",
-  "description": "Local OPS build with compact discovery metadata and on-demand specialist context",
+  "name": "ops-marketplace",
+  "description": "Marketplace for the ops plugin and its desktop-act computer-use companion",
   "owner": {
     "name": "Lifecycle Innovations Limited",
     "email": "info@lifecycleinnovations.limited"
