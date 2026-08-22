@@ -77,7 +77,7 @@ apply "$PLUGIN_DIR/README.md" "${COUNT_E[@]}" "${BADGE_E[@]}" "${HEAD_E[@]}"
 # Reference docs + index — badges + headlines.
 apply "$PLUGIN_DIR/docs/skills-reference.md" "${BADGE_E[@]}" "${HEAD_E[@]}"
 apply "$PLUGIN_DIR/docs/agents-reference.md" "${BADGE_E[@]}" "${HEAD_E[@]}"
-apply "$PLUGIN_DIR/docs/INDEX.md"            "${HEAD_E[@]}"
+apply "$PLUGIN_DIR/docs/INDEX.md"            "${BADGE_E[@]}" "${HEAD_E[@]}"
 
 [[ "$changed" -eq 0 ]] && echo "  already in sync — nothing to do"
 echo "ops-sync-docs: done (${changed} file(s) $([[ $DRY -eq 1 ]] && echo 'would change' || echo 'changed'))"

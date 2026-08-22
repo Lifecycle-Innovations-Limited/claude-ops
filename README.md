@@ -37,6 +37,22 @@ Turn Claude Code into a complete business operating system — infrastructure he
 
 ---
 
+## What's new in v3.6
+
+**Current: [v3.6.1](https://github.com/Lifecycle-Innovations-Limited/claude-ops/releases/tag/v3.6.1).** One plugin, three harnesses, official skill shape.
+
+| | |
+|---|---|
+| Native Hermes plugin | `hermes-plugin/` → `~/.hermes/plugins/ops`. Slash commands + `skill_view("ops:*")`. |
+| Grok | Loads the Claude plugin as-is. No `.grok-plugin`. |
+| Skills | Third-person trigger descriptions, shared preamble, `ops-rules` (plugin-root `CLAUDE.md` is a pointer). Oversized skills split into `references/`. |
+| Versions | `plugin.json` = Hermes `plugin.yaml` = installer pin. `ops-release` keeps them together. |
+| MCP | Plugin `.mcp.json` is empty. Servers start on demand, not once per session. |
+
+Ports: [`claude-ops/docs/harness-ports.md`](claude-ops/docs/harness-ports.md). Rules: [`skills/ops-rules/SKILL.md`](claude-ops/skills/ops-rules/SKILL.md). Full notes: [`CHANGELOG`](claude-ops/CHANGELOG.md).
+
+---
+
 ## What's new in v2.0
 
 v2 turns claude-ops from a _briefing + comms surface_ into an **autonomy layer for Claude Code itself.** Purely additive — no v1 behaviour changes by default. See [`claude-ops/CHANGELOG.md`](claude-ops/CHANGELOG.md#200--2026-04-26) and [`docs/migrating-from-v1.md`](claude-ops/docs/migrating-from-v1.md).

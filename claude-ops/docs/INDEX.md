@@ -4,11 +4,19 @@
 
 _Top-level map of every doc file in `claude-ops/docs/`._
 
-[![version](https://img.shields.io/badge/version-2.1.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-3.6.1-blue)](../CHANGELOG.md)
 
 </div>
 
 ---
+
+## v3.6 — harnesses and skill shape
+
+| Doc | Subject |
+|---|---|
+| [`harness-ports.md`](harness-ports.md) | Claude / Grok / Hermes: one skill tree, lockstep versions, Rule 10 fallbacks, empty `.mcp.json`. |
+| [`../hermes-plugin/RUNTIME.md`](../hermes-plugin/RUNTIME.md) | Claude Code primitive → Hermes/Grok swap table. |
+| [`../skills/ops-rules/SKILL.md`](../skills/ops-rules/SKILL.md) | Standing rules 0–10. Plugin-root `CLAUDE.md` is a pointer only. |
 
 ## v2.0 — autonomy layer
 
@@ -39,4 +47,4 @@ _Top-level map of every doc file in `claude-ops/docs/`._
 - [Wiki](https://github.com/Lifecycle-Innovations-Limited/claude-ops/wiki) — narrative pages, tutorials, FAQ.
 - [`CHANGELOG.md`](../CHANGELOG.md) — release history.
 - [`README.md`](../README.md) — plugin overview.
-- [`CLAUDE.md`](../CLAUDE.md) — non-negotiable rules for all skills.
+- [`CLAUDE.md`](../CLAUDE.md) — pointer. Rules live in `skills/ops-rules/SKILL.md`.
