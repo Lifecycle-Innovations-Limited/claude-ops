@@ -1,6 +1,6 @@
 ---
 name: marketing-optimizer
-description: Cross-platform ad budget optimization — reads Meta + Google Ads data, computes blended ROAS, and recommends specific budget shifts.
+description: "OPS specialist: Cross-platform ad budget optimization"
 model: sonnet
 ---
 

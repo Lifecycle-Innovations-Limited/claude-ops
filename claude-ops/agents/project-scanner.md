@@ -1,6 +1,6 @@
 ---
 name: project-scanner
-description: Git, PR, and CI status scanner across all registered repos. Returns structured JSON with branch state, uncommitted files, open PRs, and CI status for each project.
+description: "OPS specialist: Git, PR, and CI status scanner across all registered repos"
 model: claude-sonnet-4-6
 effort: low
 maxTurns: 15

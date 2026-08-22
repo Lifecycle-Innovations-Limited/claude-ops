@@ -1,6 +1,6 @@
 ---
 name: ops-deploy-fix
-description: "This skill should be used when the user asks to \"deploy auto-fix\", \"failed deploy\", or \"/ops:ops-deploy-fix\". Inspect and control the deploy/build auto-fix subsystem. Use for `/ops:deploy-fix status` (last monitor runs, fixer dispatches, locks, hourly budget), `/ops:deploy-fix tail` (follow latest fixer log), `/ops:deploy-fix configure` (re-run the wizard), and `/ops:deploy-fix test` (synthetic dry-run through the pipeline). Trigger when the user mentions deploy auto-fix, post-merge monitor, build fixer, fix budget, fix-agent log, or asks why a deploy didn't get auto-fixed."
+description: "OPS on-demand: This skill should be used when the user asks to \"deploy auto-fix\", \"failed deploy\", or…"
 argument-hint: '[status|tail|configure|test]'
 allowed-tools:
   - Bash

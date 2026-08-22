@@ -1,6 +1,6 @@
 ---
 name: ops-accounts
-description: "This skill should be used when the user asks to \"rotate accounts\", \"switch Claude/Grok/Codex\", or \"/ops:accounts\". Multi-provider AI account manager (Claude, Grok/xAI, OpenAI/Codex, Factory, Cursor). Status, setup, switch, refresh, reauth, util, and the CLIProxyAPI pool. Canonical replacement for /ops:rotate and /ops:rotate-setup (those remain aliases)."
+description: "OPS on-demand: This skill should be used when the user asks to \"rotate accounts\", \"switch…"
 argument-hint: '[status|list|setup|switch|refresh|reauth|util|rotate-now|seats|gateway|help] [provider] [args…]'
 allowed-tools:
   - Bash

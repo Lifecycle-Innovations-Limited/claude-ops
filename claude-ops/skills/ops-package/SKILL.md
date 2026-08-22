@@ -1,6 +1,6 @@
 ---
 name: ops-package
-description: "This skill should be used when the user asks to \"ship a parcel\", \"print a label\", or \"/ops:ops-package\". Ship parcels via any configured carrier — MyParcel, Sendcloud, DHL Parcel NL, PostNL, DPD, UPS, FedEx. Auto-selects the first carrier whose credentials are configured, or pass --carrier <name> to override. Verbs: ship, label, track, list, carriers."
+description: "OPS on-demand: This skill should be used when the user asks to \"ship a parcel\", \"print a label\", or…"
 argument-hint: '[--carrier <name>] <ship|label|track|list|carriers> [args...]'
 allowed-tools:
   - Bash

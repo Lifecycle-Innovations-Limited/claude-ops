@@ -1,6 +1,6 @@
 ---
 name: yolo-coo
-description: Operations execution agent. Finds what's falling through the cracks — stale work, broken processes, missing automation, communication failures. What the CEO doesn't see.
+description: "OPS specialist: Operations execution agent"
 model: claude-opus-4-6
 effort: high
 maxTurns: 40

@@ -1,6 +1,6 @@
 ---
 name: ops-status
-description: "This skill should be used when the user asks to \"ops status\", \"/ops:ops-status\", or \"are integrations green\". Lightweight green/red status panel for every configured integration. No gather, no actions."
+description: "OPS on-demand: This skill should be used when the user asks to \"ops status\", \"/ops:ops-status\", or \"are…"
 argument-hint: '[--json]'
 allowed-tools:
   - Bash

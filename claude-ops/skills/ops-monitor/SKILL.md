@@ -1,6 +1,6 @@
 ---
 name: ops-monitor
-description: "This skill should be used when the user asks to \"datadog\", \"APM alerts\", or \"/ops:ops-monitor\". Unified APM and monitoring surface. Polls Datadog, New Relic, and OpenTelemetry backends for active alerts, error traces, and entity health. Use --watch for live polling every 60 seconds. Use --setup to configure monitoring credentials."
+description: "OPS on-demand: This skill should be used when the user asks to \"datadog\", \"APM alerts\", or…"
 argument-hint: '[--watch] [--setup] [--backend datadog|newrelic|otel]'
 allowed-tools:
   - Bash

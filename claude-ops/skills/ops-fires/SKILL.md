@@ -1,6 +1,6 @@
 ---
 name: ops-fires
-description: "This skill should be used when the user asks to \"production fires\", \"what is on fire\", or \"/ops:ops-fires\". Production incidents dashboard. Reads ECS health, Sentry errors, CI failures. Offers to dispatch fix agents for active fires."
+description: "OPS on-demand: This skill should be used when the user asks to \"production fires\", \"what is on fire\"…"
 argument-hint: '[project-alias|all]'
 allowed-tools:
   - Bash

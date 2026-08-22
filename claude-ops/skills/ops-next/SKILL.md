@@ -1,6 +1,6 @@
 ---
 name: ops-next
-description: "This skill should be used when the user asks to \"what should I do next\", \"priority stack\", or \"/ops:ops-next\". Business-level \"what should I do next\". Priority stack — fires > competitor alerts > unread comms > ready-to-merge PRs > Linear sprint > revenue-generating GSD work. Uses pre-gathered data and routes to the right skill."
+description: "OPS on-demand: This skill should be used when the user asks to \"what should I do next\", \"priority…"
 argument-hint: '[context]'
 allowed-tools:
   - Bash

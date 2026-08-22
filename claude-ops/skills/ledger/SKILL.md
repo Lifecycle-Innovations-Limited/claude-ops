@@ -1,6 +1,6 @@
 ---
 name: ledger
-description: "This skill should be used when the user asks to \"ops ledger\", \"what did we handle\", or \"/ops:ledger\". Inspect the shared Ops Ledger — what's awaiting owner, what was handled autonomously, what claude-ops or Perplexity did in the last 24h. Always the single source of truth between the two systems."
+description: "OPS on-demand: This skill should be used when the user asks to \"ops ledger\", \"what did we handle\", or…"
 argument-hint: ''
 allowed-tools:
   - Bash

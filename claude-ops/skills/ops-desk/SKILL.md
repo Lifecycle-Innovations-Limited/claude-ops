@@ -1,6 +1,6 @@
 ---
 name: ops-desk
-description: "This skill should be used when the user asks to \"desk sweep\", \"open decisions\", or \"/ops:ops-desk\". Desk sweep — turn the owner's backlog of open decisions, staged drafts, payments, sign-offs and chases into a ranked, ready-to-approve action queue. Fans out READ-ONLY context agents (one per item, batched) via the Workflow tool, each returning a structured action package (status + recommendation + full draft in the owner's voice), then walks the queue rapid-fire in the main session under the outbound-approval gate. Complements /ops:ops-inbox (comms triage) — ops-desk handles everything that is NOT a fresh inbound message; decisions, blocked issues, owner-action items."
+description: "OPS on-demand: This skill should be used when the user asks to \"desk sweep\", \"open decisions\", or…"
 argument-hint: '[scope: all|<board/company>|explicit item list]'
 allowed-tools:
   - Bash

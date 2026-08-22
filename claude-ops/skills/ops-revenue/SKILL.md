@@ -1,6 +1,6 @@
 ---
 name: ops-revenue
-description: "This skill should be used when the user asks to \"burn rate\", \"runway\", or \"/ops:ops-revenue\". Revenue and costs tracker. AWS spend via aws ce, credits tracker, project revenue stages. Shows burn rate, runway estimate, credits expiring."
+description: "OPS on-demand: This skill should be used when the user asks to \"burn rate\", \"runway\", or…"
 argument-hint: '[costs|revenue|credits|runway|all]'
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: flow
-description: "This skill should be used when the user asks to \"/ops:flow\", \"dev lifecycle\", or \"where am I in the pipeline\". ONE entrypoint for the whole dev lifecycle — ideate, spec, plan, design, build, review, test, ship, deploy, monitor, retro. Routes to the single canonical command per stage (gstack / GSD / claude-ops) and picks project-mode (GSD phase machine) vs ad-hoc-mode (gstack stateless) from repo `.planning/` state. Bare `/flow` prints the lifecycle map + your current \"you are here\" position."
+description: "OPS on-demand: This skill should be used when the user asks to \"/ops:flow\", \"dev lifecycle\", or \"where…"
 argument-hint: '[stage|intent] [args]'
 allowed-tools:
   - Bash

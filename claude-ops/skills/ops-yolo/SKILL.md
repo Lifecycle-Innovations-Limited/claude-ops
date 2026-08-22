@@ -1,6 +1,6 @@
 ---
 name: ops-yolo
-description: "This skill should be used when the user asks to \"yolo mode\", \"run the business today\", or \"/ops:ops-yolo\". YOLO mode. Spawns 4 parallel C-suite agents (CEO, CTO, CFO, COO). Each analyzes the business from their perspective using ALL available data. Produces unfiltered Hard Truths report. After user types YOLO, autonomously runs the business for a day using /loop."
+description: "OPS on-demand: This skill should be used when the user asks to \"yolo mode\", \"run the business today\"…"
 argument-hint: '[YOLO|analyze|report]'
 allowed-tools:
   - Bash

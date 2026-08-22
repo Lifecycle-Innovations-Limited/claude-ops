@@ -1,6 +1,6 @@
 ---
 name: ops:unifi-agent
-description: UniFi probe agent. Queries Site Manager (cloud), Network Integration, and Protect Integration APIs for hosts, devices, clients, ISP/WAN metrics, and cameras. Returns structured JSON. Used by ops-unifi skill for parallel surface scans.
+description: "OPS specialist: UniFi probe agent"
 model: claude-sonnet-4-6
 effort: low
 maxTurns: 10

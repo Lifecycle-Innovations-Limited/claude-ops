@@ -1,6 +1,6 @@
 ---
 name: ops-voice
-description: "This skill should be used when the user asks to \"make a call\", \"facetime\", or \"/ops:ops-voice\". Voice operations — native macOS Phone (Continuity), FaceTime, Zoom, Google Meet, WhatsApp call, Twilio voice + SMS, Bland AI agent calls, ElevenLabs TTS, Whisper transcription. All curl-based, no SDK deps."
+description: "OPS on-demand: This skill should be used when the user asks to \"make a call\", \"facetime\", or…"
 argument-hint: '[phone|facetime|zoom|meet|whatsapp-call|twilio-call|twilio-sms|bland-call|tts|transcribe|setup]'
 allowed-tools:
   - Bash

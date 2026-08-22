@@ -1,6 +1,6 @@
 ---
 name: people
-description: "This skill should be used when the user asks to \"sync contacts\", \"people database\", or \"/ops:people\". Sync Apple Contacts to Notion 'People' database. Track last_contacted, relationship_strength, recent_topics, next_nudge_due. Foundation for relationship intelligence — birthdays, anniversaries, overdue-outreach, news-mention nudges."
+description: "OPS on-demand: This skill should be used when the user asks to \"sync contacts\", \"people database\", or…"
 argument-hint: ''
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: ops-fleet
-description: "This skill should be used when the user asks to \"fleet dashboard\", \"CLIProxy sessions\", or \"/ops:ops-fleet\". Read-only Claude + CLIProxyAPI fleet dashboard. Shows sessions, gateway, providers, models, pooled accounts, routing, and traffic."
+description: "OPS on-demand: This skill should be used when the user asks to \"fleet dashboard\", \"CLIProxy sessions\"…"
 argument-hint: '[--once] [--tui] [--all] [--models] [--no-pool] [--no-color]'
 allowed-tools:
   - Bash
