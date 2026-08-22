@@ -64,6 +64,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.6.0] - 2026-08-22
+
+### Changed
+Skills match plugin-dev practice: ops-rules skill (root CLAUDE.md is a pointer), third-person frontmatter and shared preamble on every skill, oversized SKILL.md files split into references/, SessionStart pointer, plugin validate coverage.
+
+
 ## [3.5.0] - 2026-08-22
 
 ### Changed
