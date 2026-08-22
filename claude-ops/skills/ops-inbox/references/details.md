@@ -700,7 +700,7 @@ iMessage is a **first-class channel, exactly like WhatsApp**: scannable for repl
 **Phase 1 — Classify:**
 
 1. Pull all allowlisted threads in one call: `mcp__plugin_imessage_imessage__chat_messages {limit: 30}` (omit `chat_guid` to read every allowlisted chat at once; pass a specific `chat_guid` to drill into one thread, `limit` max 500).
-2. The result is **rendered conversation text, not a JSON array**. Each block starts with a header labelling the thread `DM` or `Group` and its participant list, followed by timestamped messages oldest-first. Messages you sent are marked as from-you (e.g. `Me:` / `→`); inbound messages show the sender's handle (`+15551234567` or `someone@icloud.com`). The thread's `chat_id` (a GUID like `iMessage;-;+15551234567` or `iMessage;+;chat<digits>`) is printed in the header — capture it; you need it to reply.
+2. The result is **rendered conversation text, not a JSON array**. Each block starts with a header labelling the thread `DM` or `Group` and its participant list, followed by timestamped messages oldest-first. Messages you sent are marked as from-you (e.g. `Me:` / `→`); inbound messages show the sender's handle (`+15551234567` or `someone@example.com`). The thread's `chat_id` (a GUID like `iMessage;-;+15551234567` or `iMessage;+;chat<digits>`) is printed in the header — capture it; you need it to reply.
 3. For EVERY thread, understand the conversation:
    - Read all messages in order. Know which are from the user vs from the contact.
    - Understand what it's about, what was discussed, what's pending.
