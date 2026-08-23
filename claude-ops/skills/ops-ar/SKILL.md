@@ -49,9 +49,20 @@ If non-empty, inject the **whole JSON object verbatim** into every ar-producer s
 
 Fields the profile may carry (all optional): `owner`, `label`, `lane`, `tempo_sweet_spot`, `ar_team`, `signing_structure`, `reference_acts`, `catalog_recent`, `signature_classics`, `label_roster_third_party`, `songwriting_taste`, `verdict_calibration`. If the profile is absent, fall back to the generic dance-pop / feel-good house default and say so in the card header.
 
-### Imprint gate (mandatory when `ar.future_tropical` exists)
+### Imprint gate (mandatory when `ar.imprints` is non-empty)
 
-Read `jq '.ar.future_tropical // empty' "$PREFS"`. If non-empty, inject it verbatim into every ar-producer spawn prompt **except `brand_book_corpus`** (the full scraped brand-book text — too large for a spawn prompt; consult it only when a card needs exact brand-book language, via `jq '.ar.future_tropical.brand_book_corpus.pages | keys'` then the specific page). Always inject `sound_description` — it is the imprint's sonic north star and the tiebreaker on points 2, 4 and 5. Add an **IMPRINT** section to the A&R card between VERDICT and WHAT'S WORKING: score the track against `ten_point_test` per `scoring_rule` (one line per point, pass/fail/N-A, with the failing evidence named), then one routing line — `FT-eligible` or `route to parent label`. The imprint is a strict subset of the label: a failed gate never downgrades the main verdict, it only routes the release. Owner's own tracks always get the scorecard; third-party demos get it only when they are in the imprint's lane.
+Imprints are data, not code. Never hardcode an imprint's name, sound, or test — read them:
+
+```bash
+jq -r '.ar.imprints // {} | keys[]' "$PREFS"          # imprint keys
+jq '.ar.imprints["<key>"]' "$PREFS"                   # one imprint
+```
+
+For each imprint whose lane the track falls in, inject that object verbatim into the ar-producer spawn prompt **except `brand_book_corpus`** (the full scraped brand-book text — too large for a spawn prompt; consult it only when a card needs exact brand-book language, via `jq '.ar.imprints["<key>"].brand_book_corpus.pages | keys'` then the specific page). Always inject `sound_description` — it is the imprint's sonic north star and the tiebreaker on the subjective points.
+
+Add an **IMPRINT** section to the A&R card between VERDICT and WHAT'S WORKING: score the track against that imprint's own `ten_point_test` per its `scoring_rule` (one line per point, pass/fail/N-A, with the failing evidence named), then one routing line — eligible for `<imprint display_name>`, or route to parent label. An imprint is a strict subset of the label: a failed gate never downgrades the main verdict, it only routes the release. Owner's own tracks always get the scorecard; third-party demos get it only when they are in that imprint's lane.
+
+Each imprint object may carry: `display_name`, `lane`, `sound_description`, `ten_point_test`, `scoring_rule`, `brand_book_corpus`. If `ar.imprints` is absent or empty, skip the IMPRINT section entirely — do not invent an imprint.
 
 ## Modes
 
