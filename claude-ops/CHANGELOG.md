@@ -67,6 +67,16 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.8.1] - 2026-08-23
+
+### Fixed
+- The release command now aborts instead of proceeding when it cannot read the currently published version, so a release can no longer be cut from an unknown baseline.
+
+### Changed
+- Version bumps are derived from the published version rather than local state, keeping release numbering consistent.
+- Added test coverage for profile-first reauth and for version-bump behaviour during releases.
+
+
 ## [3.8.0] - 2026-08-22
 
 ### Changed
