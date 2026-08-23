@@ -36,6 +36,23 @@ A&R the given record(s) like a pop/dance-hit label owner + master producer. The 
 
 The skill must read these at runtime — never hardcode user names, mailboxes, label names, or absolute `/Users/...` paths.
 
+### Taste profile injection (mandatory when `ar.profile` exists)
+
+Before spawning any ar-producer agent, read the profile once:
+
+```bash
+PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+jq '.ar.profile // empty' "$PREFS"
+```
+
+If non-empty, inject the **whole JSON object verbatim** into every ar-producer spawn prompt, with the instruction: *"Judge as the A&R for THIS owner/label. Calibrate the verdict per `verdict_calibration`. Weigh hooks and toplines against `songwriting_taste`. REFERENCE & POSITIONING must position against `catalog_recent`, `signature_classics`, and `label_roster_third_party` — name the closest catalog comparison, not generic genre acts. Check tempo against `tempo_sweet_spot` and brand fit against `lane`. If `signing_structure` is present, the NEXT section of a sign/develop verdict must state which entity signs the master."*
+
+Fields the profile may carry (all optional): `owner`, `label`, `lane`, `tempo_sweet_spot`, `ar_team`, `signing_structure`, `reference_acts`, `catalog_recent`, `signature_classics`, `label_roster_third_party`, `songwriting_taste`, `verdict_calibration`. If the profile is absent, fall back to the generic dance-pop / feel-good house default and say so in the card header.
+
+### Imprint gate (mandatory when `ar.future_tropical` exists)
+
+Read `jq '.ar.future_tropical // empty' "$PREFS"`. If non-empty, inject it verbatim into every ar-producer spawn prompt **except `brand_book_corpus`** (the full scraped brand-book text — too large for a spawn prompt; consult it only when a card needs exact brand-book language, via `jq '.ar.future_tropical.brand_book_corpus.pages | keys'` then the specific page). Always inject `sound_description` — it is the imprint's sonic north star and the tiebreaker on points 2, 4 and 5. Add an **IMPRINT** section to the A&R card between VERDICT and WHAT'S WORKING: score the track against `ten_point_test` per `scoring_rule` (one line per point, pass/fail/N-A, with the failing evidence named), then one routing line — `FT-eligible` or `route to parent label`. The imprint is a strict subset of the label: a failed gate never downgrades the main verdict, it only routes the release. Owner's own tracks always get the scorecard; third-party demos get it only when they are in the imprint's lane.
+
 ## Modes
 
 ### 1. Single track — `/ops:ops-ar <file|url|latest>`
