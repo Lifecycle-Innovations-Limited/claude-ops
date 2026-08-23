@@ -239,8 +239,49 @@ wait_for_release_ci() {
   return 1
 }
 
-CUR="$(jq -r '.version' "$PLUGIN_JSON")"
-[[ "$CUR" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ops-release: current version '$CUR' is not semver" >&2; exit 1; }
+# ----- version base -----
+# Bump from what is PUBLISHED, never from whatever this checkout happens to
+# hold. Running from a stale branch or a feature worktree would otherwise take
+# that branch's older number as the base and cut a release that moves the
+# version backwards. Base = highest of (checkout, origin/main, newest tag).
+PLUGIN_JSON_REL="${PLUGIN_JSON#"$REPO_ROOT"/}"
+
+local_ver="$(jq -r '.version // empty' "$PLUGIN_JSON")"
+[[ "$local_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ops-release: checkout version '$local_ver' is not semver" >&2; exit 1; }
+
+if ! git -C "$REPO_ROOT" fetch origin --quiet 2>/dev/null; then
+  echo "ops-release: git fetch failed — reading the published version over the API" >&2
+fi
+
+main_ver="$(git -C "$REPO_ROOT" show "origin/main:$PLUGIN_JSON_REL" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || true)"
+if [ -z "$main_ver" ]; then
+  main_ver="$(gh api -H 'Accept: application/vnd.github.raw' \
+    "repos/$GH_REPO/contents/$PLUGIN_JSON_REL?ref=main" 2>/dev/null \
+    | jq -r '.version // empty' 2>/dev/null || true)"
+fi
+
+# Never guess the base. A stale or unreadable origin/main is exactly the case
+# this block exists to catch, so refuse rather than fall back to the checkout.
+if [[ ! "$main_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "ops-release: cannot read the published version from origin/main (git fetch and API both failed)." >&2
+  echo "ops-release: refusing to release from an unverified base — it could cut a regressive version." >&2
+  exit 1
+fi
+
+# Local tags only ever raise the base, so a stale tag list cannot lower it.
+tag_ver="$(git -C "$REPO_ROOT" tag --list 'v[0-9]*' 2>/dev/null | sed 's/^v//' \
+  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+
+CUR="$local_ver"
+for candidate in "$main_ver" "$tag_ver"; do
+  [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+  CUR="$(printf '%s\n%s\n' "$CUR" "$candidate" | sort -V | tail -1)"
+done
+
+if [ "$CUR" != "$local_ver" ]; then
+  echo "ops-release: checkout says $local_ver but $CUR is already published${main_ver:+ (origin/main $main_ver)}${tag_ver:+ (tag v$tag_ver)}." >&2
+  echo "ops-release: bumping from $CUR so the release cannot go backwards." >&2
+fi
 
 if [ -n "$explicit_ver" ]; then
   NEW="$explicit_ver"
