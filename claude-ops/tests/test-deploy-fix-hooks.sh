@@ -574,6 +574,59 @@ test_monitor_real_failure() {
 test_monitor_real_failure
 
 # ===========================================================================
+# CASE 12 — rate discipline: no banned patterns, quota gate bails out
+# ===========================================================================
+echo ""
+echo "── Case 12: rate discipline ──────────────────────────────────────"
+test_monitor_rate_discipline() {
+  new_isolated_env "case12-rate"
+
+  # 12a — the monitor must not contain any banned polling pattern.
+  # Comment lines are stripped first: the header explains WHY those calls are
+  # banned and naming them there must not trip this guard.
+  monitor_code=$(grep -v '^[[:space:]]*#' "$PLUGIN_ROOT/scripts/ops-deploy-monitor.sh")
+  if printf '%s' "$monitor_code" \
+       | grep -qE 'gh[[:space:]]+run[[:space:]]+watch|gh[[:space:]]+pr[[:space:]]+checks[^|]*--watch'; then
+    fail "12a.no-banned-watch" "ops-deploy-monitor.sh still contains a banned gh watch call"
+  else
+    pass "12a.no-banned-watch"
+  fi
+
+  # 12b — status reads go through `gh api repos/...` (REST), not `--json` (GraphQL).
+  if printf '%s' "$monitor_code" \
+       | grep -qE 'gh[[:space:]]+(pr|run)[[:space:]]+(view|list)[^|]*--json'; then
+    fail "12b.rest-not-graphql" "monitor still uses a GraphQL-backed --json read"
+  else
+    pass "12b.rest-not-graphql"
+  fi
+
+  # 12c — an exhausted REST bucket makes the monitor bail out cleanly (rc 0,
+  #       log line, no fixer dispatched).
+  export MOCK_GH_RATE_CORE=3
+  export MOCK_GH_PR_VIEW_JSON='{"baseRefName":"dev","mergeCommit":{"oid":"abcdef1234567890"},"state":"MERGED"}'
+  export MOCK_GH_RUN_LIST_JSON='[{"databaseId":42,"headSha":"abcdef1234567890","name":"deploy"}]'
+  export MOCK_GH_RUN_VIEW_CONCLUSION="failure"
+  ln -sf /usr/bin/true "$TEST_BIN/sleep" 2>/dev/null || true
+
+  bash "$PLUGIN_ROOT/scripts/ops-deploy-monitor.sh" "owner/repo12" "12" >/dev/null 2>&1
+  rc=$?
+  assert_eq "12c.rate-gate-exit-zero" "0" "$rc"
+  monitor_log="$TEST_LOGS/monitor-owner-repo12-pr12.log"
+  if grep -q "rate gate" "$monitor_log" 2>/dev/null; then
+    pass "12d.rate-gate-logged"
+  else
+    fail "12d.rate-gate-logged" "no rate gate line in $monitor_log"
+  fi
+  if [ ! -s "$TEST_LOGS/claude.log" ]; then
+    pass "12e.no-fixer-when-rate-limited"
+  else
+    fail "12e.no-fixer-when-rate-limited" "claude was invoked while rate-limited"
+  fi
+  unset MOCK_GH_RATE_CORE
+}
+test_monitor_rate_discipline
+
+# ===========================================================================
 # SUMMARY
 # ===========================================================================
 echo ""
