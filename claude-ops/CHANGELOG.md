@@ -11,10 +11,13 @@
   CLIProxyAPI is now the only supported path for multi-account rotation and OAuth
   seat management: it holds one OAuth seat file per account, and `rotate.mjs`
   already writes those files during a rotation.
-  Deleted: the `crs-*` daemons in `scripts/account-rotation/`, all of
-  `scripts/crsproxy-reauth/`, the three `install-crs-*.sh` installers, the five
-  `crs-*` systemd units, the `com.claude-ops.crs-*` plists, and
-  `docs/runbooks/crs-full-tuning-plan.md`.
+  Deleted: the `crs-*` daemons in `scripts/account-rotation/`, the three
+  `install-crs-*.sh` installers, the five `crs-*` systemd units, the
+  `com.claude-ops.crs-*` plists, and `docs/runbooks/crs-full-tuning-plan.md`.
+  Kept: `scripts/crsproxy-reauth/`. An earlier draft of this entry listed it as
+  deleted, but it survived the CRS removal and still carries the Browser Use
+  OAuth reauthentication helpers, which are cliproxy-facing rather than CRS-only.
+  It is covered by `tests/test-crsproxy-reauth.sh`.
   Renamed, same behaviour: `crs-pool-config.mjs` → `rotation-config.mjs`,
   `crs-refresh-lock.mjs` → `refresh-lock.mjs`, `crs-reconciler-state.mjs` →
   `reconciler-state.mjs`.
