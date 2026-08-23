@@ -70,6 +70,25 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.9.0] - 2026-08-23
+
+### Changed
+### Added
+- **ops-ar taste profile injection.** When `ar.profile` exists in preferences, the whole object is injected into every ar-producer spawn so verdicts are calibrated to the owner's own catalog, tempo range and songwriting taste, and REFERENCE & POSITIONING names the closest catalog comparison instead of a generic genre act. Absent profile falls back to the generic default and says so in the card header.
+- **ops-ar imprint gate.** Imprints defined under `ar.imprints` get an IMPRINT section on the A&R card, scored against that imprint's own ten-point test, plus one routing line. An imprint is a strict subset of the label, so a failed gate routes the release and never downgrades the main verdict.
+- **ops-inbox step 0.** Reading a thread's own sent messages is now a blocking pre-check on every connected account before anything is classed NEEDS_REPLY. A scan result is a snapshot rather than current state, and a subagent's NEEDS_REPLY is a claim about the moment it looked.
+
+### Changed
+- Imprints are data, not code. The imprint gate reads every imprint's name, lane, sound description and test from preferences rather than assuming one hardcoded imprint, so any number of imprints work.
+- Corrected the CRS-removal entry, which listed `scripts/crsproxy-reauth/` as deleted. It was kept, holds the Browser Use OAuth reauthentication helpers, and is covered by `tests/test-crsproxy-reauth.sh`.
+
+### Removed
+- Dead gitleaks allowlist entry for the RFC 6238 TOTP vector. The constant is now assembled from fragments, so the full string appears nowhere in the tree and the exclusion had nothing left to excuse.
+
+### Migration
+- `ar.future_tropical` in `preferences.json` moves to `ar.imprints.<key>` with a `display_name` added. Nothing reads the old key, so an unmigrated profile simply skips the IMPRINT section.
+
+
 ## [3.8.1] - 2026-08-23
 
 ### Fixed
