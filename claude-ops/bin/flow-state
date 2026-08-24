@@ -18,11 +18,21 @@ TARGET="$PWD"
 for arg in "$@"; do
   case "$arg" in
     --json) JSON=1 ;;
-    *) [ -d "$arg" ] && TARGET="$arg" ;;
+    *)
+      if [ ! -d "$arg" ]; then
+        echo "flow-state: target '$arg' is not a directory" >&2
+        echo "flow-state: refusing to fall back to \$PWD — MODE would describe the wrong tree" >&2
+        exit 2
+      fi
+      TARGET="$arg"
+      ;;
   esac
 done
 
-cd "$TARGET" 2>/dev/null || true
+if ! cd "$TARGET" 2>/dev/null; then
+  echo "flow-state: cannot enter '$TARGET'" >&2
+  exit 2
+fi
 
 # --- git root + mode ---------------------------------------------------------
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
