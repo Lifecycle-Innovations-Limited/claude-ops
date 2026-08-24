@@ -44,8 +44,17 @@ default), or just route the stage to its single canonical command inline.
 Before routing, compute where the user is on the lifecycle:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT:-$HOME/Projects/claude-ops/claude-ops}/bin/flow-state"
+for _d in "$CLAUDE_PLUGIN_ROOT" \
+          "$HOME/Developer/repos/claude-ops/claude-ops" \
+          "$HOME/external-skills/claude-ops" \
+          "$HOME/.claude/plugins/marketplaces/ops-marketplace/claude-ops" \
+          "$HOME/Projects/claude-ops/claude-ops"; do
+  [ -n "$_d" ] && [ -x "$_d/bin/flow-state" ] && "$_d/bin/flow-state" && break
+done
 ```
+
+Build that list conditionally: an unset `CLAUDE_PLUGIN_ROOT` must contribute no
+candidate, or it expands to the absolute path `/bin/flow-state`.
 
 This prints: mode (PROJECT / AD-HOC), current `.planning/` phase (if any),
 open PRs, and deploy state — the "you are here" marker. Read it first so
@@ -97,6 +106,15 @@ Route `$ARGUMENTS` (first token = intent) using this table:
 
 ### Routing notes
 
+- **Hermes: gstack targets are files, not skills.** Every gstack route below
+  (`/qa`, `/ship`, `/spec`, `/review`, `/cso`, `/autoplan`, `/canary`, `/retro`,
+  `/learn`, `/office-hours`, `/design-consultation`, `/ios-qa`, `/browse`) lives
+  OUTSIDE the indexed skills tree at `~/.local/share/gstack/<name>/SKILL.md`,
+  deliberately, so its ~950k tokens do not load into every context.
+  `skill_view("qa")` WILL fail. Load the route with
+  `read_file ~/.local/share/gstack/<name>/SKILL.md`, then follow it. The
+  `gstack-index` skill lists all 54 names. GSD routes are normal skills and do
+  resolve via `skill_view` (`gsd-plan-phase`, `gsd-execute-phase`, ...).
 - **`$REST`** = `$ARGUMENTS` with the leading intent token removed.
 - **Mode resolution**: use the `MODE=` line from `flow-state`. PROJECT when
   the git root has `.planning/`; AD-HOC otherwise. "multi-project" = the user
