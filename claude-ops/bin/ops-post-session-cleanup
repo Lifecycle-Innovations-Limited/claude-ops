@@ -5,7 +5,29 @@ set -euo pipefail
 # Clean temp bridge files (formerly wacli temp files)
 rm -f /tmp/wacli-sync-probe-*.log /tmp/wacli-bootstrap-*.log 2>/dev/null || true
 
-# Clean stale agent worktrees older than 2 hours
-find "$HOME/Projects/claude-ops/.worktrees" -maxdepth 1 -type d -mmin +120 -exec rm -rf {} \; 2>/dev/null || true
+# Clean stale agent worktrees older than 2 hours.
+# Check every known checkout root — a hardcoded ~/Projects path silently
+# cleans nothing on installs that live elsewhere.
+#
+# Do not infer staleness from the worktree ROOT mtime: an active session can
+# keep writing files below the root while the directory inode stays old, and
+# `find -type d -mmin +120` on the root would then rm -rf an in-use checkout.
+# Require BOTH: the worktree HEAD is older than 2h AND no file inside has
+# been touched in 2h. `find -print -quit` is GNU-only, so we stop after the
+# first match with a subshell break instead.
+for _root in "$HOME/Developer/repos/claude-ops" "$HOME/Developer/active/claude-ops" "$HOME/Projects/claude-ops"; do
+  [ -d "$_root/.worktrees" ] || continue
+  find "$_root/.worktrees" -maxdepth 1 -mindepth 1 -type d | while IFS= read -r _wt; do
+    # Linked worktrees store $_wt/.git as a gitfile, not a directory, so
+    # `find $_wt/.git -name HEAD` never matches. Resolve HEAD through git.
+    _head=$(git -C "$_wt" rev-parse --git-path HEAD 2>/dev/null) || continue
+    [ -f "$_head" ] || continue
+    _head_old=$(find "$_head" -maxdepth 0 -mmin +120 2>/dev/null | head -1)
+    [ -n "$_head_old" ] || continue
+    _recent=$(find "$_wt" -type f -mmin -120 2>/dev/null | head -1)
+    [ -z "$_recent" ] || continue
+    rm -rf "$_wt"
+  done
+done
 
 exit 0
