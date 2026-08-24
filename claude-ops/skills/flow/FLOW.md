@@ -72,7 +72,7 @@ resolve via `bin/flow-state`. Mirrors the `/ops:ops` routing-table pattern.
 | plan, roadmap, phase-plan                                 | plan          | project → `gsd-plan-phase`; ad-hoc → `/autoplan`                                                     |
 | ultraplan, deep-plan                                      | plan          | `gsd-ultraplan-phase`                                                                                |
 | design, ui, mockup, html                                  | design        | `/design-consultation`                                                                               |
-| build, execute, implement, code                           | build         | project → `gsd-execute-phase`; multi-project → `gsd-manager`; ad-hoc → direct + worktree |
+| build, execute, implement, code                           | build         | multi-project (checked FIRST) → `gsd-manager`; else project → `gsd-execute-phase`; ad-hoc → direct + worktree |
 | feature-dev, fd, feature, architect-feature               | build         | `/feature-dev $REST` (overlay; does not replace GSD execute)                                           |
 | review, code-review, cr                                   | review        | `/review` (+ `gsd-code-review` if project)                                                           |
 | security, cso, sec-review                                 | review        | `/cso`                                                                                               |
@@ -86,7 +86,7 @@ resolve via `bin/flow-state`. Mirrors the `/ops:ops` routing-table pattern.
 | ops, inbox, comms, marketing, finops, voice, home, daemon | ops           | `/ops:ops $REST` (delegate whole arg to ops sub-router)                                              |
 | projects, portfolio, state                                | project-state | `/ops:ops-projects`                                                                                  |
 | debug, investigate, root-cause, why                       | debug         | gstack `/investigate`; **project** also `gsd-debug`                                                  |
-| explore, onboard, map, understand, codebase               | orient        | **project** → `gsd-map-codebase` / `gsd-onboard`; ad-hoc → `gsd-explore`                             |
+| explore, onboard, map-codebase, understand              | orient        | **project** → `gsd-map-codebase` / `gsd-onboard`; ad-hoc → `gsd-explore`                             |
 | spike, prototype, try                                     | spike         | `gsd-spike` (throwaway experiment, never lands)                                                      |
 | docs, document, readme                                    | docs          | gstack `/document-generate`; **project** also `gsd-docs-update`; post-ship `/document-release`        |
 | diagram, chart, excalidraw, mermaid                       | design        | gstack `/diagram`                                                                                    |

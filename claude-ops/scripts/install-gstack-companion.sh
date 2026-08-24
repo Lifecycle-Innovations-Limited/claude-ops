@@ -7,7 +7,7 @@
 #
 # Portable: no host hardcodes. Override via env:
 #   GSTACK_REPO   git URL (default https://github.com/garrytan/gstack.git)
-#   GSTACK_DIR    install path (default $HOME/.claude/skills/gstack)
+#   GSTACK_DIR    install path (default: an existing ~/.local/share/gstack or\n#                 ~/.claude/skills/gstack, else ~/.local/share/gstack)
 #   GSTACK_BRANCH branch or tag (default main)
 #
 # Usage:
@@ -18,7 +18,19 @@
 set -euo pipefail
 
 GSTACK_REPO="${GSTACK_REPO:-https://github.com/garrytan/gstack.git}"
-GSTACK_DIR="${GSTACK_DIR:-${HOME}/.claude/skills/gstack}"
+# Default install path. gstack's own current guidance is ~/.local/share/gstack:
+# a checkout under ~/.claude/skills puts 54 top-level SKILL.md files (the `qa`
+# one alone is ~90KB) inside an indexed skills tree, which loads into every
+# agent context. Prefer an existing install over creating a second one.
+if [ -n "${GSTACK_DIR:-}" ]; then
+  :
+elif [ -d "${HOME}/.local/share/gstack" ]; then
+  GSTACK_DIR="${HOME}/.local/share/gstack"
+elif [ -d "${HOME}/.claude/skills/gstack" ]; then
+  GSTACK_DIR="${HOME}/.claude/skills/gstack"
+else
+  GSTACK_DIR="${HOME}/.local/share/gstack"
+fi
 GSTACK_BRANCH="${GSTACK_BRANCH:-main}"
 
 STATUS_ONLY=0

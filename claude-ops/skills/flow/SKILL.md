@@ -44,7 +44,7 @@ default), or just route the stage to its single canonical command inline.
 Before routing, compute where the user is on the lifecycle:
 
 ```bash
-for _d in "$CLAUDE_PLUGIN_ROOT" \
+for _d in "${CLAUDE_PLUGIN_ROOT:-}" \
           "$HOME/Developer/repos/claude-ops/claude-ops" \
           "$HOME/external-skills/claude-ops" \
           "$HOME/.claude/plugins/marketplaces/ops-marketplace/claude-ops" \
@@ -53,8 +53,9 @@ for _d in "$CLAUDE_PLUGIN_ROOT" \
 done
 ```
 
-Build that list conditionally: an unset `CLAUDE_PLUGIN_ROOT` must contribute no
-candidate, or it expands to the absolute path `/bin/flow-state`.
+Use `${CLAUDE_PLUGIN_ROOT:-}`, not `$CLAUDE_PLUGIN_ROOT`: the bare form aborts
+under `set -u`, and an unguarded `${CLAUDE_PLUGIN_ROOT}/bin/flow-state` expands
+to the absolute path `/bin/flow-state` when the variable is unset.
 
 This prints: mode (PROJECT / AD-HOC), current `.planning/` phase (if any),
 open PRs, and deploy state — the "you are here" marker. Read it first so
@@ -88,7 +89,7 @@ Route `$ARGUMENTS` (first token = intent) using this table:
 | plan, roadmap, phase-plan                                 | **project** → `gsd-plan-phase`; **ad-hoc** → `/autoplan`                                                                            |
 | ultraplan, deep-plan                                      | `gsd-ultraplan-phase`                                                                                                               |
 | design, ui, mockup, html                                  | `/design-consultation $REST`                                                                                                        |
-| build, execute, implement, code                           | **project** → `gsd-execute-phase`; **multi-project** → `gsd-manager`; **ad-hoc** → direct edits in an isolated worktree |
+| build, execute, implement, code                           | **multi-project** (checked FIRST) → `gsd-manager`; else **project** → `gsd-execute-phase`; **ad-hoc** → direct edits in an isolated worktree |
 | feature-dev, fd, feature, architect-feature               | `/feature-dev $REST` (overlay — optional structured pipeline before/alongside build; does not replace GSD execute)                  |
 | review, code-review, cr                                   | `/review` — **project** also runs `gsd-code-review`                                                                                 |
 | security, cso, sec-review                                 | `/cso`                                                                                                                              |
