@@ -752,9 +752,44 @@ if urgent:
 }
 
 # Trigger memory extraction early when new high-value messages arrive.
+#
+# This is an "run EARLIER than the next scheduled run", not a second schedule.
+# It used to behave as the latter, for two compounding reasons:
+#
+#   1. It read the wrong key out of memories/.health. The extractor writes
+#      "last_run"; this read "timestamp", which is never present, so last_ts was
+#      always empty and the new-message test fell through to its `data[:5]`
+#      fallback -- a constant 5, permanently above the >3 threshold. Every
+#      10-minute check therefore fired, and the log shows the signature
+#      plainly: 106 consecutive "5 new messages since last extraction" entries
+#      on 2026-08-24, one per check, regardless of actual message activity.
+#
+#   2. Nothing related the trigger to the 30-minute cron entry, so its runs were
+#      purely additive: 106 smart + 36 cron = 142 starts in 18 hours against a
+#      documented schedule of 48/day.
+#
+# Fixes: read "last_run", and refuse to fire unless MIN_EXTRACTION_GAP has
+# elapsed since the extractor last actually ran. That gap is measured from
+# .health, which the extractor writes on every run whatever started it, so the
+# floor applies across BOTH trigger paths rather than only to this one.
+#
+# The gap is 20 min against a 30-min cron period. That lets a genuine burst of
+# messages pull the next extraction forward by up to 10 minutes while making it
+# impossible for this path to add more than one run per cron period. A shorter
+# gap would buy a little more responsiveness for a store that is only re-read
+# every half hour anyway; 20 min is the conservative choice.
+#
+# Overlap itself is no longer this function's problem: ops-memory-extractor.sh
+# now holds its own lock, so cron, this trigger and manual runs cannot collide
+# whatever the timing. The PID check below is kept as a cheap early-out that
+# avoids spawning a process only for it to exit on the lock.
 trigger_smart_memory_extraction() {
   local MEMORY_TRIGGER="$DATA_DIR/cache/.memory_trigger_ts"
   local MEM_SCRIPT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")}/scripts/ops-memory-extractor.sh"
+  # Minimum seconds between any two extraction runs, whichever trigger starts
+  # them. Must stay below the 30-min cron period or it would suppress the
+  # scheduled run instead of merely rate-limiting the early one.
+  local MIN_EXTRACTION_GAP=1200
 
   # Only check every 10 min
   if [[ -f "$MEMORY_TRIGGER" ]]; then
@@ -768,14 +803,43 @@ trigger_smart_memory_extraction() {
   # Check if new messages arrived since last extraction
   local last_extraction="$DATA_DIR/memories/.health"
   if [[ -f "$last_extraction" ]]; then
-    local last_ts
+    local last_ts last_epoch
+    # "last_run" is the key the extractor actually writes; "timestamp" is
+    # tolerated so a .health left by an older build still parses.
     last_ts=$(python3 -c "
 import json
 try:
     d=json.load(open('$last_extraction'))
-    print(d.get('timestamp',''))
+    print(d.get('last_run') or d.get('timestamp') or '')
 except: print('')
 " 2>/dev/null)
+
+    # Enforce the floor between runs. If we cannot establish when the extractor
+    # last ran we do NOT fire: cron still covers the store on its own schedule,
+    # so the safe failure mode is to skip the early run, not to add one. This is
+    # what the old `data[:5]` fallback got backwards.
+    if [[ -z "$last_ts" ]]; then
+      log "BRAIN: no readable last_run in .health — leaving extraction to cron"
+      date +%s > "$MEMORY_TRIGGER"
+      return 0
+    fi
+    last_epoch=$(python3 -c "
+import datetime,sys
+try:
+    print(int(datetime.datetime.strptime('$last_ts','%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc).timestamp()))
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)
+    if (( last_epoch <= 0 )); then
+      log "BRAIN: could not parse last_run ('$last_ts') — leaving extraction to cron"
+      date +%s > "$MEMORY_TRIGGER"
+      return 0
+    fi
+    local since=$(( $(date +%s) - last_epoch ))
+    if (( since < MIN_EXTRACTION_GAP )); then
+      date +%s > "$MEMORY_TRIGGER"
+      return 0
+    fi
 
     # Read from keepalive cache to check for new messages (no store-lock contention)
     local wacli_chats_cache="$DATA_DIR/cache/wacli_chats.json"
@@ -785,7 +849,7 @@ except: print('')
 import json,datetime
 data=json.load(open('$wacli_chats_cache')).get('data',[]) or []
 last='${last_ts:-}'
-recent=[c for c in data if c.get('LastMessageTS','')>last] if last else data[:5]
+recent=[c for c in data if c.get('LastMessageTS','')>last]
 print(len(recent))
 " 2>/dev/null || echo 0)
 

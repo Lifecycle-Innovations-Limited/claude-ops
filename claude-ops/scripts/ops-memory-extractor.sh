@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # ops-memory-extractor.sh — Extracts user preferences, contact profiles, and behavioral
 # patterns from WhatsApp + email history and writes structured memory files.
-# Runs every 30 min via ops-daemon cron service.
+#
+# Scheduled every 30 min by the ops-daemon cron service. ops-daemon's
+# trigger_smart_memory_extraction can additionally pull a run forward when new
+# high-value messages arrive; it is an "earlier", not a second schedule.
+# Concurrent runs are prevented by the lock below, which every entry point --
+# cron, smart trigger, manual -- goes through.
 set -euo pipefail
 
 # ── Portable shell helpers ────────────────────────────────────────────────────
@@ -16,12 +21,19 @@ _date_days_ago() {
 }
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MEMORIES_DIR="${HOME}/.claude/plugins/data/ops-ops-marketplace/memories"
+DATA_ROOT="${OPS_DATA_DIR:-${HOME}/.claude/plugins/data/ops-ops-marketplace}"
+MEMORIES_DIR="${DATA_ROOT}/memories"
 HEALTH_FILE="${MEMORIES_DIR}/.health"
+# Lock lives under cache/, NOT under memories/: everything in memories/ is real
+# user data and the auto_compress pruner globs that directory.
+LOCK_DIR="${DATA_ROOT}/cache/ops-memory-extractor.lock"
+LOCK_PID_FILE="${LOCK_DIR}/pid"
+LOCK_HELD=0
 TMP_RAW="${TMPDIR:-/tmp}/ops-memory-raw-$$.json"
 TMP_PROMPT="${TMPDIR:-/tmp}/ops-memory-prompt-$$.txt"
 TMP_RESPONSE="${TMPDIR:-/tmp}/ops-memory-response-$$.json"
 TMP_GOG_ERR="${TMPDIR:-/tmp}/ops-memory-gog-$$.err"
+TMP_STREAM_ERR="${TMPDIR:-/tmp}/ops-memory-stream-$$.err"
 MAX_TOTAL_BYTES=51200   # 50KB ceiling across all memory files
 MAX_FILE_BYTES=5120     # 5KB per file before auto-compression
 LOG_PREFIX="[ops-memory-extractor]"
@@ -45,9 +57,92 @@ EOF
 }
 
 cleanup() {
-  rm -f "${TMP_RAW}" "${TMP_PROMPT}" "${TMP_RESPONSE}" "${TMP_GOG_ERR}"
+  rm -f "${TMP_RAW}" "${TMP_PROMPT}" "${TMP_RESPONSE}" "${TMP_GOG_ERR}" "${TMP_STREAM_ERR}"
+  # Only the process that actually took the lock may drop it. A run that exits
+  # because the lock was already held must never delete the holder's lock.
+  if [[ "${LOCK_HELD}" == "1" ]]; then
+    rm -rf "${LOCK_DIR}"
+    LOCK_HELD=0
+  fi
 }
 trap cleanup EXIT
+
+# ── Mutual exclusion ──────────────────────────────────────────────────────────
+# The lock lives HERE, in the extractor, rather than in the callers, because
+# there are two independent trigger paths (the 30-minute ops-daemon cron entry
+# and trigger_smart_memory_extraction) plus manual runs. A guard in one caller
+# cannot see the others: on 2026-08-24 the smart trigger started a run at
+# 18:00:23 and cron started a second at 18:00:54. Duplicate concurrent runs are
+# pure waste -- two copies build the same ~62KB prompt, pay for the same
+# completion, and race each other to write the same files.
+#
+# Note this lock is NOT what fixed the HTTP 504s. Those were measured to occur
+# just as reliably with a single run and no contention; see the streaming
+# comment in call_claude for the actual cause. The lock is still correct: the
+# proxy serialises requests, so overlapping runs inflate each other's latency
+# (measured 15s solo -> 28s with one other in flight) and push a marginal run
+# over the edge.
+#
+# `flock` is not present on macOS, so this is a mkdir-based lock: mkdir is
+# atomic on every filesystem that matters and needs no extra binary. The PID of
+# the holder is recorded inside so a lock left behind by a killed run can be
+# identified and broken instead of blocking every future run forever.
+_SELF_NAME="$(basename "${BASH_SOURCE[0]}")"
+
+_lock_owner_alive() {
+  # Alive AND still running THIS script. Checking the command as well as
+  # liveness matters because PIDs get recycled: a bare `kill -0` on a recycled
+  # PID would make a stale lock look permanently held.
+  #
+  # The name is taken from $0 rather than hardcoded. A hardcoded
+  # "ops-memory-extractor" match silently fails the moment the script is run
+  # through a renamed copy or a symlink -- the holder's own liveness check
+  # stops recognising it, every caller decides the lock is stale, and the
+  # mutual exclusion quietly evaporates while still looking correct in the log.
+  #
+  # `ps -ww` because the default output is truncated to terminal width and the
+  # script path -- the part being matched -- sits at the END of the command
+  # line, so truncation would drop exactly what we test for.
+  local pid="$1"
+  [[ -n "${pid}" ]] || return 1
+  kill -0 "${pid}" 2>/dev/null || return 1
+  ps -ww -p "${pid}" -o command= 2>/dev/null | grep -qF "${_SELF_NAME}"
+}
+
+acquire_lock() {
+  mkdir -p "$(dirname "${LOCK_DIR}")"
+
+  if mkdir "${LOCK_DIR}" 2>/dev/null; then
+    echo "$$" > "${LOCK_PID_FILE}"
+    LOCK_HELD=1
+    return 0
+  fi
+
+  local owner
+  owner=$(cat "${LOCK_PID_FILE}" 2>/dev/null || true)
+
+  # The holder creates the directory and writes its PID as two steps, so a
+  # racing process can observe the directory with the PID file not yet written.
+  # Give it a moment before concluding the lock is stale.
+  if [[ -z "${owner}" ]]; then
+    sleep 1
+    owner=$(cat "${LOCK_PID_FILE}" 2>/dev/null || true)
+  fi
+
+  if _lock_owner_alive "${owner}"; then
+    return 1
+  fi
+
+  log "Breaking stale lock at ${LOCK_DIR} (recorded pid=${owner:-none} is not running)"
+  rm -rf "${LOCK_DIR}"
+  if mkdir "${LOCK_DIR}" 2>/dev/null; then
+    echo "$$" > "${LOCK_PID_FILE}"
+    LOCK_HELD=1
+    return 0
+  fi
+  # Someone else won the race to re-create it; treat as held.
+  return 1
+}
 
 # ── Resolve auth (Claude Code OAuth preferred, API key fallback) ──────────────
 # Preference order:
@@ -443,11 +538,40 @@ data = sys.stdin.read()
 print(json.dumps(data))
 ")
 
+  # "stream": true is load-bearing, not a style choice.
+  #
+  # This call goes through the local CLIProxyAPI/Caddy data plane, which sets
+  # `response_header_timeout 30s` to bound time-to-first-token and detect dead
+  # routes. On a NON-streaming request the upstream sends no response headers
+  # until the entire completion has been generated, so that 30s ceases to be a
+  # TTFT bound and becomes a hard ceiling on total generation time.
+  #
+  # This prompt is ~62KB and its completion measures 37-44s of generation, so it
+  # blew through the header timeout on essentially every run. Measured
+  # 2026-08-24 with the identical captured prompt: non-streaming returns HTTP
+  # 504 at exactly 30.0s, repeatably, WITH NO OTHER EXTRACTOR RUNNING; streaming
+  # returns HTTP 200 in 37-44s. Every one of the 32 gateway 504s in the proxy
+  # log that day has duration 30.0s, and 17 of them had no concurrent run at
+  # all -- so this, not trigger overlap, was the cause of the failures.
+  #
+  # Streaming makes headers and the first SSE event arrive immediately, so the
+  # header timeout is satisfied and the remaining tokens stream in under the
+  # much larger read timeout. Do not "simplify" this back to a plain JSON
+  # response without also raising response_header_timeout in the Caddyfile.
+  #
+  # max_tokens is 8192, up from 4096. The extraction JSON for the current store
+  # measures ~4200 output tokens, so 4096 truncated it mid-object and the result
+  # failed to parse -- silently, because write_memory_files treats a JSON parse
+  # error as a warning and still reports the run healthy. 4096 was adequate when
+  # the store was smaller; it is the store's growth that crossed the boundary.
+  # Measured: max_tokens 4096 -> stop_reason "max_tokens", invalid JSON;
+  # max_tokens 8192 -> stop_reason "end_turn" at 4187 tokens, valid JSON.
   local payload
   payload=$(cat <<EOF
 {
   "model": "claude-haiku-4-5-20251001",
-  "max_tokens": 4096,
+  "max_tokens": 8192,
+  "stream": true,
   "system": $(printf '%s' "${system_prompt}" | python3 -c "import sys, json; print(json.dumps(sys.stdin.read()))"),
   "messages": [
     {"role": "user", "content": ${user_content}}
@@ -456,38 +580,79 @@ print(json.dumps(data))
 EOF
 )
 
-  log "Calling Claude Haiku for extraction (auth: ${OPS_AUTH_MODE:-unknown})..."
+  log "Calling Claude Haiku for extraction (auth: ${OPS_AUTH_MODE:-unknown}, streaming)..."
   local http_status
+  # --max-time bounds a stream that stalls mid-flight. The proxy's own read
+  # timeout is 900s, which is far too long to leave a scheduled job hanging;
+  # 300s is well clear of the 37-44s a healthy run takes.
   http_status=$(curl -s -o "${TMP_RESPONSE}" -w "%{http_code}" \
+    --no-buffer --max-time 300 \
     "${OPS_BASE_URL:-https://api.anthropic.com}/v1/messages" \
     -H "content-type: application/json" \
     -H "${OPS_AUTH_HEADER}" \
     -H "anthropic-version: 2023-06-01" \
+    -H "accept: text/event-stream" \
     "${OPS_AUTH_EXTRA_HEADERS[@]}" \
     -d "${payload}" 2>/dev/null)
 
   if [[ "${http_status}" != "200" ]]; then
     local err
-    err=$(cat "${TMP_RESPONSE}" 2>/dev/null || echo "unknown error")
+    err=$(head -c 400 "${TMP_RESPONSE}" 2>/dev/null || echo "unknown error")
     die "Claude API returned HTTP ${http_status}: ${err}"
   fi
 
-  # Extract text content from response
-  python3 - <<'PYEOF' "${TMP_RESPONSE}"
+  # Reassemble the SSE stream into the assistant's text.
+  local text
+  if ! text=$(python3 - "${TMP_RESPONSE}" 2>"${TMP_STREAM_ERR}" <<'PYEOF'
 import sys, json
 
-resp_file = sys.argv[1]
-with open(resp_file) as f:
-    data = json.load(f)
+parts, err, stop_reason = [], None, None
+with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+    for line in fh:
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        blob = line[5:].strip()
+        if not blob or blob == "[DONE]":
+            continue
+        try:
+            ev = json.loads(blob)
+        except Exception:
+            continue
+        etype = ev.get("type")
+        if etype == "content_block_delta":
+            delta = ev.get("delta") or {}
+            if delta.get("type") == "text_delta":
+                parts.append(delta.get("text", ""))
+        elif etype == "message_delta":
+            stop_reason = (ev.get("delta") or {}).get("stop_reason") or stop_reason
+        elif etype == "error":
+            e = ev.get("error") or {}
+            err = "{}: {}".format(e.get("type", "error"), e.get("message", ""))
 
-content = data.get("content", [])
-for block in content:
-    if block.get("type") == "text":
-        print(block["text"])
-        sys.exit(0)
+if err:
+    sys.stderr.write(err)
+    sys.exit(1)
 
-print("{}")
+text = "".join(parts).strip()
+if not text:
+    # An empty stream is a real failure, not an empty extraction: report it so
+    # the caller does not record a healthy "no new memories" run.
+    sys.stderr.write("stream contained no text content (stop_reason={})".format(stop_reason))
+    sys.exit(1)
+
+# max_tokens truncation yields invalid JSON downstream; surface it clearly.
+if stop_reason == "max_tokens":
+    sys.stderr.write("response truncated at max_tokens")
+    sys.exit(1)
+
+print(text)
 PYEOF
+  ); then
+    die "Claude streaming response unusable: $(head -c 300 "${TMP_STREAM_ERR}" 2>/dev/null)"
+  fi
+
+  printf '%s\n' "${text}"
 }
 
 # ── Write memory files ────────────────────────────────────────────────────────
@@ -696,6 +861,17 @@ PYEOF
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 main() {
+  # Take the lock before announcing a run, so a skipped attempt does not look
+  # like a started one in the log. A held lock is the normal, expected outcome
+  # of two triggers lining up -- it is not an error, so exit 0 and leave the
+  # health file alone (overwriting it would mask the real last run's status).
+  if ! acquire_lock; then
+    local holder
+    holder=$(cat "${LOCK_PID_FILE}" 2>/dev/null || echo "unknown")
+    log "Another extraction is already running (pid=${holder}) — skipping this run"
+    exit 0
+  fi
+
   log "Starting memory extraction run at $(ts)"
   mkdir -p "${MEMORIES_DIR}"
 
