@@ -44,8 +44,18 @@ default), or just route the stage to its single canonical command inline.
 Before routing, compute where the user is on the lifecycle:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT:-$HOME/Projects/claude-ops/claude-ops}/bin/flow-state"
+for _d in "${CLAUDE_PLUGIN_ROOT:-}" \
+          "$HOME/Developer/repos/claude-ops/claude-ops" \
+          "$HOME/external-skills/claude-ops" \
+          "$HOME/.claude/plugins/marketplaces/ops-marketplace/claude-ops" \
+          "$HOME/Projects/claude-ops/claude-ops"; do
+  [ -n "$_d" ] && [ -x "$_d/bin/flow-state" ] && "$_d/bin/flow-state" && break
+done
 ```
+
+Use `${CLAUDE_PLUGIN_ROOT:-}`, not `$CLAUDE_PLUGIN_ROOT`: the bare form aborts
+under `set -u`, and an unguarded `${CLAUDE_PLUGIN_ROOT}/bin/flow-state` expands
+to the absolute path `/bin/flow-state` when the variable is unset.
 
 This prints: mode (PROJECT / AD-HOC), current `.planning/` phase (if any),
 open PRs, and deploy state — the "you are here" marker. Read it first so
@@ -79,7 +89,7 @@ Route `$ARGUMENTS` (first token = intent) using this table:
 | plan, roadmap, phase-plan                                 | **project** → `gsd-plan-phase`; **ad-hoc** → `/autoplan`                                                                            |
 | ultraplan, deep-plan                                      | `gsd-ultraplan-phase`                                                                                                               |
 | design, ui, mockup, html                                  | `/design-consultation $REST`                                                                                                        |
-| build, execute, implement, code                           | **project** → `gsd-execute-phase`; **multi-project** → `gsd-master-orchestrator`; **ad-hoc** → direct edits in an isolated worktree |
+| build, execute, implement, code                           | **multi-project** (checked FIRST) → `gsd-manager`; else **project** → `gsd-execute-phase`; **ad-hoc** → direct edits in an isolated worktree |
 | feature-dev, fd, feature, architect-feature               | `/feature-dev $REST` (overlay — optional structured pipeline before/alongside build; does not replace GSD execute)                  |
 | review, code-review, cr                                   | `/review` — **project** also runs `gsd-code-review`                                                                                 |
 | security, cso, sec-review                                 | `/cso`                                                                                                                              |
@@ -94,9 +104,30 @@ Route `$ARGUMENTS` (first token = intent) using this table:
 | learn                                                     | `/learn`                                                                                                                            |
 | ops, inbox, comms, marketing, finops, voice, home, daemon | `/ops:ops $ARGUMENTS` (hand the whole arg string to the ops sub-router)                                                             |
 | projects, portfolio                                       | `/ops:ops-projects`                                                                                                                 |
+| debug, investigate, root-cause, why                       | `/investigate` — **project** also runs `gsd-debug`                                                                                  |
+| explore, onboard, understand, codebase                    | **project** → `gsd-map-codebase` / `gsd-onboard`; **ad-hoc** → `gsd-explore`                                                        |
+| spike, prototype, try                                     | `gsd-spike` (throwaway, never lands)                                                                                                |
+| docs, document, readme                                    | `/document-generate` — **project** also `gsd-docs-update`; post-ship `/document-release`                                            |
+| diagram, chart, excalidraw, mermaid                       | `/diagram`                                                                                                                          |
+| pdf, export                                               | `/make-pdf`                                                                                                                         |
+| scrape, extract, pull-data                                | `/scrape` (codify a repeat flow with `/skillify`)                                                                                   |
+| save-context, park, resume                                | `/context-save` / `/context-restore` — **project** → `gsd-pause-work` / `gsd-resume-work`                                           |
+| freeze, guard, scope-edits                                | `/freeze` (dir scope), `/guard` (full), `/careful` (destructive-cmd warnings), `/unfreeze`                                          |
+| design-review, ux-audit                                   | `/design-review`; iOS → `/ios-design-review`; devex → `/devex-review`                                                               |
+| ios-fix, ios-clean, ios-sync                              | `/ios-fix`, `/ios-clean`, `/ios-sync`                                                                                               |
+| benchmark, perf, regression                               | `/benchmark`                                                                                                                        |
 
 ### Routing notes
 
+- **Hermes: gstack targets are files, not skills.** Every gstack route below
+  (`/qa`, `/ship`, `/spec`, `/review`, `/cso`, `/autoplan`, `/canary`, `/retro`,
+  `/learn`, `/office-hours`, `/design-consultation`, `/ios-qa`, `/browse`) lives
+  OUTSIDE the indexed skills tree at `~/.local/share/gstack/<name>/SKILL.md`,
+  deliberately, so its ~950k tokens do not load into every context.
+  `skill_view("qa")` WILL fail. Load the route with
+  `read_file ~/.local/share/gstack/<name>/SKILL.md`, then follow it. The
+  `gstack-index` skill lists all 54 names. GSD routes are normal skills and do
+  resolve via `skill_view` (`gsd-plan-phase`, `gsd-execute-phase`, ...).
 - **`$REST`** = `$ARGUMENTS` with the leading intent token removed.
 - **Mode resolution**: use the `MODE=` line from `flow-state`. PROJECT when
   the git root has `.planning/`; AD-HOC otherwise. "multi-project" = the user

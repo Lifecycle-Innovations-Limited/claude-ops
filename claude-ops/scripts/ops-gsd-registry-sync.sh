@@ -20,7 +20,7 @@ log() { printf '%s [gsd-registry] %s\n' "$NOW" "$1" | tee -a "$LOG"; }
 log "Starting GSD registry sync..."
 
 # Collect project data using Python inline (avoids complex interpreter preflight)
-python3 - << PYEOF
+python3 - << 'PYEOF'
 import json, os, subprocess
 from pathlib import Path
 
