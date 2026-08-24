@@ -88,7 +88,7 @@ Route `$ARGUMENTS` (first token = intent) using this table:
 | plan, roadmap, phase-plan                                 | **project** → `gsd-plan-phase`; **ad-hoc** → `/autoplan`                                                                            |
 | ultraplan, deep-plan                                      | `gsd-ultraplan-phase`                                                                                                               |
 | design, ui, mockup, html                                  | `/design-consultation $REST`                                                                                                        |
-| build, execute, implement, code                           | **project** → `gsd-execute-phase`; **multi-project** → `gsd-master-orchestrator`; **ad-hoc** → direct edits in an isolated worktree |
+| build, execute, implement, code                           | **project** → `gsd-execute-phase`; **multi-project** → `gsd-manager`; **ad-hoc** → direct edits in an isolated worktree |
 | feature-dev, fd, feature, architect-feature               | `/feature-dev $REST` (overlay — optional structured pipeline before/alongside build; does not replace GSD execute)                  |
 | review, code-review, cr                                   | `/review` — **project** also runs `gsd-code-review`                                                                                 |
 | security, cso, sec-review                                 | `/cso`                                                                                                                              |
@@ -103,6 +103,18 @@ Route `$ARGUMENTS` (first token = intent) using this table:
 | learn                                                     | `/learn`                                                                                                                            |
 | ops, inbox, comms, marketing, finops, voice, home, daemon | `/ops:ops $ARGUMENTS` (hand the whole arg string to the ops sub-router)                                                             |
 | projects, portfolio                                       | `/ops:ops-projects`                                                                                                                 |
+| debug, investigate, root-cause, why                       | `/investigate` — **project** also runs `gsd-debug`                                                                                  |
+| explore, onboard, understand, codebase                    | **project** → `gsd-map-codebase` / `gsd-onboard`; **ad-hoc** → `gsd-explore`                                                        |
+| spike, prototype, try                                     | `gsd-spike` (throwaway, never lands)                                                                                                |
+| docs, document, readme                                    | `/document-generate` — **project** also `gsd-docs-update`; post-ship `/document-release`                                            |
+| diagram, chart, excalidraw, mermaid                       | `/diagram`                                                                                                                          |
+| pdf, export                                               | `/make-pdf`                                                                                                                         |
+| scrape, extract, pull-data                                | `/scrape` (codify a repeat flow with `/skillify`)                                                                                   |
+| save-context, park, resume                                | `/context-save` / `/context-restore` — **project** → `gsd-pause-work` / `gsd-resume-work`                                           |
+| freeze, guard, scope-edits                                | `/freeze` (dir scope), `/guard` (full), `/careful` (destructive-cmd warnings), `/unfreeze`                                          |
+| design-review, ux-audit                                   | `/design-review`; iOS → `/ios-design-review`; devex → `/devex-review`                                                               |
+| ios-fix, ios-clean, ios-sync                              | `/ios-fix`, `/ios-clean`, `/ios-sync`                                                                                               |
+| benchmark, perf, regression                               | `/benchmark`                                                                                                                        |
 
 ### Routing notes
 
