@@ -18,8 +18,12 @@ rm -f /tmp/wacli-sync-probe-*.log /tmp/wacli-bootstrap-*.log 2>/dev/null || true
 for _root in "$HOME/Developer/repos/claude-ops" "$HOME/Developer/active/claude-ops" "$HOME/Projects/claude-ops"; do
   [ -d "$_root/.worktrees" ] || continue
   find "$_root/.worktrees" -maxdepth 1 -mindepth 1 -type d | while IFS= read -r _wt; do
-    _head_mtime=$(find "$_wt/.git" -maxdepth 1 -name HEAD -mmin +120 2>/dev/null | head -1)
-    [ -n "$_head_mtime" ] || continue
+    # Linked worktrees store $_wt/.git as a gitfile, not a directory, so
+    # `find $_wt/.git -name HEAD` never matches. Resolve HEAD through git.
+    _head=$(git -C "$_wt" rev-parse --git-path HEAD 2>/dev/null) || continue
+    [ -f "$_head" ] || continue
+    _head_old=$(find "$_head" -maxdepth 0 -mmin +120 2>/dev/null | head -1)
+    [ -n "$_head_old" ] || continue
     _recent=$(find "$_wt" -type f -mmin -120 2>/dev/null | head -1)
     [ -z "$_recent" ] || continue
     rm -rf "$_wt"
