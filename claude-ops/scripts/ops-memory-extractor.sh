@@ -50,6 +50,9 @@ trap cleanup EXIT
 
 # ── Resolve auth (Claude Code OAuth preferred, API key fallback) ──────────────
 # Preference order:
+#   0. Local proxy (CLIProxyAPI) — ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN,
+#      taken from the environment, or read out of ~/.claude/settings.json's
+#      `env` block when the scheduler did not export them. Both are required.
 #   1. Claude Code OAuth token from macOS Keychain — uses your Claude Max/Pro
 #      subscription (no per-token API billing). Works out of the box if you're
 #      signed into Claude Code on this machine. Skipped if the token is expired
@@ -87,6 +90,38 @@ resolve_auth() {
   # api.anthropic.com, which rejects it.
   local _proxy_base="${ANTHROPIC_BASE_URL:-}"
   local _proxy_tok="${ANTHROPIC_AUTH_TOKEN:-}"
+
+  # Claude Code injects settings.json's `env` block into its own sessions, so a
+  # proxy configured only there is visible to anything running INSIDE a Claude
+  # session and invisible to this script, which cron and launchd start with a
+  # bare environment. That asymmetry is nasty to debug: run the script by hand
+  # and it authenticates, leave it to the scheduler and it dies with "No auth
+  # available" every 30 minutes. Read the file directly when the vars are unset.
+  if [[ -z "${_proxy_tok}" || -z "${_proxy_base}" ]]; then
+    local _settings="${HOME}/.claude/settings.json"
+    if [[ -r "${_settings}" ]] && command -v python3 &>/dev/null; then
+      local _from_settings
+      _from_settings=$(python3 - "${_settings}" <<'PYEOF' 2>/dev/null || true
+import json, sys
+try:
+    env = (json.load(open(sys.argv[1])) or {}).get("env") or {}
+except Exception:
+    sys.exit(0)
+base = (env.get("ANTHROPIC_BASE_URL") or "").strip()
+tok = (env.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
+if base and tok:
+    # Tab-separated: neither value may contain one.
+    print(base + "\t" + tok)
+PYEOF
+      )
+      if [[ -n "${_from_settings}" ]]; then
+        _proxy_base="${_from_settings%%$'\t'*}"
+        _proxy_tok="${_from_settings#*$'\t'}"
+        log "Auth: proxy config read from ${_settings} (not in environment)"
+      fi
+    fi
+  fi
+
   if [[ -n "${_proxy_tok}" && -n "${_proxy_base}" ]]; then
     OPS_BASE_URL="${_proxy_base}"
     OPS_AUTH_HEADER="Authorization: Bearer ${_proxy_tok}"
@@ -128,8 +163,14 @@ except Exception:
     # "Claude Code-credentials" items (e.g. an mcpOAuth-only blob under another
     # account), and an unscoped lookup returns whichever matches first — which
     # may lack claudeAiOauth even when a valid token exists under $USER.
+    # ${USER:-}, not $USER: cron and launchd start this script with a bare
+    # environment where USER is unset, and `set -u` turns that into an
+    # "unbound variable" abort before any auth fallback is reached -- an
+    # obscure crash in place of a useful error. id -un is the reliable source.
     token=""
-    for _kc_acct in "$USER" ""; do
+    local _kc_user="${USER:-}"
+    [[ -z "${_kc_user}" ]] && _kc_user=$(id -un 2>/dev/null || true)
+    for _kc_acct in "${_kc_user}" ""; do
       if [[ -n "${_kc_acct}" ]]; then
         blob=$(security find-generic-password -s "Claude Code-credentials" -a "${_kc_acct}" -w 2>/dev/null || true)
       else
@@ -183,7 +224,7 @@ except Exception:
     return 0
   fi
 
-  die "No auth available; tried Claude Code OAuth (keychain), \$ANTHROPIC_API_KEY, keychain ANTHROPIC_API_KEY, and doppler"
+  die "No auth available; tried local proxy (env + ~/.claude/settings.json env block), Claude Code OAuth (keychain), \$ANTHROPIC_API_KEY, keychain ANTHROPIC_API_KEY, and doppler"
 }
 
 # Back-compat alias so older callers / forks still work
