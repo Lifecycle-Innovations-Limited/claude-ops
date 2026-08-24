@@ -5,7 +5,12 @@ set -euo pipefail
 # Clean temp bridge files (formerly wacli temp files)
 rm -f /tmp/wacli-sync-probe-*.log /tmp/wacli-bootstrap-*.log 2>/dev/null || true
 
-# Clean stale agent worktrees older than 2 hours
-find "$HOME/Projects/claude-ops/.worktrees" -maxdepth 1 -type d -mmin +120 -exec rm -rf {} \; 2>/dev/null || true
+# Clean stale agent worktrees older than 2 hours.
+# Check every known checkout root — a hardcoded ~/Projects path silently
+# cleans nothing on installs that live elsewhere.
+for _root in "$HOME/Developer/repos/claude-ops" "$HOME/Developer/active/claude-ops" "$HOME/Projects/claude-ops"; do
+  [ -d "$_root/.worktrees" ] || continue
+  find "$_root/.worktrees" -maxdepth 1 -mindepth 1 -type d -mmin +120 -exec rm -rf {} \; 2>/dev/null || true
+done
 
 exit 0
