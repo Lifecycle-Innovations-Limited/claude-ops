@@ -48,14 +48,22 @@ Before routing, compute where the user is on the lifecycle:
 # cwd, but pass an explicit path when the harness's tool cwd is not the project
 # (see the mode-resolution note below).
 FLOW_TARGET="${FLOW_TARGET:-$PWD}"
+FLOW_STATE=""
 for _d in "${CLAUDE_PLUGIN_ROOT:-}" \
           "$HOME/Developer/repos/claude-ops/claude-ops" \
           "$HOME/external-skills/claude-ops" \
           "$HOME/.claude/plugins/marketplaces/ops-marketplace/claude-ops" \
           "$HOME/Projects/claude-ops/claude-ops"; do
-  [ -n "$_d" ] && [ -x "$_d/bin/flow-state" ] && "$_d/bin/flow-state" "$FLOW_TARGET" && break
+  [ -n "$_d" ] && [ -x "$_d/bin/flow-state" ] && { FLOW_STATE="$_d/bin/flow-state"; break; }
 done
+[ -n "$FLOW_STATE" ] || { echo "flow: no executable bin/flow-state found" >&2; exit 1; }
+"$FLOW_STATE" "$FLOW_TARGET"
 ```
+
+Both failures are **fail-closed on purpose**. If no helper resolves, or the
+target path is not a directory, stop and say so — do not route. `MODE` is what
+decides GSD vs gstack, so routing without it silently picks the wrong half of
+the lifecycle, which is worse than an error.
 
 Use `${CLAUDE_PLUGIN_ROOT:-}`, not `$CLAUDE_PLUGIN_ROOT`: the bare form aborts
 under `set -u`, and an unguarded `${CLAUDE_PLUGIN_ROOT}/bin/flow-state` expands
@@ -161,9 +169,12 @@ Route `$ARGUMENTS` (first token = intent) using this table:
 
 ### Bare `/flow`
 
-If `$ARGUMENTS` is empty: `Read LIFECYCLE-MAP.md`, then run `bin/flow-state`, and
-present the lifecycle map with the current position highlighted. Offer the
-next canonical stage as the suggested action. **Do not auto-advance.**
+If `$ARGUMENTS` is empty: `Read LIFECYCLE-MAP.md`, then reuse the Runtime
+Context result above (the same `"$FLOW_STATE" "$FLOW_TARGET"` invocation — do
+not call `bin/flow-state` bare, it would report on the harness's cwd rather
+than the project), and present the lifecycle map with the current position
+highlighted. Offer the next canonical stage as the suggested action.
+**Do not auto-advance.**
 
 ## CLI/API Reference
 
