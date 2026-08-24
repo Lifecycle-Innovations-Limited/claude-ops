@@ -61,7 +61,7 @@ This prints: mode (PROJECT / AD-HOC), current `.planning/` phase (if any),
 open PRs, and deploy state — the "you are here" marker. Read it first so
 mode-sensitive routes (build / ship / review) resolve correctly.
 
-The canonical map lives in `FLOW.md` (same dir). Read it when you need the
+The canonical map lives in `LIFECYCLE-MAP.md` (same dir). Read it when you need the
 full per-stage ownership table; the dispatch table below is the routing copy.
 
 ---
@@ -82,7 +82,7 @@ Route `$ARGUMENTS` (first token = intent) using this table:
 
 | Intent keywords                                           | Resolves to                                                                                                                         |
 | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| (empty), map, here, where                                 | print map (`Read FLOW.md`) + `bin/flow-state` output. **Stop — do not delegate.**                                                   |
+| (empty), map, here, where                                 | print map (`Read LIFECYCLE-MAP.md`) + `bin/flow-state` output. **Stop — do not delegate.**                                                   |
 | ideate, brainstorm, office-hours                          | `/office-hours`                                                                                                                     |
 | hard-truths, yolo                                         | `/ops:ops-yolo`                                                                                                                     |
 | spec, specify, scope, issue                               | `/spec $REST`                                                                                                                       |
@@ -143,7 +143,7 @@ Route `$ARGUMENTS` (first token = intent) using this table:
 
 ### Bare `/flow`
 
-If `$ARGUMENTS` is empty: `Read FLOW.md`, then run `bin/flow-state`, and
+If `$ARGUMENTS` is empty: `Read LIFECYCLE-MAP.md`, then run `bin/flow-state`, and
 present the lifecycle map with the current position highlighted. Offer the
 next canonical stage as the suggested action. **Do not auto-advance.**
 

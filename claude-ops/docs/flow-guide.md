@@ -44,7 +44,7 @@ You never choose the mode — the router does, from `bin/flow-state`.
 
 ## Canonical command per stage
 
-The authoritative table lives in [`skills/flow/FLOW.md`](../skills/flow/FLOW.md). Edit there,
+The authoritative table lives in [`skills/flow/LIFECYCLE-MAP.md`](../skills/flow/LIFECYCLE-MAP.md). Edit there,
 not in three separate doctrines. The same map is mirrored in `~/.claude/CLAUDE.md` under
 **FLOW DOCTRINE**.
 
@@ -65,5 +65,5 @@ Ownership boundaries that are now **sole-owner**:
 ## Files
 
 - `skills/flow/SKILL.md` — the router
-- `skills/flow/FLOW.md` — canonical lifecycle map (single source of truth)
+- `skills/flow/LIFECYCLE-MAP.md` — canonical lifecycle map (single source of truth)
 - `bin/flow-state` — "you are here" detector (mode + phase + PRs); `--json` for machines
