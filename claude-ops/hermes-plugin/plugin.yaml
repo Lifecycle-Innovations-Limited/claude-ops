@@ -1,4 +1,4 @@
 name: ops
-version: "3.9.3"
+version: "3.9.4"
 description: "claude-ops on Hermes — slash commands and skills for inbox, deploy, revenue, and the rest of the ops suite. Enable with plugins.enabled: [ops]."
 author: Lifecycle Innovations Limited
