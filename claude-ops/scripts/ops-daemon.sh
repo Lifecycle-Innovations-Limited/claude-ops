@@ -785,7 +785,16 @@ if urgent:
 # avoids spawning a process only for it to exit on the lock.
 trigger_smart_memory_extraction() {
   local MEMORY_TRIGGER="$DATA_DIR/cache/.memory_trigger_ts"
-  local MEM_SCRIPT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")}/scripts/ops-memory-extractor.sh"
+  # Prefer the desk wrapper when it is installed. It runs the same extractor,
+  # but with OPS_DATA_DIR pointed at a staging root that holds no contact_*.md,
+  # so no contact list reaches the prompt, and it files the run's person output
+  # in the relationship desk instead of in flat memory. Without this line the
+  # cron path would go through the wrapper (see daemon-services.json) while
+  # this 10-minute trigger kept writing contact_*.md straight into memories/.
+  local MEM_SCRIPT="$DATA_DIR/bin/ops-memory-to-desk.sh"
+  if [[ ! -x "$MEM_SCRIPT" ]]; then
+    MEM_SCRIPT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")}/scripts/ops-memory-extractor.sh"
+  fi
   # Minimum seconds between any two extraction runs, whichever trigger starts
   # them. Must stay below the 30-min cron period or it would suppress the
   # scheduled run instead of merely rate-limiting the early one.
