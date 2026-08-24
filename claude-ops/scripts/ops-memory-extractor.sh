@@ -335,14 +335,31 @@ EOF
 
 # ── Read existing memory for context ─────────────────────────────────────────
 read_existing_memory() {
-  local out=""
-  for f in "${MEMORIES_DIR}"/contact_*.md "${MEMORIES_DIR}"/preferences.md \
-            "${MEMORIES_DIR}"/topics_active.md "${MEMORIES_DIR}"/donts.md; do
+  # Bound what goes into the prompt. This whole block is sent to Haiku on every
+  # run, and the store here had grown to ~424KB across 675 files -- roughly 106K
+  # tokens per request, enough that the proxy answered HTTP 504 and the run died
+  # in call_claude. auto_compress, which is what would bring the store back
+  # down, only runs *after* that call, so an oversized store kept itself
+  # oversized. Cap the context instead of the files: nothing on disk is touched,
+  # the newest memories are preferred, and the run completes.
+  local budget="${MAX_CONTEXT_BYTES:-${MAX_TOTAL_BYTES}}"
+  local out="" used=0 skipped=0 f fsize
+  while IFS= read -r f; do
     [[ -f "$f" ]] || continue
+    fsize=$(wc -c < "$f" 2>/dev/null || echo 0)
+    if (( used + fsize > budget )); then
+      skipped=$((skipped + 1))
+      continue
+    fi
+    used=$((used + fsize))
     out+="### $(basename "$f")\n"
     out+=$(cat "$f")
     out+="\n\n"
-  done
+  done < <(ls -t "${MEMORIES_DIR}"/contact_*.md "${MEMORIES_DIR}"/preferences.md \
+                 "${MEMORIES_DIR}"/topics_active.md "${MEMORIES_DIR}"/donts.md 2>/dev/null)
+  if (( skipped > 0 )); then
+    log "Memory context capped at ${budget} bytes (${used} used); ${skipped} older file(s) left out of this run's prompt -- nothing deleted"
+  fi
   printf '%s' "${out}"
 }
 
