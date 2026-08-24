@@ -70,6 +70,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.9.2] - 2026-08-24
+
+### Fixed
+- `/flow` now resolves its lifecycle reference on macOS (renamed the skill's internal map file to avoid a case-insensitive filename collision).
+
+
 ## [3.9.1] - 2026-08-24
 
 ### Fixed
