@@ -38,6 +38,11 @@ SERVICES_CONFIG="$DATA_DIR/daemon-services.json"
 HEALTH_FILE="$DATA_DIR/daemon-health.json"
 MAX_LOG_SIZE=2097152  # 2MB
 DAEMON_START=$(date +%s)
+# Stderr capture files for the external `gog` calls in prefetch_briefing_cache
+# and prefetch_calendar. These exist so a hard failure from gog lands in the log
+# instead of /dev/null; removed by cleanup() on shutdown.
+TMP_GOG_EMAIL_ERR="$DATA_DIR/cache/.gog_email.err"
+TMP_GOG_CAL_ERR="$DATA_DIR/cache/.gog_calendar.err"
 
 mkdir -p "$LOG_DIR"
 mkdir -p "$DATA_DIR/cache"
@@ -657,11 +662,26 @@ print(json.dumps({'total_chats':len(recent),'count':len(data)}))
   _refresh_pids+=($!)
 
   # Email count
-  (command -v gog &>/dev/null && gog gmail search -j --results-only --no-input --max 10 "in:inbox" 2>/dev/null | python3 -c "
+  # Never swallow gog's stderr. This call used 2>/dev/null, so a hard error
+  # ("missing --account", expired auth) came back as an empty result and got
+  # logged as a quiet inbox — the same failure that kept the memory extractor
+  # looking healthy while it extracted nothing. Capture stderr and surface it.
+  (if command -v gog &>/dev/null; then
+    local _email_raw=""
+    _email_raw=$(gog gmail search -j --results-only --no-input --max 10 "in:inbox" 2>"$TMP_GOG_EMAIL_ERR" || true)
+    if [[ -n "$_email_raw" ]]; then
+      printf '%s' "$_email_raw" | python3 -c "
 import json,sys
 data=json.load(sys.stdin)
 print(json.dumps({'unread_count':len(data)}))
-" > "$tmpdir/email.json" 2>/dev/null) &
+" > "$tmpdir/email.json" 2>>"$TMP_GOG_EMAIL_ERR" || true
+    fi
+    if [[ ! -s "$tmpdir/email.json" ]]; then
+      local _gog_err=""
+      [[ -s "$TMP_GOG_EMAIL_ERR" ]] && _gog_err=$(tr '\n' ' ' < "$TMP_GOG_EMAIL_ERR" | cut -c1-300)
+      log "BRAIN: gog gmail search returned no data${_gog_err:+ -- ${_gog_err}} (skipping email count)"
+    fi
+  fi) &
   _refresh_pids+=($!)
 
   # Open PRs
@@ -884,7 +904,15 @@ prefetch_calendar() {
 
   if command -v gog &>/dev/null; then
     log "BRAIN: refreshing calendar cache"
-    gog calendar events primary --today --json > "$CAL_CACHE" 2>/dev/null || echo '[]' > "$CAL_CACHE"
+    # Never swallow gog's stderr. With 2>/dev/null a hard error fell straight
+    # through to the '[]' fallback and was indistinguishable from "no meetings
+    # today", so a broken calendar fetch could run for weeks unnoticed.
+    if ! gog calendar events primary --today --json > "$CAL_CACHE" 2>"$TMP_GOG_CAL_ERR" || [[ ! -s "$CAL_CACHE" ]]; then
+      echo '[]' > "$CAL_CACHE"
+      local _gog_err=""
+      [[ -s "$TMP_GOG_CAL_ERR" ]] && _gog_err=$(tr '\n' ' ' < "$TMP_GOG_CAL_ERR" | cut -c1-300)
+      log "BRAIN: gog calendar returned no data${_gog_err:+ -- ${_gog_err}} (cached empty)"
+    fi
     date +%s > "$LAST_FETCH"
   fi
 }
@@ -1691,6 +1719,7 @@ cleanup() {
   for name in "${!SERVICE_PIDS[@]}"; do
     stop_service "$name"
   done
+  rm -f "$TMP_GOG_EMAIL_ERR" "$TMP_GOG_CAL_ERR"
   write_daemon_health
   log "SHUTDOWN: all services stopped — exiting"
   exit 0
