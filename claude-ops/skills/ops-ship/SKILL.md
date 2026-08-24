@@ -44,7 +44,7 @@ Run the copy inside a git checkout of the repo:
 
 ```bash
 SHIP=""
-for d in ~/Projects/claude-ops-workspace/claude-ops ~/Projects/claude-ops/claude-ops "$HOME"/Projects/*/claude-ops; do
+for d in ~/Developer/repos/claude-ops ~/Projects/claude-ops-workspace/claude-ops ~/Projects/claude-ops/claude-ops "$HOME"/Projects/*/claude-ops; do
   if [ -f "$d/.claude-plugin/marketplace.json" ] && [ -x "$d/claude-ops/bin/ops-ship" ]; then
     SHIP="$d/claude-ops/bin/ops-ship"; break
   fi
