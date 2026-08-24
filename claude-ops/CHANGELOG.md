@@ -70,6 +70,13 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.9.1] - 2026-08-24
+
+### Fixed
+- `FLOW` now routes the full installed toolchain instead of only part of it, so commands are dispatched to the right tool.
+- Corrected an unquoted heredoc in the registry sync script that could expand shell variables in its output.
+
+
 ## [3.9.0] - 2026-08-23
 
 ### Changed
