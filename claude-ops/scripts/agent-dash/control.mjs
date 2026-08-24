@@ -5,7 +5,7 @@
 
 import { spawnSync, execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join, dirname, resolve as pathResolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -35,17 +35,22 @@ function resolveOpsBg() {
   if (process.env.OPS_BG_BIN) return process.env.OPS_BG_BIN;
   // Sibling of this file is the authoritative answer: control.mjs ships at
   // <root>/scripts/agent-dash/control.mjs, so ops-bg is <root>/bin/ops-bg.
-  const sibling = pathResolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'ops-bg');
-  if (existsSync(sibling)) return sibling;
-  for (const c of [
+  const candidates = [
+    pathResolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'ops-bg'),
     `${HOME}/Developer/repos/claude-ops/claude-ops/bin/ops-bg`,
     `${HOME}/external-skills/claude-ops/bin/ops-bg`,
     `${HOME}/.claude/plugins/marketplaces/ops-marketplace/claude-ops/bin/ops-bg`,
     `${HOME}/Projects/claude-ops/claude-ops/bin/ops-bg`,
-  ]) {
-    if (existsSync(c)) return c;
+  ];
+  for (const c of candidates) {
+    try {
+      const st = statSync(c);
+      if (st.isFile() && (st.mode & 0o111)) return c;
+    } catch {
+      // missing path — keep looking
+    }
   }
-  return sibling;
+  return candidates[0];
 }
 const OPS_BG = resolveOpsBg();
 
