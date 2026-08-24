@@ -45,7 +45,7 @@ function resolveOpsBg() {
   for (const c of candidates) {
     try {
       const st = statSync(c);
-      if (st.isFile() && (st.mode & 0o111)) return c;
+      if (st.isFile() && st.mode & 0o111) return c;
     } catch {
       // missing path — keep looking
     }
