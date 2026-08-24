@@ -44,18 +44,31 @@ default), or just route the stage to its single canonical command inline.
 Before routing, compute where the user is on the lifecycle:
 
 ```bash
+# FLOW_TARGET: the project you are actually working on. Default to the shell's
+# cwd, but pass an explicit path when the harness's tool cwd is not the project
+# (see the mode-resolution note below).
+FLOW_TARGET="${FLOW_TARGET:-$PWD}"
 for _d in "${CLAUDE_PLUGIN_ROOT:-}" \
           "$HOME/Developer/repos/claude-ops/claude-ops" \
           "$HOME/external-skills/claude-ops" \
           "$HOME/.claude/plugins/marketplaces/ops-marketplace/claude-ops" \
           "$HOME/Projects/claude-ops/claude-ops"; do
-  [ -n "$_d" ] && [ -x "$_d/bin/flow-state" ] && "$_d/bin/flow-state" && break
+  [ -n "$_d" ] && [ -x "$_d/bin/flow-state" ] && "$_d/bin/flow-state" "$FLOW_TARGET" && break
 done
 ```
 
 Use `${CLAUDE_PLUGIN_ROOT:-}`, not `$CLAUDE_PLUGIN_ROOT`: the bare form aborts
 under `set -u`, and an unguarded `${CLAUDE_PLUGIN_ROOT}/bin/flow-state` expands
 to the absolute path `/bin/flow-state` when the variable is unset.
+
+**Always pass the target path explicitly.** `flow-state` defaults to `$PWD`,
+and on some harnesses the shell tool does NOT run in the directory the user
+launched from — Hermes, for example, runs terminal commands in `$HOME`. A
+bare `flow-state` there inspects the home directory, finds no `.planning/`,
+and reports `MODE=AD-HOC` for every project. PROJECT-MODE then never triggers,
+so the GSD phase state machine is silently unreachable and every request falls
+through to the ad-hoc gstack lifecycle. Resolve the project directory first
+(the repo the user named, or the one under discussion) and pass it.
 
 This prints: mode (PROJECT / AD-HOC), current `.planning/` phase (if any),
 open PRs, and deploy state — the "you are here" marker. Read it first so
@@ -129,9 +142,14 @@ Route `$ARGUMENTS` (first token = intent) using this table:
   `gstack-index` skill lists all 54 names. GSD routes are normal skills and do
   resolve via `skill_view` (`gsd-plan-phase`, `gsd-execute-phase`, ...).
 - **`$REST`** = `$ARGUMENTS` with the leading intent token removed.
-- **Mode resolution**: use the `MODE=` line from `flow-state`. PROJECT when
-  the git root has `.planning/`; AD-HOC otherwise. "multi-project" = the user
-  named >1 repo/project or asked for portfolio-wide work.
+- **Mode resolution**: use the `MODE=` line from `flow-state`, and pass it the
+  PROJECT path (see Runtime Context). PROJECT when the git root has
+  `.planning/`; AD-HOC otherwise. If you did not pass a path and the harness
+  runs shell commands somewhere other than the project (Hermes uses `$HOME`),
+  `MODE` is meaningless — it describes that directory, not the user's work.
+  A universal `AD-HOC` across unrelated projects is the symptom.
+  "multi-project" = the user named >1 repo/project or asked for
+  portfolio-wide work.
 - **Delegation only.** This skill never does the work itself — it invokes the
   canonical command via the `Skill` tool (or prints the route if the target is
   a personal/plugin slash-command the model should call next). After routing,
