@@ -21,6 +21,7 @@ HEALTH_FILE="${MEMORIES_DIR}/.health"
 TMP_RAW="${TMPDIR:-/tmp}/ops-memory-raw-$$.json"
 TMP_PROMPT="${TMPDIR:-/tmp}/ops-memory-prompt-$$.txt"
 TMP_RESPONSE="${TMPDIR:-/tmp}/ops-memory-response-$$.json"
+TMP_GOG_ERR="${TMPDIR:-/tmp}/ops-memory-gog-$$.err"
 MAX_TOTAL_BYTES=51200   # 50KB ceiling across all memory files
 MAX_FILE_BYTES=5120     # 5KB per file before auto-compression
 LOG_PREFIX="[ops-memory-extractor]"
@@ -44,7 +45,7 @@ EOF
 }
 
 cleanup() {
-  rm -f "${TMP_RAW}" "${TMP_PROMPT}" "${TMP_RESPONSE}"
+  rm -f "${TMP_RAW}" "${TMP_PROMPT}" "${TMP_RESPONSE}" "${TMP_GOG_ERR}"
 }
 trap cleanup EXIT
 
@@ -231,6 +232,44 @@ except Exception:
 resolve_api_key() { resolve_auth; }
 
 # ── Collect raw data ──────────────────────────────────────────────────────────
+# Resolve the mailbox gog should read. gog only picks an account implicitly when
+# exactly one token is stored; there are ~20 here, so it always needs --account.
+# The configured default is an OAuth account whose token lives in gog's file
+# keyring, and that keyring cannot be unlocked without a TTY or
+# GOG_KEYRING_PASSWORD -- so the default resolves by hand and fails under
+# launchd, the same environment asymmetry resolve_auth() deals with above.
+# Service-account tokens carry no such requirement and work headlessly.
+resolve_gog_account() {
+  local _acct="${GOG_ACCOUNT:-}"
+  if [[ -n "${_acct}" ]]; then
+    printf '%s' "${_acct}"
+    return 0
+  fi
+
+  # Then this plugin's own preferences. Deliberately NOT settings.json's `env`
+  # block: Claude Code injects that into every session, so a GOG_ACCOUNT there
+  # would silently redirect interactive gog calls too. Keep the daemon's mailbox
+  # choice scoped to the daemon.
+  local _prefs="${HOME}/.claude/plugins/data/ops-ops-marketplace/preferences.json"
+  if [[ -r "${_prefs}" ]] && command -v python3 &>/dev/null; then
+    _acct=$(python3 - "${_prefs}" <<'PYEOF' 2>/dev/null || true
+import json, sys
+try:
+    prefs = json.load(open(sys.argv[1])) or {}
+except Exception:
+    sys.exit(0)
+print((prefs.get("gog_account") or "").strip())
+PYEOF
+    )
+    if [[ -n "${_acct}" ]]; then
+      printf '%s' "${_acct}"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 collect_data() {
   local wa_data="" email_data=""
   local yesterday
@@ -258,10 +297,21 @@ collect_data() {
 
   # Email via gog
   if command -v gog &>/dev/null; then
-    log "Collecting recent emails..."
-    email_data=$(gog gmail search -j --results-only --no-input --max 20 "newer_than:1d" 2>/dev/null || true)
-    if [[ -z "${email_data}" ]]; then
-      log "gog returned no data (skipping)"
+    local gog_acct=""
+    gog_acct=$(resolve_gog_account || true)
+    local -a gog_args=(gmail search -j --results-only --no-input --max 20 "newer_than:1d")
+    [[ -n "${gog_acct}" ]] && gog_args+=(--account "${gog_acct}")
+    log "Collecting recent emails${gog_acct:+ for ${gog_acct}}..."
+    email_data=$(gog "${gog_args[@]}" 2>"${TMP_GOG_ERR}" || true)
+    # An empty array is a successful search with no hits; treat it as no data.
+    if [[ -z "${email_data}" || "${email_data}" == "[]" ]]; then
+      email_data=""
+      # Never swallow gog's stderr. This call used 2>/dev/null, so
+      # "missing --account" was logged as "gog returned no data" and read as
+      # "quiet inbox" for weeks while the daemon extracted nothing at all.
+      local _gog_err=""
+      [[ -s "${TMP_GOG_ERR}" ]] && _gog_err=$(tr '\n' ' ' < "${TMP_GOG_ERR}" | cut -c1-300)
+      log "gog returned no data${_gog_err:+ -- ${_gog_err}} (skipping)"
     fi
   else
     log "gog not available (skipping email)"
