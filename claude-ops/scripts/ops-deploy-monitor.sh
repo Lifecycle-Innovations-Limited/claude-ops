@@ -125,10 +125,15 @@ STATUS=""
 RC=1
 for tick in $(seq 1 "$MAX_TICKS"); do
   if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-    log "poll deadline reached after ${TIMEOUT}s (tick $tick) — giving up on run #$RUN_ID"
-    break
+    log "poll deadline reached after ${TIMEOUT}s (tick $tick) — no verdict on run #$RUN_ID"
+    exit 0
   fi
-  rate_ok || break
+  if ! rate_ok; then
+    # Quota floor is an OBSERVABILITY stop, not a deploy verdict. Falling through
+    # to the failure path here would dispatch a fixer against a run we never read.
+    log "rate floor reached at tick $tick — stopping polling, no verdict on run #$RUN_ID"
+    exit 0
+  fi
   RUN_JSON=$(api "actions/runs/$RUN_ID")
   STATUS=$(echo "$RUN_JSON" | jq -r '.status // ""')
   CONCLUSION=$(echo "$RUN_JSON" | jq -r '.conclusion // ""')

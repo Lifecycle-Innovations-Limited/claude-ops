@@ -626,6 +626,50 @@ test_monitor_rate_discipline() {
 }
 test_monitor_rate_discipline
 
+echo ""
+echo "── Case 13: mid-loop rate gate is not a deploy verdict ───────────"
+# Regression guard. The in-loop rate gate used to be `rate_ok || break`, which
+# left CONCLUSION empty and RC=1, so the script fell through to the FAILURE
+# path and dispatched a fixer against a run it had never successfully read.
+# Case 12 cannot catch this: it starves the bucket before the pre-flight gate,
+# so the loop is never entered. Here the bucket is healthy for the pre-flight
+# read and drops afterwards, which is the only way to reach the in-loop gate.
+test_monitor_midloop_rate_gate() {
+  new_isolated_env "case13-midloop-rate"
+
+  export MOCK_GH_PR_VIEW_JSON='{"baseRefName":"dev","mergeCommit":{"oid":"abcdef1234567890"},"state":"MERGED"}'
+  export MOCK_GH_RUN_LIST_JSON='[{"databaseId":77,"headSha":"abcdef1234567890","name":"deploy"}]'
+  export MOCK_GH_RUN_STATUS="in_progress"
+  export MOCK_GH_RATE_COUNTER_FILE="$TEST_STATE/rate-calls"
+  export MOCK_GH_RATE_DROP_AFTER=2
+  export MOCK_GH_RATE_DROPPED=3
+  ln -sf /usr/bin/true "$TEST_BIN/sleep" 2>/dev/null || true
+
+  bash "$PLUGIN_ROOT/scripts/ops-deploy-monitor.sh" "owner/repo13" "13" >/dev/null 2>&1
+  rc=$?
+  assert_eq "13a.midloop-rate-exit-zero" "0" "$rc"
+
+  monitor_log="$TEST_LOGS/monitor-owner-repo13-pr13.log"
+
+  # The decisive assertion: a quota stop must NOT be reported as a conclusion.
+  if grep -qE 'conclusion=(unknown|) rc=1' "$monitor_log" 2>/dev/null; then
+    fail "13b.no-failure-verdict-on-rate-stop" \
+      "monitor turned a rate stop into a failure verdict in $monitor_log"
+  else
+    pass "13b.no-failure-verdict-on-rate-stop"
+  fi
+
+  if [ ! -s "$TEST_LOGS/claude.log" ]; then
+    pass "13c.no-fixer-on-midloop-rate-stop"
+  else
+    fail "13c.no-fixer-on-midloop-rate-stop" "a fixer was dispatched on a rate stop"
+  fi
+
+  unset MOCK_GH_RUN_STATUS MOCK_GH_RATE_DROP_AFTER MOCK_GH_RATE_DROPPED
+  unset MOCK_GH_RATE_COUNTER_FILE
+}
+test_monitor_midloop_rate_gate
+
 # ===========================================================================
 # SUMMARY
 # ===========================================================================

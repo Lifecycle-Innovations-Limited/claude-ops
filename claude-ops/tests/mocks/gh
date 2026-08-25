@@ -47,7 +47,16 @@ case "$sub" in
 
     case "$path" in
       rate_limit|/rate_limit)
-        emit "{\"resources\":{\"core\":{\"remaining\":${MOCK_GH_RATE_CORE:-5000},\"limit\":5000},\"graphql\":{\"remaining\":${MOCK_GH_RATE_GRAPHQL:-5000},\"limit\":5000}}}"
+        # MOCK_GH_RATE_DROP_AFTER lets a test keep the bucket healthy for the
+        # pre-flight gate and drop it mid-loop, which is the only way to exercise
+        # the in-loop rate gate. Call count persists in a temp file.
+        _core="${MOCK_GH_RATE_CORE:-5000}"
+        if [ -n "${MOCK_GH_RATE_DROP_AFTER:-}" ]; then
+          _cf="${MOCK_GH_RATE_COUNTER_FILE:-${TMPDIR:-/tmp}/mock-gh-rate-calls-${MOCK_GH_RATE_COUNTER_ID:-default}}"
+          _n=$(cat "$_cf" 2>/dev/null || echo 0); _n=$((_n+1)); printf '%s' "$_n" > "$_cf"
+          [ "$_n" -gt "$MOCK_GH_RATE_DROP_AFTER" ] && _core="${MOCK_GH_RATE_DROPPED:-3}"
+        fi
+        emit "{\"resources\":{\"core\":{\"remaining\":${_core},\"limit\":5000},\"graphql\":{\"remaining\":${MOCK_GH_RATE_GRAPHQL:-5000},\"limit\":5000}}}"
         exit 0
         ;;
       */pulls/*)
@@ -64,7 +73,17 @@ case "$sub" in
         ;;
       */actions/runs/[0-9]*)
         rid="${path##*/}"; rid="${rid%%\?*}"
-        emit "{\"id\":${rid},\"status\":\"${MOCK_GH_RUN_STATUS:-completed}\",\"conclusion\":\"${MOCK_GH_RUN_VIEW_CONCLUSION:-success}\"}"
+        rstatus="${MOCK_GH_RUN_STATUS:-completed}"
+        # A run that is not completed has no conclusion yet. Defaulting it to
+        # "success" made every in_progress fixture terminate the monitor on tick 1.
+        if [ -n "${MOCK_GH_RUN_VIEW_CONCLUSION:-}" ]; then
+          rconcl="\"${MOCK_GH_RUN_VIEW_CONCLUSION}\""
+        elif [ "$rstatus" = "completed" ]; then
+          rconcl='"success"'
+        else
+          rconcl='null'
+        fi
+        emit "{\"id\":${rid},\"status\":\"${rstatus}\",\"conclusion\":${rconcl}}"
         exit 0
         ;;
       */actions/runs*)
