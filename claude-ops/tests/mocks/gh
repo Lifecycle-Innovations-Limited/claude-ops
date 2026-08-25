@@ -3,8 +3,15 @@
 #   MOCK_GH_PR_VIEW_JSON   — JSON returned by `gh pr view ... --json ...`
 #   MOCK_GH_RUN_LIST_JSON  — JSON array returned by `gh run list ... --json ...`
 #                            (script will run --jq filter against it)
-#   MOCK_GH_RUN_WATCH_RC   — exit code from `gh run watch` (default 0)
+#   MOCK_GH_RUN_WATCH_RC   — legacy, accepted but unused (gh run watch is banned)
 #   MOCK_GH_RUN_VIEW_CONCLUSION — string conclusion ("success"/"failure"/...)
+#   MOCK_GH_RUN_STATUS     — run status for REST actions/runs/{id} (default "completed")
+#   MOCK_GH_RATE_CORE      — REST core remaining for `gh api rate_limit` (default 5000)
+#   MOCK_GH_RATE_GRAPHQL   — GraphQL remaining for `gh api rate_limit` (default 5000)
+#
+# REST translation: the monitor now reads GitHub over `gh api repos/...`. The
+# MOCK_GH_PR_VIEW_JSON / MOCK_GH_RUN_LIST_JSON fixtures stay in their original
+# (gh --json) shape and are translated here, so existing test cases keep working.
 #   MOCK_GH_RUN_VIEW_LOG_FAILED — stdout for `gh run view ... --log-failed`
 #   MOCK_GH_LOG_FILE       — append every invocation (argv) to this file
 set -u
@@ -17,6 +24,83 @@ shift || true
 sub2="${1:-}"
 
 case "$sub" in
+  api)
+    # Collect the endpoint path (first non-flag arg) and any --jq filter.
+    path=""; api_jq=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --jq|-q) shift; api_jq="${1:-}" ;;
+        -H|--header|-f|-F|--method|-X) shift ;;
+        -*) : ;;
+        *) [ -z "$path" ] && path="$1" ;;
+      esac
+      shift || break
+    done
+
+    emit() {
+      if [ -n "$api_jq" ] && command -v jq >/dev/null 2>&1; then
+        printf '%s' "$1" | jq -r "$api_jq" 2>/dev/null
+      else
+        printf '%s' "$1"
+      fi
+    }
+
+    case "$path" in
+      rate_limit|/rate_limit)
+        # MOCK_GH_RATE_DROP_AFTER lets a test keep the bucket healthy for the
+        # pre-flight gate and drop it mid-loop, which is the only way to exercise
+        # the in-loop rate gate. Call count persists in a temp file.
+        _core="${MOCK_GH_RATE_CORE:-5000}"
+        if [ -n "${MOCK_GH_RATE_DROP_AFTER:-}" ]; then
+          _cf="${MOCK_GH_RATE_COUNTER_FILE:-${TMPDIR:-/tmp}/mock-gh-rate-calls-${MOCK_GH_RATE_COUNTER_ID:-default}}"
+          _n=$(cat "$_cf" 2>/dev/null || echo 0); _n=$((_n+1)); printf '%s' "$_n" > "$_cf"
+          [ "$_n" -gt "$MOCK_GH_RATE_DROP_AFTER" ] && _core="${MOCK_GH_RATE_DROPPED:-3}"
+        fi
+        emit "{\"resources\":{\"core\":{\"remaining\":${_core},\"limit\":5000},\"graphql\":{\"remaining\":${MOCK_GH_RATE_GRAPHQL:-5000},\"limit\":5000}}}"
+        exit 0
+        ;;
+      */pulls/*)
+        # Translate the gh --json PR shape into the REST pulls/{n} shape.
+        _default='{"baseRefName":"dev","mergeCommit":{"oid":"abcdef1234567890"},"state":"MERGED"}'
+        src="${MOCK_GH_PR_VIEW_JSON:-$_default}"
+        emit "$(printf '%s' "$src" | jq -c '{
+          base: {ref: (.baseRefName // "")},
+          merge_commit_sha: (.mergeCommit.oid // ""),
+          merged: ((.state // "") == "MERGED"),
+          state: (if (.state // "") == "MERGED" then "closed" else ((.state // "") | ascii_downcase) end)
+        }' 2>/dev/null)"
+        exit 0
+        ;;
+      */actions/runs/[0-9]*)
+        rid="${path##*/}"; rid="${rid%%\?*}"
+        rstatus="${MOCK_GH_RUN_STATUS:-completed}"
+        # A run that is not completed has no conclusion yet. Defaulting it to
+        # "success" made every in_progress fixture terminate the monitor on tick 1.
+        if [ -n "${MOCK_GH_RUN_VIEW_CONCLUSION:-}" ]; then
+          rconcl="\"${MOCK_GH_RUN_VIEW_CONCLUSION}\""
+        elif [ "$rstatus" = "completed" ]; then
+          rconcl='"success"'
+        else
+          rconcl='null'
+        fi
+        emit "{\"id\":${rid},\"status\":\"${rstatus}\",\"conclusion\":${rconcl}}"
+        exit 0
+        ;;
+      */actions/runs*)
+        # Translate the gh --json run-list array into REST {workflow_runs:[...]}.
+        src="${MOCK_GH_RUN_LIST_JSON:-[]}"
+        emit "$(printf '%s' "$src" | jq -c '{workflow_runs: [ .[] | {
+          id: (.databaseId // .id),
+          head_sha: (.headSha // .head_sha // ""),
+          name: (.name // ""),
+          status: "completed"
+        } ]}' 2>/dev/null)"
+        exit 0
+        ;;
+    esac
+    emit "{}"
+    exit 0
+    ;;
   pr)
     case "$sub2" in
       view)
@@ -59,8 +143,10 @@ case "$sub" in
         exit 0
         ;;
       watch)
-        echo "[mock-gh] watching run"
-        exit "${MOCK_GH_RUN_WATCH_RC:-0}"
+        # `gh run watch` is a banned pattern (hooks/gh-watch-guard.sh denies it).
+        # Fail loudly so a regression cannot pass the suite silently.
+        echo "[mock-gh] FORBIDDEN: gh run watch was invoked" >&2
+        exit 90
         ;;
       view)
         # Detect --log-failed

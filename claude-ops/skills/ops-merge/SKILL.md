@@ -430,7 +430,9 @@ For each repo that has separate `dev` and `main` branches:
    ```
 
 3. If confirmed: create sync PR: `gh pr create --repo <repo> --base main --head dev --title "chore: sync dev → main"`
-4. Wait for CI: `gh pr checks <sync-pr-number> --repo <repo> --watch` (background, max 10 min)
+4. Wait for CI via the approved monitor, never a hand-rolled loop and never
+   `--watch`. `hooks/gh-watch-guard.sh` denies both:
+   `${CLAUDE_PLUGIN_ROOT}/scripts/ops-deploy-monitor.sh <repo> <sync-pr-number>`
 5. If CI green: `gh pr merge <sync-pr-number> --repo <repo> --merge` (merge commit, not squash; never `--admin`)
 6. Pull main back into dev: `git -C <path> fetch origin && git -C <path> checkout dev && git -C <path> merge origin/main --no-edit`
 
@@ -560,13 +562,17 @@ the commit, and say which gate it skipped.
 
 ### Monitor — live CI watching
 
-When waiting for CI after a fixer pushes (Phase 3-4), use `Monitor` to stream the GitHub Actions run output instead of polling:
+When waiting for CI after a fixer pushes (Phase 3-4), call the approved monitor
+script. A hand-rolled `gh api` polling loop is denied by
+`hooks/gh-watch-guard.sh` before it runs, and `gh run watch` is banned outright
+(polls every 2-5s, no tick cap):
 
-```
-Monitor(command: "gh run watch <run-id> --repo <repo>")
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/ops-deploy-monitor.sh <owner/repo> <pr-number>
 ```
 
-This avoids sleep loops and gives real-time feedback on CI progress.
+Tick cap, wall-clock deadline, 25s sleep floor and REST rate gate all live in
+that one script, so the interactive and hook-spawned paths cannot drift apart.
 
 ### Tasks — progress tracking
 

@@ -65,7 +65,11 @@ Before executing, load available context:
 | --------------------------------------------------------------------------------------------------------- | -------------- | ------------------------------ |
 | `gh run list --repo <owner/repo> --limit 5 --json status,conclusion,name,headBranch,createdAt,databaseId` | CI runs        | JSON array                     |
 | `gh run view <id> --repo <repo> --log-failed`                                                             | Failed CI logs | Log output                     |
-| `gh run watch <run-id> --repo <repo>`                                                                     | Stream CI run  | Live output (use with Monitor) |
+| `gh api repos/<repo>/actions/runs/<run-id> --jq .status,.conclusion`                                      | Poll one CI run | JSON fields (REST bucket)     |
+
+`gh run watch` and `gh pr checks --watch` are banned — they poll every 2-5s with no
+cap. `hooks/gh-watch-guard.sh` denies them. Poll the REST endpoint above on a `sleep
+30` floor with a finite tick count instead.
 
 ---
 
@@ -209,11 +213,23 @@ Trigger deploy for [project]:
 
 ### Monitor — live deploy streaming
 
-When watching a deploy in progress, use `Monitor` to stream logs:
+When watching a deploy in progress, call the approved monitor script. Do NOT
+hand-roll a `gh api` polling loop: `hooks/gh-watch-guard.sh` denies any
+for/while/until loop containing a quota-spending `gh` verb, so a hand-rolled
+loop is rejected before it ever polls. `gh run watch` is denied for the same
+reason (it polls every 2-5s with no cap).
 
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/ops-deploy-monitor.sh <owner/repo> <pr-number>
 ```
-Monitor(command: "gh run watch <run-id> --repo <repo>")
-```
+
+That script owns the bounded poll: a tick cap, a wall-clock deadline, a 25s
+sleep floor and a REST rate gate, all in one place. It is also what the
+`bin/ops-deploy-fix-merge-trigger` PostToolUse hook spawns, so the interactive
+path and the automatic path share one implementation and one set of limits.
+
+Only a `/rate_limit`-only loop is exempt from the guard (that endpoint is
+quota-free) — useful for blocking until quota recovers, not for watching a run.
 
 For ECS deploys: `Monitor(command: "aws ecs wait services-stable --cluster <cluster> --services <service>")`
 
