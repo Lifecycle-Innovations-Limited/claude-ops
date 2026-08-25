@@ -430,7 +430,8 @@ For each repo that has separate `dev` and `main` branches:
    ```
 
 3. If confirmed: create sync PR: `gh pr create --repo <repo> --base main --head dev --title "chore: sync dev → main"`
-4. Wait for CI: `gh pr checks <sync-pr-number> --repo <repo> --watch` (background, max 10 min)
+4. Wait for CI with a bounded REST poll (never `--watch`, which is denied by `hooks/gh-watch-guard.sh`):
+   `for i in $(seq 1 20); do gh api repos/<repo>/commits/<sha>/check-runs --jq '[.check_runs[].conclusion]'; sleep 30; done` — 20 ticks x 30s = 10 min ceiling
 5. If CI green: `gh pr merge <sync-pr-number> --repo <repo> --merge` (merge commit, not squash; never `--admin`)
 6. Pull main back into dev: `git -C <path> fetch origin && git -C <path> checkout dev && git -C <path> merge origin/main --no-edit`
 
@@ -560,13 +561,15 @@ the commit, and say which gate it skipped.
 
 ### Monitor — live CI watching
 
-When waiting for CI after a fixer pushes (Phase 3-4), use `Monitor` to stream the GitHub Actions run output instead of polling:
+When waiting for CI after a fixer pushes (Phase 3-4), use `Monitor` with a bounded
+REST poll. `gh run watch` is banned — it polls every 2-5s with no tick cap and
+`hooks/gh-watch-guard.sh` denies it:
 
 ```
-Monitor(command: "gh run watch <run-id> --repo <repo>")
+Monitor(command: "for i in $(seq 1 60); do s=$(gh api repos/<repo>/actions/runs/<run-id> --jq '.status+\" \"+(.conclusion//\"pending\")'); echo \"$s\"; case \"$s\" in completed*) break;; esac; sleep 30; done")
 ```
 
-This avoids sleep loops and gives real-time feedback on CI progress.
+Finite tick count, 30s sleep floor, REST bucket rather than GraphQL.
 
 ### Tasks — progress tracking
 

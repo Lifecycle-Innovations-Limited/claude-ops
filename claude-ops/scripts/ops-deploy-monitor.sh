@@ -4,6 +4,15 @@
 # Spawned by ops-deploy-fix-merge-trigger after a PR merges. Watches the deploy
 # workflow, audits service health, dispatches Haiku fixer on failure.
 # Single-flight via lock; budget-capped per repo per hour; transient detection.
+#
+# Rate discipline (matches ~/.claude/scripts/gh-pr-watch.sh):
+#   * NO `gh run watch` / `gh pr checks --watch` — those poll every 2-5s with no
+#     cap and are denied by hooks/gh-watch-guard.sh.
+#   * Every GitHub read is one-shot `gh api repos/...` (REST bucket), never
+#     `gh pr view --json` / `gh run list --json` (GraphQL-backed).
+#   * `gh api rate_limit` gates each phase. That endpoint is free — it does not
+#     consume quota — so it is safe to call before every poll phase.
+#   * Bounded polling: hard tick cap + sleep floor + wall-clock deadline.
 set -u
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
@@ -22,6 +31,45 @@ LOG="$LOGS_DIR/monitor-$SLUG-pr$PR.log"
 log() { printf '[%s] %s/#%s %s\n' "$(date '+%H:%M:%S')" "$REPO" "$PR" "$*" >> "$LOG"; }
 fire() { log "❌ $*"; printf '[%s] %s/#%s ❌ %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$REPO" "$PR" "$*" >> "$LOGS_DIR/fires.log"; }
 
+# ── Rate discipline ────────────────────────────────────────────────────────
+# Bounded-poll parameters. Every one is overridable via `config`, but the
+# defaults are deliberate:
+#   POLL_SLEEP=30  — floor, never below the 25s house minimum. A deploy that
+#                    finishes between ticks is still caught on the next tick.
+#   RUN_LOOKUP_TICKS=8 / RUN_LOOKUP_SLEEP=15 — a workflow run is registered by
+#                    GitHub within ~2min of a merge; 8 x 15s = 2min covers it.
+#   TIMEOUT=1800   — unchanged from the old `watcher_timeout_seconds` default,
+#                    so the outward behaviour of a slow deploy is the same.
+#   With a 30s floor, 1800s of wall clock is 60 ticks, so MAX_TICKS=60 and the
+#   deadline bind at the same moment. Whichever trips first, the loop stops:
+#   there is no configuration in which this can spin indefinitely.
+POLL_SLEEP=$(config deploy_poll_sleep_seconds 30)
+[ "$POLL_SLEEP" -lt 25 ] 2>/dev/null && POLL_SLEEP=25
+TIMEOUT=$(config watcher_timeout_seconds 1800)
+MAX_TICKS=$(config deploy_poll_max_ticks 60)
+RUN_LOOKUP_TICKS=$(config deploy_run_lookup_ticks 8)
+RUN_LOOKUP_SLEEP=$(config deploy_run_lookup_sleep_seconds 15)
+RATE_FLOOR=$(config gh_rate_floor 200)
+
+# rate_ok — pre-flight gate. `gh api rate_limit` is itself quota-free, so this
+# costs nothing. Returns 1 when the REST (core) bucket is below the floor.
+rate_ok() {
+  local rem
+  rem=$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)
+  case "$rem" in
+    ''|*[!0-9]*) return 0 ;;   # unreadable → do not block the monitor
+  esac
+  if [ "$rem" -lt "$RATE_FLOOR" ]; then
+    log "rate gate: REST core bucket at $rem (floor $RATE_FLOOR) — bailing out, no polling"
+    return 1
+  fi
+  return 0
+}
+
+# One-shot REST reads. All of these land in the core (REST) bucket.
+api() { gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/$1" 2>/dev/null; }
+
+
 # Single-flight monitor lock
 MONITOR_LOCK="monitor-$SLUG-pr$PR"
 lock_acquire "$MONITOR_LOCK" || { log "monitor already running, exit"; exit 0; }
@@ -29,11 +77,19 @@ trap 'lock_release "$MONITOR_LOCK"' EXIT
 
 log "monitor starting"
 
+rate_ok || exit 0
+
 sleep 5
-PR_INFO=$(gh pr view "$PR" --repo "$REPO" --json baseRefName,mergeCommit,state 2>/dev/null)
-BASE=$(echo "$PR_INFO" | jq -r '.baseRefName // ""')
-SHA=$(echo "$PR_INFO" | jq -r '.mergeCommit.oid // ""')
-STATE=$(echo "$PR_INFO" | jq -r '.state // ""')
+# REST pulls/{n}: base.ref, merge_commit_sha, merged. Same three facts the old
+# `gh pr view --json baseRefName,mergeCommit,state` returned, off the REST bucket.
+PR_INFO=$(api "pulls/$PR")
+BASE=$(echo "$PR_INFO" | jq -r '.base.ref // ""')
+SHA=$(echo "$PR_INFO" | jq -r '.merge_commit_sha // ""')
+if [ "$(echo "$PR_INFO" | jq -r '.merged // false')" = "true" ]; then
+  STATE=MERGED
+else
+  STATE=$(echo "$PR_INFO" | jq -r '(.state // "") | ascii_upcase')
+fi
 
 [ "$STATE" != "MERGED" ] && { log "not merged ($STATE) — exit"; exit 0; }
 [ "$BASE" != "dev" ] && [ "$BASE" != "main" ] && { log "base=$BASE, skip"; exit 0; }
@@ -41,32 +97,50 @@ log "merged to $BASE @ $SHA"
 
 # Find deploy workflow run
 PATTERN=$(config deploy_workflow_pattern "deploy|Deploy|build|Build|ECS|cd|CD")
+RUNS_PATH="actions/runs?branch=$BASE&head_sha=$SHA&per_page=10"
 RUN_ID=""
-for i in $(seq 1 12); do
-  RUN_ID=$(gh run list --repo "$REPO" --branch "$BASE" --limit 5 \
-    --json databaseId,headSha,name --jq \
-    ".[] | select(.headSha==\"$SHA\" and (.name | test(\"$PATTERN\"))) | .databaseId" 2>/dev/null | head -1)
+for _ in $(seq 1 "$RUN_LOOKUP_TICKS"); do
+  rate_ok || exit 0
+  RUN_ID=$(api "$RUNS_PATH" \
+    | jq -r --arg p "$PATTERN" \
+        '(.workflow_runs // [])[] | select((.name // "") | test($p)) | .id' 2>/dev/null | head -1)
   [ -n "$RUN_ID" ] && break
-  sleep 15
+  sleep "$RUN_LOOKUP_SLEEP"
 done
 if [ -z "$RUN_ID" ]; then
-  RUN_ID=$(gh run list --repo "$REPO" --branch "$BASE" --limit 5 \
-    --json databaseId,headSha --jq ".[] | select(.headSha==\"$SHA\") | .databaseId" 2>/dev/null | head -1)
+  # No name match — fall back to any run for this SHA.
+  RUN_ID=$(api "$RUNS_PATH" | jq -r '(.workflow_runs // [])[0].id // ""' 2>/dev/null)
 fi
+[ "$RUN_ID" = "null" ] && RUN_ID=""
 [ -z "$RUN_ID" ] && { log "no run found — exit"; exit 0; }
 log "tracking run #$RUN_ID"
 
-# Wait for completion (configurable timeout)
-TIMEOUT=$(config watcher_timeout_seconds 1800)
-gh run watch "$RUN_ID" --repo "$REPO" --exit-status >> "$LOG" 2>&1 &
-WATCH_PID=$!
-( sleep "$TIMEOUT"; kill -9 $WATCH_PID 2>/dev/null ) &
-TIMEOUT_PID=$!
-wait $WATCH_PID; RC=$?
-kill -9 $TIMEOUT_PID 2>/dev/null
-
-CONCLUSION=$(gh run view "$RUN_ID" --repo "$REPO" --json conclusion --jq .conclusion 2>/dev/null)
-log "conclusion=$CONCLUSION rc=$RC"
+# ── Wait for completion: bounded REST polling ─────────────────────────────
+# Replaces `gh run watch`, which blocks, polls every 2-5s internally, and has no
+# tick cap. Three independent stops: MAX_TICKS, the wall-clock DEADLINE, and the
+# rate gate. RC keeps the old contract (0 = success, 1 = anything else).
+DEADLINE=$(( $(date +%s) + TIMEOUT ))
+CONCLUSION=""
+STATUS=""
+RC=1
+for tick in $(seq 1 "$MAX_TICKS"); do
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    log "poll deadline reached after ${TIMEOUT}s (tick $tick) — giving up on run #$RUN_ID"
+    break
+  fi
+  rate_ok || break
+  RUN_JSON=$(api "actions/runs/$RUN_ID")
+  STATUS=$(echo "$RUN_JSON" | jq -r '.status // ""')
+  CONCLUSION=$(echo "$RUN_JSON" | jq -r '.conclusion // ""')
+  [ "$CONCLUSION" = "null" ] && CONCLUSION=""
+  log "tick $tick/$MAX_TICKS status=${STATUS:-?} conclusion=${CONCLUSION:-pending}"
+  if [ "$STATUS" = "completed" ] || [ -n "$CONCLUSION" ]; then
+    break
+  fi
+  sleep "$POLL_SLEEP"
+done
+[ "$CONCLUSION" = "success" ] && RC=0
+log "conclusion=${CONCLUSION:-unknown} rc=$RC"
 
 if [ "$CONCLUSION" != "success" ]; then
   failed_log=$(gh run view "$RUN_ID" --repo "$REPO" --log-failed 2>/dev/null | tail -120)

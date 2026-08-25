@@ -65,7 +65,11 @@ Before executing, load available context:
 | --------------------------------------------------------------------------------------------------------- | -------------- | ------------------------------ |
 | `gh run list --repo <owner/repo> --limit 5 --json status,conclusion,name,headBranch,createdAt,databaseId` | CI runs        | JSON array                     |
 | `gh run view <id> --repo <repo> --log-failed`                                                             | Failed CI logs | Log output                     |
-| `gh run watch <run-id> --repo <repo>`                                                                     | Stream CI run  | Live output (use with Monitor) |
+| `gh api repos/<repo>/actions/runs/<run-id> --jq .status,.conclusion`                                      | Poll one CI run | JSON fields (REST bucket)     |
+
+`gh run watch` and `gh pr checks --watch` are banned — they poll every 2-5s with no
+cap. `hooks/gh-watch-guard.sh` denies them. Poll the REST endpoint above on a `sleep
+30` floor with a finite tick count instead.
 
 ---
 
@@ -209,11 +213,15 @@ Trigger deploy for [project]:
 
 ### Monitor — live deploy streaming
 
-When watching a deploy in progress, use `Monitor` to stream logs:
+When watching a deploy in progress, use `Monitor` with a **bounded** REST poll —
+never `gh run watch`, which polls every 2-5s with no cap and is denied by
+`hooks/gh-watch-guard.sh`:
 
 ```
-Monitor(command: "gh run watch <run-id> --repo <repo>")
+Monitor(command: "for i in $(seq 1 60); do s=$(gh api repos/<repo>/actions/runs/<run-id> --jq '.status+\" \"+(.conclusion//\"pending\")'); echo \"$s\"; case \"$s\" in completed*) break;; esac; sleep 30; done")
 ```
+
+Tick cap 60 x 30s = 30 min hard ceiling; `gh api` spends the REST bucket, not GraphQL.
 
 For ECS deploys: `Monitor(command: "aws ecs wait services-stable --cluster <cluster> --services <service>")`
 

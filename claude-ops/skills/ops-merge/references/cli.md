@@ -13,7 +13,7 @@
 | `gh pr create --repo <repo> --title "<t>" --body "<b>" --base dev`                                                        | Create PR            | PR URL                         |
 | `gh run list --repo <repo> --limit 5 --json conclusion,name,headBranch`                                                   | CI runs              | JSON array                     |
 | `gh run view <id> --repo <repo> --log-failed`                                                                             | Failed CI logs       | Log output                     |
-| `gh run watch <run-id> --repo <repo>`                                                                                     | Stream CI run        | Live output (use with Monitor) |
+| `gh api repos/<repo>/actions/runs/<run-id> --jq .status,.conclusion`                                                      | Poll one CI run      | JSON fields (REST bucket)      |
 | `gh api repos/<repo>/pulls/<n>/comments --jq '.[].body'`                                                                  | PR review comments   | Comment text                   |
 
 ---
