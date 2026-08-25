@@ -23,19 +23,60 @@ else
   RST=""; DIM=""; CYN=""; BCYN=""; BWHT=""; GRN=""; BGRN=""; RED=""; YLW=""
 fi
 
+# Count the latest runnable/zombie states and only call a PID stuck when the
+# same PID remains blocked across all three samples. Kept as one shared helper
+# so regression checks exercise the exact classifier used by the live probe.
+classify_process_state_samples() {
+  awk '
+    FNR == 1 { sample++ }
+    {
+      pid=$1; state=$2
+      if (!(pid in seen)) { seen[pid]=1; total++ }
+      if (sample == 3 && state ~ /^R/) running++
+      if (sample == 3 && state ~ /^Z/) zombies++
+      if (state ~ /^U/) blocked[pid]++
+    }
+    END {
+      persistent=0
+      for (pid in blocked) if (blocked[pid] == 3) persistent++
+      printf "%d %d %d %d", total+0, running+0, persistent+0, zombies+0
+    }
+  ' "$1" "$2" "$3"
+}
+
 # ── Mode flags ───────────────────────────────────────────────────
 MODE_JSON=false; MODE_SCAN=false; MODE_CLEAN=false; MODE_DEEP=false; MODE_AGGRESSIVE=false
-for arg in "$@"; do
-  case "$arg" in
+MODE_CLASSIFY_STATES=false; CLASSIFY_STATE_FILES=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --json) MODE_JSON=true ;;
     --scan|--scan-only) MODE_SCAN=true; MODE_JSON=true ;;
     --clean) MODE_CLEAN=true ;;
     --deep) MODE_DEEP=true; MODE_CLEAN=true ;;
     --aggressive) MODE_AGGRESSIVE=true; MODE_DEEP=true; MODE_CLEAN=true ;;
+    --classify-process-states)
+      MODE_CLASSIFY_STATES=true
+      shift
+      CLASSIFY_STATE_FILES=("${1:-}" "${2:-}" "${3:-}")
+      shift 2
+      ;;
     # Legacy no-ops: defaults already include these
     --safe|--full|--all) ;;
   esac
+  shift
 done
+
+if $MODE_CLASSIFY_STATES; then
+  [[ -n "${CLASSIFY_STATE_FILES[0]}" && -f "${CLASSIFY_STATE_FILES[0]}" &&
+     -n "${CLASSIFY_STATE_FILES[1]}" && -f "${CLASSIFY_STATE_FILES[1]}" &&
+     -n "${CLASSIFY_STATE_FILES[2]}" && -f "${CLASSIFY_STATE_FILES[2]}" ]] || {
+    echo "usage: ops-speedup --classify-process-states SAMPLE1 SAMPLE2 SAMPLE3" >&2
+    exit 2
+  }
+  classify_process_state_samples "${CLASSIFY_STATE_FILES[@]}"
+  printf '\n'
+  exit 0
+fi
 
 # ── OS detection ─────────────────────────────────────────────────
 OS="unknown"; DISTRO=""; IS_MACOS=false; IS_LINUX=false; IS_WSL=false; IS_WINDOWS=false
@@ -268,7 +309,17 @@ probe_runtime() {
       cpu_sys=$(echo "$top_out" | awk -F'[:,%]' '/CPU usage/ {gsub(/^ +| +$/, "", $4); print $4; exit}')
       cpu_idle=$(echo "$top_out" | awk -F'[:,%]' '/CPU usage/ {gsub(/^ +| +$/, "", $6); print $6; exit}')
       load=$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}')
-      process_counts=$(ps -Ao stat= 2>/dev/null | awk 'BEGIN{r=0;u=0;z=0;t=0} {t++} /^R/{r++} /^U/{u++} /^Z/{z++} END{printf "%d %d %d %d",t,r,u,z}')
+      # A single ps snapshot routinely catches short filesystem waits as U.
+      # Report a PID as stuck only when it remains in U across three samples.
+      local states1 states2 states3
+      states1=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
+      states2=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
+      states3=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
+      ps -Ao pid=,stat= 2>/dev/null >"$states1"; sleep 1
+      ps -Ao pid=,stat= 2>/dev/null >"$states2"; sleep 1
+      ps -Ao pid=,stat= 2>/dev/null >"$states3"
+      process_counts=$(classify_process_state_samples "$states1" "$states2" "$states3")
+      rm -f "$states1" "$states2" "$states3"
       tcp_counts=$(netstat -an 2>/dev/null | awk '$6=="CLOSE_WAIT"{cw++} $6=="TIME_WAIT"{tw++} END{printf "%d %d",cw+0,tw+0}')
     elif $IS_LINUX || $IS_WSL; then
       local top_out
