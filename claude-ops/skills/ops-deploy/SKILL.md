@@ -213,15 +213,23 @@ Trigger deploy for [project]:
 
 ### Monitor — live deploy streaming
 
-When watching a deploy in progress, use `Monitor` with a **bounded** REST poll —
-never `gh run watch`, which polls every 2-5s with no cap and is denied by
-`hooks/gh-watch-guard.sh`:
+When watching a deploy in progress, call the approved monitor script. Do NOT
+hand-roll a `gh api` polling loop: `hooks/gh-watch-guard.sh` denies any
+for/while/until loop containing a quota-spending `gh` verb, so a hand-rolled
+loop is rejected before it ever polls. `gh run watch` is denied for the same
+reason (it polls every 2-5s with no cap).
 
-```
-Monitor(command: "for i in $(seq 1 60); do s=$(gh api repos/<repo>/actions/runs/<run-id> --jq '.status+\" \"+(.conclusion//\"pending\")'); echo \"$s\"; case \"$s\" in completed*) break;; esac; sleep 30; done")
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/ops-deploy-monitor.sh <owner/repo> <pr-number>
 ```
 
-Tick cap 60 x 30s = 30 min hard ceiling; `gh api` spends the REST bucket, not GraphQL.
+That script owns the bounded poll: a tick cap, a wall-clock deadline, a 25s
+sleep floor and a REST rate gate, all in one place. It is also what the
+`bin/ops-deploy-fix-merge-trigger` PostToolUse hook spawns, so the interactive
+path and the automatic path share one implementation and one set of limits.
+
+Only a `/rate_limit`-only loop is exempt from the guard (that endpoint is
+quota-free) — useful for blocking until quota recovers, not for watching a run.
 
 For ECS deploys: `Monitor(command: "aws ecs wait services-stable --cluster <cluster> --services <service>")`
 

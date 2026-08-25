@@ -430,8 +430,9 @@ For each repo that has separate `dev` and `main` branches:
    ```
 
 3. If confirmed: create sync PR: `gh pr create --repo <repo> --base main --head dev --title "chore: sync dev → main"`
-4. Wait for CI with a bounded REST poll (never `--watch`, which is denied by `hooks/gh-watch-guard.sh`):
-   `for i in $(seq 1 20); do gh api repos/<repo>/commits/<sha>/check-runs --jq '[.check_runs[].conclusion]'; sleep 30; done` — 20 ticks x 30s = 10 min ceiling
+4. Wait for CI via the approved monitor, never a hand-rolled loop and never
+   `--watch`. `hooks/gh-watch-guard.sh` denies both:
+   `${CLAUDE_PLUGIN_ROOT}/scripts/ops-deploy-monitor.sh <repo> <sync-pr-number>`
 5. If CI green: `gh pr merge <sync-pr-number> --repo <repo> --merge` (merge commit, not squash; never `--admin`)
 6. Pull main back into dev: `git -C <path> fetch origin && git -C <path> checkout dev && git -C <path> merge origin/main --no-edit`
 
@@ -561,15 +562,17 @@ the commit, and say which gate it skipped.
 
 ### Monitor — live CI watching
 
-When waiting for CI after a fixer pushes (Phase 3-4), use `Monitor` with a bounded
-REST poll. `gh run watch` is banned — it polls every 2-5s with no tick cap and
-`hooks/gh-watch-guard.sh` denies it:
+When waiting for CI after a fixer pushes (Phase 3-4), call the approved monitor
+script. A hand-rolled `gh api` polling loop is denied by
+`hooks/gh-watch-guard.sh` before it runs, and `gh run watch` is banned outright
+(polls every 2-5s, no tick cap):
 
-```
-Monitor(command: "for i in $(seq 1 60); do s=$(gh api repos/<repo>/actions/runs/<run-id> --jq '.status+\" \"+(.conclusion//\"pending\")'); echo \"$s\"; case \"$s\" in completed*) break;; esac; sleep 30; done")
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/ops-deploy-monitor.sh <owner/repo> <pr-number>
 ```
 
-Finite tick count, 30s sleep floor, REST bucket rather than GraphQL.
+Tick cap, wall-clock deadline, 25s sleep floor and REST rate gate all live in
+that one script, so the interactive and hook-spawned paths cannot drift apart.
 
 ### Tasks — progress tracking
 
