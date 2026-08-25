@@ -1,5 +1,20 @@
 ## Unreleased
 
+- fix(deploy-fix): `scripts/ops-deploy-monitor.sh` no longer calls `gh run watch`.
+  That call blocks, polls every 2-5s with no tick cap, and is the exact pattern
+  `hooks/gh-watch-guard.sh` denies for every other caller. The monitor is spawned
+  by a PostToolUse hook on any `gh pr merge`, so one merge could arm an uncapped
+  poller. It now polls `gh api repos/{owner}/{repo}/actions/runs/{id}` on a 30s
+  sleep floor, capped at 60 ticks and a 1800s wall-clock deadline. PR and run
+  lookups moved from `gh pr view --json` / `gh run list --json` (GraphQL-backed)
+  to `gh api repos/...` (REST). `gh api rate_limit` — which spends no quota —
+  gates every polling phase and bails out with a log line below 200 remaining.
+  The same banned patterns were removed from `skills/ops-deploy/SKILL.md`,
+  `skills/ops-merge/SKILL.md` and `skills/ops-merge/references/cli.md`, which
+  had been telling agents to run them. `tests/mocks/gh` now serves the REST
+  endpoints and exits 90 if anything invokes `gh run watch`; test case 12 in
+  `tests/test-deploy-fix-hooks.sh` guards the script against regression.
+
 - Slim `ops-inbox` SKILL.md (~6k → ~2k words): runtime, Workflow JS, and Agent Teams moved to `references/`. Rewrite remaining skill descriptions with real NL triggers (Claude / Grok / Hermes share the same `skills/` tree).
 - Sync harness ports: `hermes-plugin/plugin.yaml` version matches `plugin.json`; installer default ref tracks the latest tag; `ops-release` bumps both. Grok still loads the Claude plugin (no `.grok-plugin`). Docs: `.mcp.json` is empty on purpose.
 
