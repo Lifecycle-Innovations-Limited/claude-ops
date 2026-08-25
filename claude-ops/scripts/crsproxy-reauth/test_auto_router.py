@@ -563,5 +563,77 @@ class TestNoSecretsInLogs(unittest.TestCase):
             shutil.rmtree(tmpdir)
 
 
+
+
+class TestUpstreamURLConstruction(unittest.TestCase):
+    """Regression tests for CodeQL py/partial-ssrf (alert #327).
+
+    `proxy_to_upstream` built its target as `upstream + path`, where `path` is
+    the raw request line from an untrusted client. Because `urljoin`-free string
+    concatenation keeps whatever the client sent, a path beginning with `//` or
+    `@` re-points the request at an attacker-controlled HOST while still looking
+    like it targets the local upstream:
+
+        "http://127.0.0.1:8319" + "//evil.com/x"  -> host evil.com
+        "http://127.0.0.1:8319" + "@evil.com/x"   -> host evil.com (userinfo)
+
+    The proxy forwards client headers, so that leaks the upstream Authorization
+    header to the attacker's server. These tests pin the host, not the string.
+    """
+
+    UPSTREAM = "http://127.0.0.1:8319"
+
+    def _host_of(self, path):
+        from urllib.parse import urlsplit
+
+        return urlsplit(router.build_upstream_url(self.UPSTREAM, path)).netloc
+
+    def test_normal_path_is_unchanged(self):
+        self.assertEqual(
+            router.build_upstream_url(self.UPSTREAM, "/v1/chat/completions"),
+            "http://127.0.0.1:8319/v1/chat/completions",
+        )
+
+    def test_query_string_is_preserved(self):
+        self.assertEqual(
+            router.build_upstream_url(self.UPSTREAM, "/v1/models?limit=5"),
+            "http://127.0.0.1:8319/v1/models?limit=5",
+        )
+
+    def test_path_without_leading_slash_is_normalised(self):
+        self.assertEqual(
+            router.build_upstream_url(self.UPSTREAM, "v1/models"),
+            "http://127.0.0.1:8319/v1/models",
+        )
+
+    def test_protocol_relative_path_cannot_change_host(self):
+        self.assertEqual(self._host_of("//evil.com/x"), "127.0.0.1:8319")
+
+    def test_userinfo_path_cannot_change_host(self):
+        self.assertEqual(self._host_of("@evil.com/x"), "127.0.0.1:8319")
+
+    def test_backslash_variant_cannot_change_host(self):
+        self.assertEqual(self._host_of("\\\\evil.com/x"), "127.0.0.1:8319")
+
+    def test_absolute_url_cannot_change_host(self):
+        self.assertEqual(self._host_of("http://evil.com/x"), "127.0.0.1:8319")
+
+    def test_traversal_cannot_escape_upstream_host(self):
+        self.assertEqual(self._host_of("/../../evil"), "127.0.0.1:8319")
+
+    def test_every_hostile_path_keeps_the_upstream_host(self):
+        for hostile in [
+            "//evil.com/x",
+            "///evil.com/x",
+            "@evil.com/x",
+            "http://evil.com/x",
+            "https://evil.com/x",
+            "\\\\evil.com/x",
+            "//user:pass@evil.com/x",
+        ]:
+            with self.subTest(path=hostile):
+                self.assertEqual(self._host_of(hostile), "127.0.0.1:8319")
+
+
 if __name__ == "__main__":
     unittest.main()

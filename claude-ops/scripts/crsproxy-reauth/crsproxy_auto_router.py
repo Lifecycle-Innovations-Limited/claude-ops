@@ -19,6 +19,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -210,12 +211,43 @@ class PressureTracker:
 # ---------------------------------------------------------------------------
 
 
+def build_upstream_url(upstream, path):
+    """Join an untrusted request path onto the trusted upstream base.
+
+    SECURITY (CodeQL py/partial-ssrf): this used to be `upstream + path`, and
+    `path` is the raw request line from any client that can reach the listener.
+    Plain concatenation lets the client re-point the request at a host it
+    chooses while the code still reads as if it targets the local upstream:
+
+        "http://127.0.0.1:8319" + "//evil.com/x" -> host evil.com
+        "http://127.0.0.1:8319" + "@evil.com/x"  -> host evil.com (userinfo)
+
+    Because this proxy forwards the client's headers verbatim, that would hand
+    the upstream Authorization header to an attacker-controlled server.
+
+    The fix keeps only the path and query of whatever was supplied and re-hosts
+    it on the upstream's own scheme/netloc, so the destination host can never be
+    influenced by the request. Backslashes are normalised first: several HTTP
+    stacks treat "\\\\evil.com" as "//evil.com".
+    """
+    base = urllib.parse.urlsplit(upstream)
+    supplied = urllib.parse.urlsplit(str(path or "").replace("\\", "/"))
+
+    safe_path = supplied.path or "/"
+    if not safe_path.startswith("/"):
+        safe_path = "/" + safe_path
+
+    return urllib.parse.urlunsplit(
+        (base.scheme, base.netloc, safe_path, supplied.query, "")
+    )
+
+
 def proxy_to_upstream(upstream, method, path, headers, body, timeout=UPSTREAM_TIMEOUT):
     """Proxy a single request to the upstream cli-proxy-api.
 
     Returns (status_code, response_headers_dict, response_body_bytes).
     """
-    url = upstream + path
+    url = build_upstream_url(upstream, path)
 
     skip = {"host", "connection", "transfer-encoding", "content-length"}
     forward_headers = {k: v for k, v in headers.items() if k.lower() not in skip}
