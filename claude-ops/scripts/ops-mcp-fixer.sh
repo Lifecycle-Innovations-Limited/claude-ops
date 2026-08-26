@@ -94,9 +94,48 @@ Approach:
 5. ONLY if it still fails after 2 attempts: send exactly one desktop notification (osascript on macOS, notify-send on Linux) naming each server, the cause, and the concrete manual action (max 200 chars). On success: NO notification.
 6. Write a 1-3 line summary of what you did to ~/.claude/state/mcp-watchdog/fixer-last-result.txt
 
-Hard limits: delete nothing outside npx caches, never enter passwords, no browser logins, no outbound messages (mail/chat/SMS)."
+Hard limits: delete nothing outside npx caches, never enter passwords, no browser logins, no outbound messages (mail/chat/SMS).
 
-"$CLAUDE_BIN" -p "$PROMPT" --dangerously-skip-permissions --max-turns "$MAX_TURNS" >> "$LOG" 2>&1
+CLOUD INFRASTRUCTURE IS OUT OF SCOPE. Your remit is local MCP servers and the services backing them. Never stop, reboot, terminate or reconfigure cloud resources (EC2, RDS, IAM, security groups, Global Accelerator, CloudFront, Route53, Terraform), on any cloud, for any reason. Read-only calls for diagnosis are fine. A previous fixer run chasing an unrelated MCP fault stopped the EC2 instance hosting the LLM proxy, which took down every model call on the machine including its own. If you conclude cloud infrastructure is the root cause, that is a correct and useful finding: do not act on it, send one desktop notification naming the resource and the evidence, and stop."
+
+# ── Infra guard ──────────────────────────────────────────────────────────────
+# The prompt above is guidance; this is not. A PreToolUse hook denies
+# destructive cloud commands however the agent phrases them. --settings needs an
+# absolute path to the hook, so the file is generated per run rather than
+# shipped, which also keeps it correct when the plugin moves between versioned
+# install directories.
+GUARD_HOOK="$SCRIPT_DIR/../hooks/mcp-fixer-infra-guard.py"
+GUARD_ARGS=()
+if [ -f "$GUARD_HOOK" ]; then
+  GUARD_SETTINGS="$STATE_DIR/fixer-guard-settings.json"
+  python3 - "$GUARD_HOOK" > "$GUARD_SETTINGS" <<'PY'
+import json, sys
+hook = sys.argv[1]
+json.dump({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+    {"type": "command", "command": f'/usr/bin/env python3 "{hook}"', "timeout": 8}
+]}]}}, sys.stdout)
+PY
+  if [ -s "$GUARD_SETTINGS" ]; then
+    GUARD_ARGS=(--settings "$GUARD_SETTINGS")
+  fi
+fi
+if [ ${#GUARD_ARGS[@]} -eq 0 ]; then
+  # Never fail open silently: an unguarded fixer is exactly how the incident above happened.
+  log "WARNING: infra guard unavailable ($GUARD_HOOK) — running unguarded"
+  notify "MCP fixer running unguarded" "infra guard missing — destructive cloud commands are not blocked"
+fi
+
+"$CLAUDE_BIN" -p "$PROMPT" \
+  --dangerously-skip-permissions \
+  "${GUARD_ARGS[@]}" \
+  --disallowedTools \
+    "Bash(aws ec2 stop-instances:*)" \
+    "Bash(aws ec2 terminate-instances:*)" \
+    "Bash(aws ec2 reboot-instances:*)" \
+    "Bash(aws ec2 modify-instance-attribute:*)" \
+    "Bash(aws iam:*)" \
+    "Bash(terraform destroy:*)" \
+  --max-turns "$MAX_TURNS" >> "$LOG" 2>&1
 RC=$?
 log "fixer agent done (exit $RC)"
 
