@@ -85,6 +85,15 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.9.5] - 2026-08-26
+
+### Changed
+### Fixed
+- Stop an untrusted request path from re-pointing the auto-router (#885).
+- Replace `gh run watch` in deploy-fix with bounded REST polling (#886).
+- Stop the MCP repair agent mutating cloud infrastructure (#887).
+
+
 ## [3.9.4] - 2026-08-24
 
 ### Changed
