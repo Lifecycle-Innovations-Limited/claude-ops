@@ -121,6 +121,11 @@ elif [ "$DO_WA" = 1 ]; then
   fi
 fi
 
+# --email-only leaves every branch above unentered, so WA_MSGDB is never assigned.
+# Under `set -u` the bare expansions below (the OIS_WA_MSGDB export, and the settle
+# loop's -f test) then abort the run before any mail is read. Default it once here.
+WA_MSGDB="${WA_MSGDB:-}"
+
 WA_STORE="$(dirname "${WA_MSGDB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}")"
 WA_WADB="$WA_STORE/whatsapp.db"
 BRIDGE_PORT="${BRIDGE_PORT:-8080}"
