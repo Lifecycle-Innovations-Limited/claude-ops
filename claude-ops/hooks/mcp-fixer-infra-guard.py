@@ -51,7 +51,11 @@ DENY_PATTERNS = [
     (r"\baws\b.*\b(globalaccelerator|cloudfront|route53|elbv2|elb)\b"
      r".*\b(delete|update|remove|deregister|disable)\w*",
      "mutating edge, DNS or load-balancer configuration"),
-    (r"\baws\b.*\bs3\b.*\b(rb|rm)\b.*--recursive",
+    # `rb` removes a bucket outright and takes --force rather than --recursive,
+    # so keying only on --recursive would miss the more destructive of the two.
+    (r"\baws\b.*\bs3\b.*\brb\b",
+     "removing an S3 bucket"),
+    (r"\baws\b.*\bs3\b.*\brm\b.*--recursive",
      "recursive S3 deletion"),
     (r"\baws\b.*\bs3api\b.*\bdelete-\w+",
      "S3 deletion"),
@@ -61,15 +65,26 @@ DENY_PATTERNS = [
      "mutating Azure resources"),
     (r"\bssh\b.*\b(shutdown|halt|poweroff|reboot)\b",
      "shutting down or rebooting a remote host"),
-    (r"\bterraform\b\s+(destroy|apply)\b",
+    # Global options may sit between the binary and the subcommand
+    # (`terraform -chdir=/infra destroy`), so do not require adjacency.
+    (r"\bterraform\b[^;&|]*\b(destroy|apply)\b",
      "applying or destroying Terraform state"),
 ]
 
 COMPILED = [(re.compile(p, re.IGNORECASE), why) for p, why in DENY_PATTERNS]
 
 # A dry run asks the API to validate and change nothing, which is exactly the
-# kind of read a diagnosing agent should be encouraged to make.
+# kind of read a diagnosing agent should be encouraged to make. The exemption is
+# applied per segment, never to the whole input: in
+# `aws ec2 describe-instances --dry-run && aws ec2 stop-instances ...` the flag
+# belongs to the harmless half, and honouring it globally would wave the real
+# command through.
 DRY_RUN = re.compile(r"--dry-run\b", re.IGNORECASE)
+
+# Shell operators that separate one command from the next. Splitting on these
+# can only make the guard stricter: a destructive command still lies wholly
+# within one segment, while a flag can no longer vouch for its neighbours.
+SEGMENT_SEPARATORS = re.compile(r"&&|\|\||[;\n|]")
 
 REASON_SUFFIX = (
     "This agent repairs local MCP servers and must not mutate cloud "
@@ -82,13 +97,18 @@ REASON_SUFFIX = (
 
 
 def denial_reason(command):
-    """Return a reason string if the command must be blocked, else None."""
-    normalised = " ".join(command.split())
-    if DRY_RUN.search(normalised):
-        return None
-    for pattern, why in COMPILED:
-        if pattern.search(normalised):
-            return why
+    """Return a reason string if the command must be blocked, else None.
+
+    Each shell segment is judged on its own so that a --dry-run in one command
+    cannot exempt a real mutation chained after it.
+    """
+    for segment in SEGMENT_SEPARATORS.split(command):
+        normalised = " ".join(segment.split())
+        if not normalised or DRY_RUN.search(normalised):
+            continue
+        for pattern, why in COMPILED:
+            if pattern.search(normalised):
+                return why
     return None
 
 

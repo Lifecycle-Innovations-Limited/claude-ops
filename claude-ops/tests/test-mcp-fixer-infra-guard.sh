@@ -54,6 +54,19 @@ MUST_BLOCK = [
     ("recursive bucket wipe", "aws s3 rm s3://some-bucket/ --recursive"),
     ("remote shutdown", "ssh user@host sudo shutdown -h now"),
     ("terraform destroy", "terraform destroy -auto-approve"),
+    # A flag in one segment must not vouch for the next. Without per-segment
+    # evaluation the --dry-run here exempted the whole string, which is the
+    # most dangerous shape this guard can be in: it reads as protected.
+    ("dry-run does not exempt a chained mutation",
+     "aws ec2 describe-instances --dry-run && aws ec2 stop-instances --instance-ids i-0123456789abcdef0"),
+    ("mutation after a semicolon",
+     "echo starting; aws ec2 terminate-instances --instance-ids i-0123456789abcdef0"),
+    ("mutation piped onward",
+     "aws ec2 stop-instances --instance-ids i-0123456789abcdef0 | tee /tmp/out"),
+    # rb takes --force, not --recursive, and removes the bucket outright.
+    ("bucket removal with --force", "aws s3 rb s3://some-bucket --force"),
+    # Global options may precede the subcommand.
+    ("terraform behind a global flag", "terraform -chdir=/infra destroy -auto-approve"),
 ]
 
 # Everything the fixer legitimately does, including read-only cloud diagnosis.
@@ -66,6 +79,11 @@ MUST_PASS = [
     ("clear an npx cache entry", "rm -rf ~/.npm/_npx/abc123"),
     ("probe a local MCP", "curl -sS http://127.0.0.1:8092/health"),
     ("read cloudtrail", "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=StopInstances"),
+    # The exemption is per segment, so it still holds when the dry run is the
+    # segment that carries it.
+    ("read chained with a genuine dry run",
+     "aws ec2 describe-instances && aws ec2 stop-instances --instance-ids i-0123456789abcdef0 --dry-run"),
+    ("single object delete is not a bucket wipe", "aws s3 rm s3://some-bucket/one-file.txt"),
     ("non-Bash tool is ignored", None),
 ]
 
