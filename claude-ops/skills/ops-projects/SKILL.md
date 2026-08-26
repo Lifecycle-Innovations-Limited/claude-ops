@@ -45,15 +45,16 @@ cat ${OPS_DATA_DIR}/cache/projects_health.json
 ## Data flow
 
 ```
-~/Projects/              ~/gsd-workspaces/
-    │                          │
-    ▼                          ▼
- [project]/.planning/    [project]/.planning/
-    │                          │
-    ├── HANDOFF.json           ├── HANDOFF.json     ← active-phase projects
-    ├── STATE.md               ├── MILESTONES.md
-    ├── ROADMAP.md             └── STATE.md
-    └── MILESTONES.md
+$HOME  (walked recursively, depth <= OPS_GSD_SCAN_DEPTH, default 5)
+   + any extra roots listed in OPS_GSD_SCAN_ROOTS (colon-separated)
+              │
+              ▼
+      <any-dir>/.planning/
+              │
+              ├── HANDOFF.json     ← active-phase projects
+              ├── STATE.md
+              ├── ROADMAP.md
+              └── MILESTONES.md
               │
               ▼  ops-gsd-registry-sync.sh (daemon: 6am + 6pm)
                     │
@@ -65,6 +66,20 @@ cat ${OPS_DATA_DIR}/cache/projects_health.json
                               │
                               ▼  ops-projects skill reads this
 ```
+
+### Discovery
+
+`ops-gsd-registry-sync.sh` does not assume a fixed workspace directory. It walks
+`$HOME` and records every `.planning/` directory it finds, so any layout works.
+
+- `OPS_GSD_SCAN_ROOTS` — colon-separated extra roots to walk besides `$HOME`
+  (use this for projects that live outside the home directory)
+- `OPS_GSD_SCAN_DEPTH` — how deep to walk (default 5)
+- `OPS_GSD_SCAN_EXCLUDE` — colon-separated extra directory names to skip
+- `OPS_GSD_INCLUDE_WORKTREES=1` — also scan `.worktrees/` (skipped by default,
+  since worktrees duplicate an existing project)
+
+Build noise (`node_modules`, `.git`, `.venv`, `dist`, caches) is always skipped.
 
 ---
 
@@ -120,7 +135,7 @@ If `$ARGUMENTS` contains a project alias, find it in the registry and show:
 ╔══════════════════════════════════════════════════════════════╗
 ║  PROJECT — [alias]                                           ║
 ╠══════════════════════════════════════════════════════════════╣
-║  Path:      ~/Projects/[alias]/                              ║
+║  Path:      [path from registry]                             ║
 ║  Phase:     [phase]  Status: [status]                       ║
 ║  Milestone: [milestone name]                                ║
 ║  Branch:    [branch]   Dirty: [N]  Unpushed: [N]            ║

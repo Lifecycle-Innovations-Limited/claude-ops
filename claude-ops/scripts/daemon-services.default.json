@@ -57,7 +57,7 @@
       "enabled": true,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-gsd-registry-sync.sh",
       "cron": "0 6,18 * * *",
-      "_note": "Scans ~/Projects and ~/gsd-workspaces for GSD .planning/ dirs, updates central registry and projects_health cache. Runs at 6am and 6pm daily."
+      "_note": "Discovers GSD .planning/ dirs anywhere under $HOME (extra roots via OPS_GSD_SCAN_ROOTS), updates central registry and projects_health cache. Runs at 6am and 6pm daily."
     },
     "inbox-digest": {
       "enabled": false,
