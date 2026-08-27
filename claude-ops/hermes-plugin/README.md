@@ -27,15 +27,16 @@ plugins:
     - ops
 ```
 
-Restart the gateway / CLI. Slash commands (`/ops-inbox`, `/ops-go`, `/ops`)
-and `skill_view("ops:ops-inbox")` become available.
+Restart the gateway / CLI. The installer-mirrored skills provide working slash
+commands (`/ops-inbox`, `/ops-go`, `/ops`), while the native plugin provides
+explicit namespaced loads such as `skill_view("ops:ops-inbox")`.
 
 ## Layout
 
 | Path | Role |
 |---|---|
 | `plugin.yaml` | Hermes manifest (`name: ops`) |
-| `__init__.py` | Registers skills + slash commands |
+| `__init__.py` | Registers namespaced read-only skills |
 | `RUNTIME.md` | Claude Code → Hermes primitive map |
 | `../skills/` | Canonical SKILL.md tree (unchanged) |
 
