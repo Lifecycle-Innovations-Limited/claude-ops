@@ -83,7 +83,7 @@ If you find yourself reaching for any `wacli ...` shell command, stop and use th
 | Full-text search              | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}`                                                                                                                           | `wacli messages search`             |
 | Resolve a contact             | `mcp__whatsapp__search_contacts {query: "<name>"}`                                                                                                                                    | `wacli contacts`                    |
 | Send a reply (after approval) | `mcp__whatsapp__send_message {recipient: "<JID>", message: "<text>"}`                                                                                                                 | `wacli send`                        |
-| Health check                  | `lsof -i :8080 \| grep LISTEN` + (macOS) `launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge"` / (Linux) `systemctl --user is-active whatsapp-bridge.service`                  | `wacli doctor` / `~/.wacli/.health` |
+| Health check                  | `ops-wa-accounts --list`, then `curl -s -o /dev/null -w "%{http_code}" "$WA_API/api/v1/status"` (401 is healthy when the route is Bearer-gated). Never `lsof :8080`, never `launchctl kickstart` unless policy says the bridge is local. | `wacli doctor` / `~/.wacli/.health` |
 | Trigger history backfill      | `curl -fsS -X POST "$WA_API/api/backfill"` (resolve `$WA_API` first — see "WHICH NUMBER" below; claude-ops patch — runs per-chat against the 50 most-recent chats; bridge also auto-backfills 5s after every Connected event) | —                                   |
 
 **Rationale:** the bridge exposes a typed MCP surface, returns consistent JSON shapes (`is_from_me`, `content`, `timestamp`, `sender`), supports FTS5 search natively, and avoids store-lock contention with the wacli keepalive daemon. Mixing the two surfaces caused inconsistent state in past sessions.
@@ -92,42 +92,45 @@ If you find yourself reaching for any `wacli ...` shell command, stop and use th
 
 ## ⚠️ WHICH NUMBER — resolve the account before the first read or send
 
-**This box may run more than one WhatsApp bridge, one per phone number.** They are identical
-processes that differ only by port and store directory. The lowest port answers first, so
-`127.0.0.1:8080` looks authoritative whether or not it is the account you want. Every literal
-`:8080` below is legacy shorthand for "this account's bridge", never an instruction to use 8080.
+**This box may run more than one WhatsApp account.** The bridge process may be local, or it may
+run on another host with this machine as a **client**. Clients dial a local reverse-proxy URL from
+policy (`api` / `bridge_port` in `$PREFS_PATH` `.channels.whatsapp`, written by `/ops:setup`
+step 3b; `$OPS_DATA_DIR/registry.json` `.whatsapp` is the same shape). They never dial a remote
+IP, never guess `:8080`, and never start a local LaunchAgent "to recover" when policy says the
+bridge is elsewhere. A 401 on `$WA_API/api/v1/status` is healthy when that route is Bearer-gated.
 
 **Resolve first, every run, before any read, archive, or send:**
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --list      # every bridge: port, number, agent yes/no
-WA_PORT=$("$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --port)   # the one agent-enabled account
-WA_API="http://127.0.0.1:${WA_PORT}"
+"$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --list      # every account: port, number, agent, api
+# Two agent-enabled accounts: scan EACH, labelled. Do not call --port (exits 3 on purpose).
+# For each agent_enabled account in the JSON: WA_API=$account.api
 ```
 
-`ops-wa-accounts` reads each bridge's `run-bridge.sh` and — authoritatively — the number actually
-paired in its store, then applies `~/.config/whatsapp/agent-policy.json` (never committed; it holds
-real numbers). It exits non-zero rather than pick one when the answer is ambiguous.
+`ops-wa-accounts` reads local `whatsapp-bridge*` stores if present, then **overlays policy**
+from `$PREFS_PATH` (wins), then registry, then legacy `~/.config/whatsapp/agent-policy.json`.
+Policy `api` / `bridge_port` always wins over a leftover local store's launcher port. A client
+box with no `messages.db` is still resolved. It exits 3 rather than pick one account when more
+than one is agent-enabled — that is a loop, not a stop.
 
 **The rules:**
 
-1. **Never hardcode a port, and never use whichever port answers.** Use `$WA_API` from the resolver,
-   or the `whatsapp_account.bridge_port` that `ops-inbox-scan` records in its JSON.
+1. **Never hardcode a port, never use whichever port answers, never probe a remote IP.** Use
+   each account's `api` from the resolver JSON.
 2. **A number can be agent-disabled.** An account with `agent_enabled: false` is off-limits: do not
-   scan it, do not archive it, do not send from it, do not pair or re-pair it. Someone else may be
-   managing that inbox, and traffic from an agent on it is a real-world problem.
-3. **If resolution is ambiguous, stop and ask.** Two enabled accounts, or none, is a question for the
-   user — `AskUserQuestion` with the candidate numbers. It is never a coin flip.
-4. **Reply on the number the thread lives on.** A reply from the wrong number reaches someone who does
-   not recognise the sender, and it leaks which numbers the user owns. Cross-account replies are never
-   an acceptable fallback.
+   scan it, do not archive it, do not send from it, do not pair or re-pair it.
+3. **Two agent-enabled accounts is not ambiguous.** Scan each, keep results labelled by account,
+   reply on the number the thread lives on. Stop and ask only when none are enabled, or when
+   unpolicy'd bridges appear with no `api`.
+4. **Reply on the number the thread lives on.** Cross-account replies are never an acceptable fallback.
 5. **Rule 8 applies to the MCP surface too.** With several accounts the servers are named per account
-   (`mcp__whatsapp-us__*`, `mcp__whatsapp-nl__*`) and a bare `mcp__whatsapp__*` may not exist. Match
-   the registered name; do not assume.
+   (`mcp__whatsapp-personal__*`, `mcp__whatsapp-work__*`) and a bare `mcp__whatsapp__*` may not exist. Match
+   the registered name; do not assume. Hermes `wa status` / `wa thread` / `wa find` is a valid
+   read path on a client box when MCP is down.
 
-**Why this section exists:** on 2026-08-16 a full inbox run followed this skill's hardcoded
-`127.0.0.1:8080` and sent every reply from the number that was supposed to stay untouched. The
-classification was fine. The account was wrong, and nothing in the run could tell.
+**Why this section exists:** a full inbox run once followed this skill's hardcoded
+`127.0.0.1:8080` and sent every reply from the wrong number. Guessing a port, or treating a
+missing local `messages.db` as "WhatsApp down", repeats that class of failure.
 
 ## Runtime Context
 
@@ -185,8 +188,8 @@ deterministically, instead of re-deciding a few hundred rows by eye every run:
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" --scan /tmp/scan.json --json
 # extra WhatsApp account (repeat the pair per account):
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" \
-  --wa-store ~/.local/share/whatsapp-mcp/whatsapp-bridge-us/store/messages.db \
-  --bridge-port 8082
+  --wa-store ~/.local/share/whatsapp-mcp/whatsapp-bridge-<label>/store/messages.db \
+  --bridge-port <port>
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" --apply               # AFTER approval
 ```
 

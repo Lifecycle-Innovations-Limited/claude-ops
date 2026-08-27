@@ -10,7 +10,7 @@ Before executing, load available context:
 
 0. **Auto-sync WhatsApp in the background (DEFAULT — every invocation)** — the FIRST thing this skill does, before any scan or menu, is guarantee the store is fresh, then fire a recent-conversation history backfill **and** a contacts-link in the background, non-blocking.
 
-   **0a. Freshness gate (run FIRST, blocking, bounded).** Before classifying anything, run `~/bin/wa-inbox-fresh.sh` (shipped by `scripts/install-whatsapp-bridge-linux.sh`). It probes the bridge with a real **curl connection probe** (`curl -s -m4 http://127.0.0.1:8080/`), forces a backfill, triggers voice-note transcription, and waits (bounded ~32s) for the newest message to settle, then prints a FRESHNESS report (`newest message = … (N min old)`). It **only restarts the bridge if the curl probe genuinely fails twice** — do NOT gate liveness on `ss | grep :8080`, because `ss` renders port 8080 as the service name `webcache`, so the grep never matches and you'd needlessly bounce a healthy bridge. Exit 2 means the bridge is down and unrecoverable → the store is STALE, do not trust last-sender classification.
+   **0a. Freshness gate (run FIRST, blocking, bounded).** Resolve accounts with `ops-wa-accounts` first. Probe **that account's** `api` (local reverse-proxy from `$PREFS_PATH` / registry), never `:8080`, never a remote IP. If policy has `ssh` + `remote_store`, classify by SSH against the live remote sqlite (`/api/chats/unread` on the bridge host loopback, or `sqlite3` over `ssh`). Do **not** treat a missing local `messages.db` as "WhatsApp down". Do **not** `launchctl kickstart` a leftover local LaunchAgent — that is a duplicate session. `~/bin/wa-inbox-fresh.sh` may still backfill via the resolved `api`. Exit 2 from freshness means that account's proxy/upstream failed; try the policy `ssh` path before skipping the channel.
 
 ### Mac WhatsApp.app fallback (bridge-miss recovery)
 
@@ -29,8 +29,10 @@ The whatsmeow bridge can **silently miss inbound messages** when its history/app
 
   ```bash
   BR="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
-  WA_PORT=$("$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --port) || exit 3   # never assume 8080
-  WA_API="http://127.0.0.1:${WA_PORT}"
+  # Per agent-enabled account: use that account's `api` from ops-wa-accounts JSON.
+  # `--port` exits 3 when more than one account is enabled — that is a loop, not a stop.
+  WA_API="$(python3 -c 'import json,sys; d=json.load(sys.stdin); a=next((x for x in d.get("accounts") or [] if x.get("agent_enabled") and x.get("api")), None); print(a["api"] if a else "")' < <("$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts"))"
+  [ -n "$WA_API" ] || exit 3
   if curl -s -o /dev/null -m 4 "$WA_API/" 2>/dev/null; then
     curl -fsS -m 10 -X POST "$WA_API/api/backfill" >/dev/null 2>&1 &   # recent-conversation backfill
     [ -f "$BR/link_contacts.py" ] && python3 "$BR/link_contacts.py" >/dev/null 2>&1 &  # contacts link (phone + LID aliases)
@@ -77,10 +79,10 @@ The whatsmeow bridge can **silently miss inbound messages** when its history/app
    - `secrets_manager` / `doppler` — how to resolve channel credentials if not in env
 
 3. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
-   - Check `whatsapp-bridge` status — verify `com.${USER}.whatsapp-bridge` is running (`lsof -i :8080` or `launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge"`)
-   - Also verify the **ops mcp-proxy** is up on `:8090` (`lsof -i :8090 | grep LISTEN`) — Claude's MCP client connects through the proxy SSE endpoint, not directly to the bridge. If :8080 is up but :8090 is down, `mcp__whatsapp__*` tools will never load.
-   - If either layer is down, surface the issue before WhatsApp operations
-   - **Do not declare WhatsApp MCP unavailable purely because tools haven't loaded yet** — when both ports are LISTEN, retry `ToolSearch select:mcp__whatsapp__list_chats,...` up to 3× at 5s intervals to let the SSE handshake complete
+   - Check WhatsApp via `ops-wa-accounts` (policy `api` / `ssh`), never `lsof :8080` and never `launchctl kickstart` unless policy says the bridge is local
+   - Also verify the **ops mcp-proxy** is up (`lsof -i :8090 | grep LISTEN` only if this box actually runs that proxy) — Claude's MCP client connects through the proxy SSE endpoint, not directly to the bridge
+   - If the resolved `api` is down, try policy `ssh` before skipping the channel
+   - **Do not declare WhatsApp MCP unavailable purely because tools haven't loaded yet** — when the resolved `api` answers, retry `ToolSearch select:mcp__whatsapp__list_chats,...` up to 3× at 5s intervals to let the SSE handshake complete
 
 4. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/` before drafting any reply:
    - `contact_*.md` — load profile for the contact you're about to reply to
