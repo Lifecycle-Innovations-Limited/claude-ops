@@ -566,23 +566,26 @@ except: print('')
 " 2>/dev/null || true)
   fi
 
-  cat > "$HEALTH_FILE" <<EOF
-{
-  "timestamp": "$now",
-  "pid": $$,
-  "uptime_seconds": $uptime,
-  "version": "$daemon_version",
-  "services": $services_json,
-  "action_needed": $ACTION_NEEDED,
-  "credential_warnings": $cred_warn_json,
-  "rate_limit_warnings": $rate_warn_json,
-  "brain": {
-    "briefing_cached_at": "$brain_briefing_cached_at",
-    "urgent_count": $brain_urgent_count,
-    "last_memory_extraction": "$brain_last_memory_extraction"
+  # Direct builtin write. `cat >file <<EOF` forks a heredoc pipe and
+  # deadlocks once the payload hits bash's 16KiB pipe buffer (stdin is
+  # /dev/null from launchd, so nothing drains the pipe before exec).
+  local tmp="${HEALTH_FILE}.tmp.$$"
+  builtin printf '%s\n' "{
+  \"timestamp\": \"$now\",
+  \"pid\": $$,
+  \"uptime_seconds\": $uptime,
+  \"version\": \"$daemon_version\",
+  \"services\": $services_json,
+  \"action_needed\": $ACTION_NEEDED,
+  \"credential_warnings\": $cred_warn_json,
+  \"rate_limit_warnings\": $rate_warn_json,
+  \"brain\": {
+    \"briefing_cached_at\": \"$brain_briefing_cached_at\",
+    \"urgent_count\": $brain_urgent_count,
+    \"last_memory_extraction\": \"$brain_last_memory_extraction\"
   }
-}
-EOF
+}" >"$tmp" && mv -f "$tmp" "$HEALTH_FILE"
+  rm -f "$tmp"
 }
 
 # ── Cron service runner ───────────────────────────────────────────────────
@@ -1167,10 +1170,10 @@ check_self_upgrade() {
   local cache_dir="$HOME/.claude/plugins/cache/ops-marketplace/ops"
   [[ -d "$cache_dir" ]] || return 0
 
-  # Resolve newest installed version via lexicographic sort (semver-safe enough
-  # for our 2.x line; major bumps are rare and would trigger anyway).
+  # Only semver dirs. `current` and sibling files (ops-daemon-launcher.sh)
+  # sort after 3.x and would either no-op or reload onto the wrong copy.
   local newest
-  newest=$(ls -1 "$cache_dir" 2>/dev/null | sort -V | tail -1)
+  newest=$(ls -1 "$cache_dir" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+' | sort -V | tail -1)
   [[ -n "$newest" ]] || return 0
 
   local newest_root="$cache_dir/$newest"
@@ -1750,9 +1753,7 @@ ensure_all_services "force"
 
 if ! load_services_config; then
   log "FATAL: no services config — writing empty health and sleeping"
-  cat > "$HEALTH_FILE" <<EOF
-{"timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)", "pid": $$, "uptime_seconds": 0, "services": {}, "action_needed": null}
-EOF
+  builtin printf '%s\n' "{\"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"pid\": $$, \"uptime_seconds\": 0, \"services\": {}, \"action_needed\": null}" >"$HEALTH_FILE"
   # In --run-once mode we exit after writing the health file; otherwise
   # sleep forever until SIGTERM (launchd/systemd simple-mode keeps us alive).
   if [[ $OPS_RUN_ONCE -eq 1 ]]; then exit 0; fi

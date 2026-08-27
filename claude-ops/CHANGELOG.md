@@ -1,5 +1,11 @@
 ## Unreleased
 
+- fix(daemon): write `daemon-health.json` with builtin `printf` + `mv`, not
+  `cat >file <<EOF`. Under launchd stdin is `/dev/null`, so bash's 16KiB
+  heredoc pipe never drains and the first health write deadlocks — empty
+  health file, no monitor loop. `check_self_upgrade` now picks the newest
+  semver cache dir only, ignoring `current` and `ops-daemon-launcher.sh`.
+
 - fix(marketing): `ops-marketing-dash --project` no longer inherits the
   default brand's env / plugin-config / owner-level Amplitude, AppsFlyer,
   RevenueCat, Klaviyo, or Instagram credentials. A named project that is not
