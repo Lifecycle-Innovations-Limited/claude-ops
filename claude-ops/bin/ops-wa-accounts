@@ -19,14 +19,30 @@
 #   ops-wa-accounts --port          # just the port of that account
 #   ops-wa-accounts --store         # just the messages.db of that account
 #
-# Policy file (never committed — it holds real numbers):
-#   ~/.config/whatsapp/agent-policy.json
-#     {
-#       "accounts": {
-#         "<e164>": { "agent_enabled": false, "note": "managed by someone else" }
-#       },
-#       "default_agent_enabled": true
+# Account policy (never committed — it holds real numbers). /ops:setup writes
+# it. Later files overlay earlier:
+#   1. ~/.config/whatsapp/agent-policy.json          (legacy)
+#   2. $OPS_DATA_DIR/registry.json  .whatsapp        (gitignored)
+#   3. $PREFS_PATH  .channels.whatsapp               (plugin data dir; wins)
+#
+#   {
+#     "default_agent_enabled": true,
+#     "accounts": {
+#       "<e164>": {
+#         "label": "personal",
+#         "agent_enabled": true,
+#         "api": "http://127.0.0.1:<proxy-port>",
+#         "bridge_port": "<proxy-port>",
+#         "ssh": "user@bridge-host",
+#         "remote_store": "/path/on/host/store/messages.db"
+#       }
 #     }
+#   }
+#
+# Bridges may run on another host. This machine is then a client: `api` is the
+# local reverse-proxy URL (never a remote IP, never a guessed :8080).
+# `bridge_port` is that local listen port. A store path is optional; a client
+# box often has no local messages.db. Template: scripts/registry.example.json.
 #
 # Exit codes: 0 ok · 3 no single agent-enabled account · 4 nothing discovered.
 
@@ -37,6 +53,7 @@ import os
 import re
 import sqlite3
 import sys
+from urllib.parse import urlparse
 
 HOME = os.path.expanduser("~")
 BRIDGE_GLOB = os.environ.get(
@@ -46,6 +63,22 @@ POLICY_PATH = os.environ.get(
     "WHATSAPP_AGENT_POLICY", os.path.join(HOME, ".config/whatsapp/agent-policy.json")
 )
 DEFAULT_BRIDGE_PORT = 8080  # whatsmeow's own default when WA_PORT is unset
+
+
+def _data_dir():
+    return os.environ.get(
+        "CLAUDE_PLUGIN_DATA_DIR",
+        os.path.join(HOME, ".claude/plugins/data/ops-ops-marketplace"),
+    )
+
+
+def _prefs_path():
+    return os.environ.get("PREFS_PATH") or os.path.join(_data_dir(), "preferences.json")
+
+
+def _registry_path():
+    data = os.environ.get("OPS_DATA_DIR") or _data_dir()
+    return os.environ.get("OPS_REGISTRY") or os.path.join(data, "registry.json")
 
 # `export WA_PHONE="${WA_PHONE:-31612345678}"` and friends.
 _DEFAULT_RE = r'{0}=(?:"|\')?\$\{{{0}:-([^}}]*)\}}'
@@ -91,14 +124,76 @@ def _paired_jid(store_dir):
     return str(row[0]).split(":", 1)[0].split("@", 1)[0] or None
 
 
-def _load_policy():
+def _read_json(path):
     try:
-        with open(POLICY_PATH) as fh:
-            pol = json.load(fh)
+        with open(path) as fh:
+            data = json.load(fh)
     except (OSError, ValueError):
-        return {}, None, "no policy file at %s" % POLICY_PATH
-    accounts = pol.get("accounts") or {}
-    return accounts, pol.get("default_agent_enabled"), None
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _accounts_from_blob(blob):
+    """Return (accounts_map, default_agent_enabled) from a policy-shaped dict."""
+    if not isinstance(blob, dict):
+        return {}, None
+    if isinstance(blob.get("accounts"), dict):
+        return dict(blob["accounts"]), blob.get("default_agent_enabled")
+    values = list(blob.values())
+    if values and all(isinstance(v, dict) for v in values):
+        sample = values[0]
+        if any(k in sample for k in ("api", "bridge_port", "agent_enabled", "ssh", "remote_store")):
+            return dict(blob), None
+    return {}, None
+
+
+def _merge_account_maps(base, overlay):
+    out = dict(base or {})
+    for phone, rule in (overlay or {}).items():
+        if not isinstance(rule, dict):
+            continue
+        phone = str(phone)
+        if phone in out and isinstance(out[phone], dict):
+            merged = dict(out[phone])
+            merged.update(rule)
+            out[phone] = merged
+        else:
+            out[phone] = dict(rule)
+    return out
+
+
+def _load_policy():
+    """Merge WhatsApp accounts from legacy policy, registry, then prefs (wins)."""
+    accounts = {}
+    policy_default = None
+
+    pol = _read_json(POLICY_PATH)
+    if pol is not None:
+        a, d = _accounts_from_blob(pol)
+        accounts = _merge_account_maps(accounts, a)
+        if d is not None:
+            policy_default = d
+
+    reg = _read_json(_registry_path())
+    if reg is not None and isinstance(reg.get("whatsapp"), dict):
+        a, d = _accounts_from_blob(reg["whatsapp"])
+        accounts = _merge_account_maps(accounts, a)
+        if d is not None:
+            policy_default = d
+
+    prefs = _read_json(_prefs_path())
+    if prefs is not None:
+        channels = prefs.get("channels") if isinstance(prefs.get("channels"), dict) else {}
+        wa = channels.get("whatsapp")
+        if wa is None:
+            wa = prefs.get("whatsapp")
+        if isinstance(wa, dict):
+            a, d = _accounts_from_blob(wa)
+            accounts = _merge_account_maps(accounts, a)
+            if d is not None:
+                policy_default = d
+
+    return accounts, policy_default, None
 
 
 def discover():
@@ -179,6 +274,8 @@ def discover():
             notes.append("%s: %s" % (acct["label"], acct["mismatch"]))
         found.append(acct)
 
+    found = _merge_policy_clients(found, accounts, policy_default, notes)
+
     enabled = [a for a in found if a["agent_enabled"] is True]
     unknown = [a for a in found if a["agent_enabled"] is None]
 
@@ -196,11 +293,106 @@ def discover():
         notes.append("single bridge and no policy — using %s" % found[0]["label"])
     elif unknown:
         notes.append(
-            "%d accounts have no policy entry — write %s before agents touch them"
-            % (len(unknown), POLICY_PATH)
+            "%d accounts have no policy entry — write channels.whatsapp.accounts "
+            "in %s (or %s) before agents touch them"
+            % (len(unknown), _prefs_path(), POLICY_PATH)
         )
 
-    return {"accounts": found, "default": default, "notes": notes, "policy": POLICY_PATH}
+    return {
+        "accounts": found,
+        "default": default,
+        "notes": notes,
+        "policy": _prefs_path(),
+        "policy_sources": {
+            "prefs": _prefs_path(),
+            "registry": _registry_path(),
+            "legacy": POLICY_PATH,
+        },
+    }
+
+
+def _port_from_api(api):
+    if not api:
+        return None
+    try:
+        p = urlparse(api)
+        if p.port:
+            return int(p.port)
+    except ValueError:
+        return None
+    return None
+
+
+def _merge_policy_clients(found, accounts_pol, policy_default, notes):
+    """Overlay policy `api`/`bridge_port` and add client-only accounts.
+
+    A box can have no local whatsmeow store (the bridge runs on another host).
+    Policy then carries the local reverse-proxy URL the agent must dial.
+    Policy port/api always wins over a leftover local store's launcher port.
+    """
+    by_phone = {}
+    for a in found:
+        if a.get("phone"):
+            by_phone[str(a["phone"])] = a
+
+    for phone, rule in (accounts_pol or {}).items():
+        if not isinstance(rule, dict):
+            continue
+        phone = str(phone)
+        api = (rule.get("api") or "").rstrip("/")
+        port = rule.get("bridge_port") or rule.get("caddy_port")
+        try:
+            port = int(port) if port is not None else _port_from_api(api)
+        except (TypeError, ValueError):
+            port = _port_from_api(api)
+        store = rule.get("store") or ""
+        if not api and port:
+            api = "http://127.0.0.1:%d" % port
+        if not api and not port and not store:
+            continue
+        enabled = rule.get("agent_enabled", policy_default)
+        reason = rule.get("note") or "policy client"
+
+        existing = by_phone.get(phone)
+        ssh = (rule.get("ssh") or "").strip()
+        ssh_fallback = (rule.get("ssh_fallback") or "").strip()
+        remote_store = (rule.get("remote_store") or "").strip()
+        if existing:
+            if port:
+                existing["port"] = port
+            if api:
+                existing["api"] = api
+            if store:
+                existing["store"] = store
+            if ssh:
+                existing["ssh"] = ssh
+            if ssh_fallback:
+                existing["ssh_fallback"] = ssh_fallback
+            if remote_store:
+                existing["remote_store"] = remote_store
+            existing["policy_reason"] = reason
+            if enabled is not None:
+                existing["agent_enabled"] = bool(enabled)
+            continue
+
+        found.append({
+            "label": rule.get("label") or phone,
+            "dir": "",
+            "store": store,
+            "port": port or 0,
+            "api": api or "",
+            "ssh": ssh,
+            "ssh_fallback": ssh_fallback,
+            "remote_store": remote_store,
+            "phone": phone,
+            "phone_configured": phone,
+            "phone_paired": None,
+            "agent_enabled": bool(enabled) if enabled is not None else None,
+            "policy_reason": reason,
+        })
+        by_phone[phone] = found[-1]
+        notes.append("policy client %s → %s" % (phone, api or store or ("port %s" % port)))
+    return found
 
 
 def main():
@@ -216,12 +408,17 @@ def main():
 
     if args.list:
         if not res["accounts"]:
-            print("no whatsmeow bridge found under %s" % BRIDGE_GLOB, file=sys.stderr)
+            print(
+                "no WhatsApp accounts in %s, %s, or %s"
+                % (_prefs_path(), _registry_path(), POLICY_PATH),
+                file=sys.stderr,
+            )
             return 4
-        print("%-24s %-6s %-16s %-8s %s" % ("BRIDGE", "PORT", "PHONE", "AGENT", "STORE"))
+        print("%-24s %-6s %-16s %-8s %s" % ("BRIDGE", "PORT", "PHONE", "AGENT", "API/STORE"))
         for a in res["accounts"]:
             state = {True: "yes", False: "NO", None: "unset"}[a["agent_enabled"]]
-            print("%-24s %-6d %-16s %-8s %s" % (a["label"], a["port"], a["phone"] or "?", state, a["store"]))
+            loc = a.get("api") or a.get("store") or ""
+            print("%-24s %-6s %-16s %-8s %s" % (a["label"], a.get("port") or "-", a["phone"] or "?", state, loc))
         for n in res["notes"]:
             print("note: %s" % n, file=sys.stderr)
         return 0

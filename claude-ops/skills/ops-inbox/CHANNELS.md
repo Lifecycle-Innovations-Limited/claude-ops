@@ -2,50 +2,57 @@
 
 This document explains how to configure each communication channel for the `/ops:ops-inbox` skill. All credentials come from environment variables or CLI auth — **no secrets are committed to this repo**.
 
-## WhatsApp (Baileys bridge)
+## WhatsApp (whatsmeow bridge)
 
-**Status:** MCP-based via `mcp__whatsapp__*` tools. No CLI needed.
+**Status:** MCP (`mcp__whatsapp__*` or per-account `mcp__whatsapp-<label>__*`) plus `bin/ops-wa-accounts`.
 
-The Baileys `whatsapp-bridge` binary runs as a persistent LaunchAgent (`com.${USER}.whatsapp-bridge`)
-and exposes WhatsApp over a local HTTP/MCP interface on port 8080.
+The whatsmeow bridge may run **on this machine** or **on another host**. This client never
+guesses `:8080` and never starts a local LaunchAgent unless policy says the bridge is local.
 
-### Setup
+### Resolve
 
-1. Ensure the bridge binary is installed at `~/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge`
-2. Install the LaunchAgent plist from the template at `assets/launchagents/com.claude-ops.whatsapp-bridge.plist`. The installed plist's Label is parameterized per-user via `${USER}` so each macOS user gets their own bridge:
-   ```bash
-   PLIST="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
-   BRIDGE_DIR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge"
-   sed -e "s|__BRIDGE_BINARY_PATH__|$BRIDGE_DIR/whatsapp-bridge|g" \
-       -e "s|__BRIDGE_WORKING_DIR__|$BRIDGE_DIR|g" \
-       -e "s|__HOME__|$HOME|g" \
-       -e "s|__USER__|$USER|g" \
-       "${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.claude-ops.whatsapp-bridge.plist" > "$PLIST"
-   launchctl bootstrap gui/$(id -u) "$PLIST"
-   ```
-3. On first run the bridge prints a QR code to its log — scan from WhatsApp → Linked Devices.
-4. Run schema migration: `${CLAUDE_PLUGIN_ROOT}/scripts/whatsapp-bridge-migrate.sh`
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --list
+```
+
+Accounts come from local `~/.local/share/whatsapp-mcp/whatsapp-bridge*` stores **and** from
+policy `/ops:setup` writes (never committed):
+
+1. `$PREFS_PATH` → `.channels.whatsapp` (wins)
+2. `$OPS_DATA_DIR/registry.json` → `.whatsapp` (see `scripts/registry.example.json`)
+3. `~/.config/whatsapp/agent-policy.json` (legacy)
+
+A client-only account sets:
+
+```json
+"<e164>": { "label": "personal", "agent_enabled": true, "api": "http://127.0.0.1:<proxy-port>", "bridge_port": "<proxy-port>", "ssh": "user@bridge-host", "remote_store": "/path/on/host/store/messages.db" }
+```
+
+`api` is the local reverse-proxy URL. Do not put a remote IP there. Two agent-enabled
+accounts: scan each, labelled. `--port` exits 3 on purpose.
 
 ### Check health
 
 ```bash
-lsof -i :8080 | grep LISTEN                           # bridge running?
-launchctl list com.${USER}.whatsapp-bridge         # launchd status
-cat ~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log | tail -20
+# Per account from the resolver JSON:
+curl -s -o /dev/null -w "%{http_code}\n" "$WA_API/api/v1/status"
+# 401 = healthy when /api/v1/* is Bearer-gated. 000 = proxy/upstream down.
 ```
 
 ### Troubleshooting
 
-- `bridge not running`: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`
-- Auth expired: check `bridge.err.log` for QR prompt; session stored in `whatsapp.db`
-- Missing messages: restart bridge (re-syncs history on connect)
-- FTS search slow: run `scripts/whatsapp-bridge-migrate.sh` to add FTS5 index
+- **000 / connection refused on the policy `api`:** fix the reverse proxy or the remote
+  bridge. Do **not** `launchctl kickstart` a leftover local plist — that is a duplicate
+  session and kicks the live device off.
+- **Local leftover `messages.db`:** stale. Policy `api`/`bridge_port` wins. Do not scan
+  or send against the leftover store.
+- Auth expired: pairing is human-only on the machine that owns the bridge, never here
+  if this box is a client.
 
 ### Persistence note
 
-The bridge syncs messages continuously while running. History is stored in
-`~/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db`.
-The `WHATSAPP_BRIDGE_DB` env var overrides the DB path.
+Live history lives next to the bridge process. A client box may keep a snapshot DB for
+offline classify (`store` in policy). `WHATSAPP_BRIDGE_DB` overrides a local path only.
 
 ## Email (gog)
 

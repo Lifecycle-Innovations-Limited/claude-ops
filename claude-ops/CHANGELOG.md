@@ -1,5 +1,15 @@
 ## Unreleased
 
+- fix(whatsapp): `ops-wa-accounts` resolves client-of-remote-bridge accounts from
+  `$PREFS_PATH` `.channels.whatsapp` (written by `/ops:setup` step 3b) and
+  `$OPS_DATA_DIR/registry.json` `.whatsapp`, with legacy
+  `~/.config/whatsapp/agent-policy.json` as fallback. Policy `api` /
+  `bridge_port` wins over a leftover local store. Inbox skills probe the
+  resolved `api` (or `ssh` + `remote_store`); they never guess `:8080` and
+  never `launchctl kickstart` a leftover local bridge. `ops-inbox-autosync`
+  posts `/api/backfill` to each resolved `api`. Template:
+  `scripts/registry.example.json`. Tests in `tests/test-ops-wa-accounts.sh`.
+
 - fix(hermes): stop the native plugin registering duplicate `/ops-*` handlers.
   Hermes displays a plugin command handler's return value as the final reply,
   so those handlers echoed an instruction to load the skill and ended the turn

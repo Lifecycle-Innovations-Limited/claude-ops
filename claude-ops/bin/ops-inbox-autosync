@@ -30,10 +30,26 @@ if [ -f "$HOME/.claude/scripts/lib/once.sh" ]; then
 fi
 
 BR="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
-if lsof -i :8080 2>/dev/null | grep -q LISTEN; then
+WA_ACCOUNTS_BIN="$(dirname "$0")/ops-wa-accounts"
+APIS=""
+if [ -x "$WA_ACCOUNTS_BIN" ]; then
+  APIS="$(python3 -c 'import json,sys
+try:
+  d=json.load(sys.stdin)
+except Exception:
+  d={}
+for a in d.get("accounts") or []:
+  if a.get("agent_enabled") and a.get("api"):
+    print(a["api"])
+' < <("$WA_ACCOUNTS_BIN" 2>/dev/null) || true)"
+fi
+if [ -n "$APIS" ]; then
   (
-    curl -fsS -m 10 -X POST http://127.0.0.1:8080/api/backfill >/dev/null 2>&1
-    [ -f "$BR/link_contacts.py" ] && python3 "$BR/link_contacts.py" >/dev/null 2>&1
+    while IFS= read -r api; do
+      [ -n "$api" ] || continue
+      curl -fsS -m 10 -X POST "${api}/api/backfill" >/dev/null 2>&1 || true
+    done <<< "$APIS"
+    [ -f "$BR/link_contacts.py" ] && python3 "$BR/link_contacts.py" >/dev/null 2>&1 || true
   ) >/dev/null 2>&1 &
   disown 2>/dev/null || true
 fi

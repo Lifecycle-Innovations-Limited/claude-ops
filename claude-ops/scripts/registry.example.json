@@ -1,6 +1,21 @@
 {
   "version": "1.0",
   "owner": "Your Name",
+  "whatsapp": {
+    "backend": "whatsapp-bridge",
+    "default_agent_enabled": true,
+    "accounts": {
+      "<e164>": {
+        "label": "personal",
+        "agent_enabled": true,
+        "api": "http://127.0.0.1:<proxy-port>",
+        "bridge_port": "<proxy-port>",
+        "ssh": "",
+        "ssh_fallback": "",
+        "remote_store": ""
+      }
+    }
+  },
   "projects": [
     {
       "alias": "my-app",

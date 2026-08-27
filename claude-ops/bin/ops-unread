@@ -13,30 +13,26 @@ set -euo pipefail
 
 RESULT='{"channels":{}}'
 
-# ── WhatsApp via Baileys bridge ──
-BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
-BRIDGE_RUNNING=0
-if lsof -i :8080 2>/dev/null | grep -q LISTEN; then
-  BRIDGE_RUNNING=1
-fi
-
-if [[ $BRIDGE_RUNNING -eq 1 ]] && [[ -f "$BRIDGE_DB" ]]; then
-  # Count chats with recent activity (7 days) directly from bridge messages.db
-  WA_RECENT=$(sqlite3 "$BRIDGE_DB" "
-    SELECT COUNT(DISTINCT chat_jid) FROM messages
-    WHERE timestamp >= datetime('now', '-7 days');
-  " 2>/dev/null || echo "0")
-  [[ "$WA_RECENT" =~ ^[0-9]+$ ]] || WA_RECENT="0"
-  RESULT=$(echo "$RESULT" | jq \
-    --argjson c "$WA_RECENT" \
-    '.channels.whatsapp = {"recent_chats": $c, "connected": true, "available": true}')
-elif [[ $BRIDGE_RUNNING -eq 0 ]]; then
-  RESULT=$(echo "$RESULT" | jq \
-    --arg uid "${UID:-}" \
-    --arg user "${USER:-}" \
-    '.channels.whatsapp = {"unread": 0, "available": false, "note": ("whatsapp-bridge not running — restart: launchctl kickstart -k gui/" + $uid + "/com." + $user + ".whatsapp-bridge")}')
+# ── WhatsApp: policy/resolver, never assume :8080 ──
+WA_ACCOUNTS_BIN="$(dirname "$0")/ops-wa-accounts"
+if [ -x "$WA_ACCOUNTS_BIN" ]; then
+  WA_JSON="$("$WA_ACCOUNTS_BIN" 2>/dev/null || true)"
 else
-  RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "note": "whatsapp-bridge DB not found — run scripts/whatsapp-bridge-migrate.sh"}')
+  WA_JSON=""
+fi
+WA_N=$(printf '%s' "$WA_JSON" | python3 -c 'import json,sys
+try:
+  d=json.load(sys.stdin)
+  print(len([a for a in d.get("accounts") or [] if a.get("agent_enabled")]))
+except Exception:
+  print(0)
+' 2>/dev/null || echo 0)
+if [ "$WA_N" != "0" ]; then
+  RESULT=$(echo "$RESULT" | jq --argjson n "$WA_N" \
+    '.channels.whatsapp = {"accounts": $n, "available": true, "note": "resolved via ops-wa-accounts; classify via policy api or ssh remote_store"}')
+else
+  RESULT=$(echo "$RESULT" | jq \
+    '.channels.whatsapp = {"unread": 0, "available": false, "note": "no WhatsApp accounts in $PREFS_PATH / registry — run /ops:setup step 3b. Do not launchctl a leftover local bridge."}')
 fi
 
 # ── Email via gog ──
