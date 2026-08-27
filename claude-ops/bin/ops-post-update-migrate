@@ -28,6 +28,10 @@ mkdir -p "$SENTINEL_DIR" 2>/dev/null || true
 rm -f "$SENTINEL_DEFER_FLAG" 2>/dev/null || true
 LOG="$DATA_DIR/post-update-migrate.log"
 mkdir -p "$DATA_DIR" 2>/dev/null || true
+# Tests can isolate the generated plist from ~/Library/LaunchAgents. The launchd
+# safety check remains based on HOME, so this cannot make a sandboxed HOME able
+# to mutate the real GUI domain.
+LAUNCH_AGENTS_DIR="${OPS_MIGRATE_LAUNCHAGENTS_DIR:-$HOME/Library/LaunchAgents}"
 
 log() { printf "[%s] %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 
@@ -203,9 +207,9 @@ run_migrations() {
 
   # 2. Refresh whatsapp-bridge LaunchAgent (idempotent — only writes if template changed)
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    local plist_dst="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
-    local legacy_wa_plist="$HOME/Library/LaunchAgents/com.claude-ops.whatsapp-bridge.plist"
-    local legacy_user_plist="$HOME/Library/LaunchAgents/com.<user>.whatsapp-bridge.plist"
+    local plist_dst="$LAUNCH_AGENTS_DIR/com.${USER}.whatsapp-bridge.plist"
+    local legacy_wa_plist="$LAUNCH_AGENTS_DIR/com.claude-ops.whatsapp-bridge.plist"
+    local legacy_user_plist="$LAUNCH_AGENTS_DIR/com.<user>.whatsapp-bridge.plist"
     if [[ -f "$legacy_wa_plist" && "$legacy_wa_plist" != "$plist_dst" ]]; then
       launchctl_guarded unload "$legacy_wa_plist"
       rm -f "$legacy_wa_plist" 2>/dev/null || true
@@ -218,7 +222,7 @@ run_migrations() {
     fi
     local plist_src="$PLUGIN_ROOT/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
     if [[ -f "$plist_src" ]] && [[ ! -f "$plist_dst" || "$plist_src" -nt "$plist_dst" ]]; then
-      mkdir -p "$HOME/Library/LaunchAgents" 2>/dev/null || true
+      mkdir -p "$LAUNCH_AGENTS_DIR" 2>/dev/null || true
       local bridge_dir="${WHATSAPP_BRIDGE_HOME:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
       # The template supervises via run-bridge.sh, which strips --pair so a
       # logged-out bridge can never re-pair itself unattended (that is what gets
@@ -250,7 +254,7 @@ run_migrations() {
 
   # 3. Decommission deprecated wacli-keepalive plist (idempotent)
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    local stale_plist="$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
+    local stale_plist="$LAUNCH_AGENTS_DIR/com.claude-ops.wacli-keepalive.plist"
     if [[ -f "$stale_plist" ]]; then
       launchctl_guarded unload "$stale_plist"
       rm -f "$stale_plist" 2>/dev/null || true
