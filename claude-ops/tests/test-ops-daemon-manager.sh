@@ -218,6 +218,27 @@ MOCK
   rm -rf "$MOCK_DIR"
 fi
 
+# write_daemon_health must not use `cat >file <<EOF` — that deadlocks under
+# launchd (stdin /dev/null, 16KiB heredoc pipe never drains).
+if grep -n 'cat > "$HEALTH_FILE" <<EOF' "$DAEMON_SCRIPT"; then
+  err "ops-daemon.sh still writes health via cat heredoc (launchd deadlock)"
+else
+  ok "write_daemon_health does not use cat heredoc"
+fi
+
+if grep -q 'builtin printf' "$DAEMON_SCRIPT" && grep -q 'HEALTH_FILE}.tmp' "$DAEMON_SCRIPT"; then
+  ok "write_daemon_health uses builtin printf + temp file"
+else
+  err "write_daemon_health missing builtin printf + tmp write"
+fi
+
+# check_self_upgrade must ignore non-semver cache entries (`current`, launcher.sh)
+if grep -q 'newest=.*grep -E' "$DAEMON_SCRIPT"; then
+  ok "check_self_upgrade newest picker is semver-only"
+else
+  err "check_self_upgrade still sorts every cache_dir name (current / launcher.sh)"
+fi
+
 echo ""
 echo "Results: $pass passed, $fail failed"
 [[ "$fail" == "0" ]]
