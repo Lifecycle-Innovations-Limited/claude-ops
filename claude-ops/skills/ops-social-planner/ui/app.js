@@ -184,7 +184,13 @@ function card(i, tz) {
   if (i.media && i.media.length) {
     const m = i.media[0];
     const md = el('div', { className: 'media' });
-    if (m.thumb || m.url) md.append(el('img', { src: m.thumb || m.url, loading: 'lazy', alt: '' }));
+    const src = m.url || m.thumb;
+    if (src) {
+      const img = el('img', { src, loading: 'lazy', alt: i.title || '', referrerPolicy: 'no-referrer' });
+      md.append(
+        el('a', { href: src, target: '_blank', rel: 'noopener', className: 'media-link', title: 'Open full size' }, img),
+      );
+    }
     if (m.type === 'video') md.append(el('span', { className: 'vid-badge' }, '▶ video'));
     c.append(md);
   }
