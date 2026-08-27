@@ -49,6 +49,45 @@ else
   err "__init__.py failed to compile"
 fi
 
+# Plugin slash command handlers are terminal responses, not agent turns. The
+# installer-mirrored skills own /ops-*; registering the same names here shadows
+# them and only echoes the handler string back to the user.
+registration_json="$(PYTHONPYCACHEPREFIX="$(mktemp -d)" python3 - "$HP/__init__.py" <<'PY'
+import importlib.util
+import json
+import sys
+
+spec = importlib.util.spec_from_file_location("claude_ops_hermes_plugin", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+class Context:
+    def __init__(self):
+        self.skills = []
+        self.commands = []
+
+    def register_skill(self, name, path, description=""):
+        self.skills.append(name)
+
+    def register_command(self, name, **kwargs):
+        self.commands.append(name)
+
+ctx = Context()
+module.register(ctx)
+print(json.dumps({"skills": ctx.skills, "commands": ctx.commands}))
+PY
+)"
+if python3 -c 'import json,sys; d=json.loads(sys.argv[1]); raise SystemExit(0 if "ops-inbox" in d["skills"] and "ops" in d["skills"] else 1)' "$registration_json"; then
+  ok "Hermes plugin registers ops + ops-inbox as namespaced skills"
+else
+  err "Hermes plugin did not register expected namespaced skills"
+fi
+if python3 -c 'import json,sys; d=json.loads(sys.argv[1]); raise SystemExit(0 if d["commands"] == [] else 1)' "$registration_json"; then
+  ok "Hermes plugin does not shadow skill slash commands"
+else
+  err "Hermes plugin still registers shadowing slash commands: $registration_json"
+fi
+
 skill_count=$(find "$PLUGIN_ROOT/skills" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')
 if ((skill_count >= 50)); then
   ok "sibling skills/ has $skill_count SKILL.md files"
