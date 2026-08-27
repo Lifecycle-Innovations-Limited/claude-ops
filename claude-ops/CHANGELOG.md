@@ -109,6 +109,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.9.8] - 2026-08-28
+
+### Changed
+PreToolUse WhatsApp bridge health reads the event from stdin. Do not interpolate $TOOL_INPUT in hook command strings (Grok skips the hook when that env var is unset).
+
+
 ## [3.9.7] - 2026-08-28
 
 ### Changed
