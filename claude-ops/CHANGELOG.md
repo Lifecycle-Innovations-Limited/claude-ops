@@ -1,5 +1,12 @@
 ## Unreleased
 
+- fix(hooks): PreToolUse WhatsApp bridge health no longer interpolates `$TOOL_INPUT`.
+  Grok treats `$VAR` in a hook command as a required env var and skips the hook
+  when it is unset (`hook not executed: required env var(s) not set: ${TOOL_INPUT}`).
+  Claude Code still sends the event JSON on stdin, so the script now reads stdin
+  (argv kept for old callers). Do not put `$TOOL_INPUT` / `$TOOL_RESULT` /
+  `$USER_PROMPT` in `hooks.json` command strings.
+
 - fix(whatsapp): `ops-wa-accounts` resolves client-of-remote-bridge accounts from
   `$PREFS_PATH` `.channels.whatsapp` (written by `/ops:setup` step 3b) and
   `$OPS_DATA_DIR/registry.json` `.whatsapp`, with legacy

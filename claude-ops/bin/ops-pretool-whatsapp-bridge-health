@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # PreToolUse hook: fast whatsapp-bridge health check (backgrounded to avoid blocking)
+# Event JSON arrives on stdin (Claude + Grok). Optional argv kept for old callers.
 set -e
-INPUT="${1:-}"
+if [[ -n "${1:-}" ]]; then
+  INPUT="$1"
+else
+  INPUT=$(cat)
+fi
 echo "$INPUT" | grep -q "whatsapp" || exit 0
 
 # Background the slow checks (lsof, launchctl) so this hook returns instantly.

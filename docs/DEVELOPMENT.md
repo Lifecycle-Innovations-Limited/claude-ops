@@ -216,7 +216,7 @@ Hooks are declared in `claude-ops/claude-ops/hooks/hooks.json`. Three event type
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-wacli-health \"$TOOL_INPUT\" 2>/dev/null || true"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-whatsapp-bridge-health 2>/dev/null || true"
           }
         ]
       }
@@ -238,7 +238,7 @@ Hooks are declared in `claude-ops/claude-ops/hooks/hooks.json`. Three event type
 | Event          | Matcher | Current use                                                  |
 | -------------- | ------- | ------------------------------------------------------------ |
 | `SessionStart` | (all)   | Run `ops-welcome` banner + surface any setup health failures |
-| `PreToolUse`   | `Bash`  | Check wacli health before any Bash call                      |
+| `PreToolUse`   | `Bash`  | Check WhatsApp bridge health. Read the event from stdin; never interpolate `$TOOL_INPUT`. |
 | `Stop`         | (all)   | Post-session cleanup                                         |
 
 Hook commands must always exit `0` (note the `|| true` suffix). A failing hook causes Claude Code to surface an error — never let hooks fail loudly.

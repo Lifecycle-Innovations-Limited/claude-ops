@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-whatsapp-bridge-health \"$TOOL_INPUT\" 2>/dev/null || true",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-whatsapp-bridge-health 2>/dev/null || true",
             "async": true
           }
         ]
