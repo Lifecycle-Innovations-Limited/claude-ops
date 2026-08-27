@@ -43,7 +43,7 @@ Turn Claude Code into a complete business operating system — infrastructure he
 
 | | |
 |---|---|
-| Native Hermes plugin | `hermes-plugin/` → `~/.hermes/plugins/ops`. Slash commands + `skill_view("ops:*")`. |
+| Hermes | Installer mirrors skills into `~/.hermes/skills` for working slash commands and links `hermes-plugin/` for `skill_view("ops:*")`. |
 | Grok | Loads the Claude plugin as-is. No `.grok-plugin`. |
 | Skills | Third-person trigger descriptions, shared preamble, `ops-rules` (plugin-root `CLAUDE.md` is a pointer). Oversized skills split into `references/`. |
 | Versions | `plugin.json` = Hermes `plugin.yaml` = installer pin. `ops-release` keeps them together. |

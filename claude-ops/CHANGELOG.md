@@ -1,5 +1,12 @@
 ## Unreleased
 
+- fix(hermes): stop the native plugin registering duplicate `/ops-*` handlers.
+  Hermes displays a plugin command handler's return value as the final reply,
+  so those handlers echoed an instruction to load the skill and ended the turn
+  before the agent ran anything. The cross-CLI installer already mirrors every
+  claude-ops skill into Hermes' normal skills directory; those native skill
+  slash commands now remain unshadowed and enter the agent loop as intended.
+
 - fix(deploy-fix): `scripts/ops-deploy-monitor.sh` no longer calls `gh run watch`.
   That call blocks, polls every 2-5s with no tick cap, and is the exact pattern
   `hooks/gh-watch-guard.sh` denies for every other caller. The monitor is spawned
