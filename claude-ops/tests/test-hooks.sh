@@ -119,6 +119,40 @@ if command -v jq &>/dev/null; then
   done <<< "$events"
 fi
 
+# 6. Command strings must not interpolate Claude-only payload vars.
+# Grok expands $VAR from the environment and skips the hook if the var is unset:
+#   hook not executed: required env var(s) not set: ${TOOL_INPUT}
+# Claude Code substitutes those tokens before exec; Grok does not. Hooks must
+# read the event JSON from stdin instead.
+echo ""
+echo "Checking command interpolations..."
+if command -v jq &>/dev/null; then
+  bad=$(printf '%s\n' "$commands" | grep -E '\$\{?(TOOL_INPUT|TOOL_RESULT|USER_PROMPT)\}?' || true)
+  if [[ -n "$bad" ]]; then
+    err "command interpolates Claude-only payload var (Grok skips the hook): $bad"
+  else
+    ok "no Claude-only payload interpolations in hook commands"
+  fi
+fi
+
+# 7. WhatsApp PreToolUse hook reads stdin (the event JSON), not argv.
+echo ""
+echo "Checking ops-pretool-whatsapp-bridge-health stdin..."
+HEALTH="$PLUGIN_ROOT/bin/ops-pretool-whatsapp-bridge-health"
+if [[ ! -x "$HEALTH" ]]; then
+  err "bin/ops-pretool-whatsapp-bridge-health missing or not executable"
+else
+  payload='{"toolName":"Bash","toolInput":{"command":"wacli whatsapp send"}}'
+  trace=$(printf '%s' "$payload" | bash -x "$HEALTH" 2>&1 || true)
+  # Payload-only token: the script greps for "whatsapp", so that word appears in
+  # the trace even when stdin is ignored. "wacli" is only in the event JSON.
+  if printf '%s' "$trace" | grep -q 'wacli'; then
+    ok "whatsapp-bridge-health inspects stdin payload"
+  else
+    err "whatsapp-bridge-health ignores stdin; Grok/Claude send the event on stdin, not argv"
+  fi
+fi
+
 echo ""
 echo "---"
 echo "Results: $pass passed, $fail failed"
