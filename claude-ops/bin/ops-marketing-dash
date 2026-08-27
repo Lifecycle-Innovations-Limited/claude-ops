@@ -26,17 +26,28 @@ prefs_get() {
 
 # Project selection: --project <name> arg, OPS_MARKETING_PROJECT env, or
 # marketing.default_project from prefs. Empty if no project context.
-PROJECT=""
+#
+# PROJECT_ISOLATED=1 when the caller named a project that is not the owner
+# default. Env / plugin-config / bare-Doppler / channels.marketing fallbacks
+# belong to the default brand. Using them for another --project paints that
+# brand with the owner's Amplitude, AppsFlyer, RevenueCat, IG, and Klaviyo.
+PROJECT_FROM_ARG=""
 for ((i=1; i<=$#; i++)); do
   if [ "${!i}" = "--project" ]; then
     j=$((i+1))
-    PROJECT="${!j:-}"
+    PROJECT_FROM_ARG="${!j:-}"
     break
   fi
 done
-PROJECT="${PROJECT:-${OPS_MARKETING_PROJECT:-}}"
-if [ -z "$PROJECT" ] && [ -f "$PREFS" ]; then
-  PROJECT="$(jq -r '.marketing.default_project // empty' "$PREFS" 2>/dev/null || true)"
+EXPLICIT_PROJECT="${PROJECT_FROM_ARG:-${OPS_MARKETING_PROJECT:-}}"
+DEFAULT_PROJECT=""
+if [ -f "$PREFS" ]; then
+  DEFAULT_PROJECT="$(jq -r '.marketing.default_project // empty' "$PREFS" 2>/dev/null || true)"
+fi
+PROJECT="${EXPLICIT_PROJECT:-$DEFAULT_PROJECT}"
+PROJECT_ISOLATED=0
+if [ -n "$EXPLICIT_PROJECT" ] && [ "$EXPLICIT_PROJECT" != "${DEFAULT_PROJECT:-}" ]; then
+  PROJECT_ISOLATED=1
 fi
 
 # Read a Doppler-ref from preferences.json channels.marketing.<channel>.<key_field>.
@@ -71,6 +82,9 @@ prefs_marketing_cred() {
 #   4. channels.marketing.<channel>.<key_field> owner-level Doppler-ref (NEW) —
 #      this tier is what lets the morning briefing resolve creds that live in
 #      Doppler under the owner-level schema. Pass it via the 5th/6th args.
+#
+# When PROJECT_ISOLATED=1, stop after tier 1. Missing project keys must
+# surface as unconfigured (null gatherers), not another brand's numbers.
 get_cred() {
   local proj_channel="$1"  # e.g. "klaviyo.private_key"
   local env_var="$2"
@@ -84,6 +98,10 @@ get_cred() {
     local channel="${proj_channel%%.*}"
     local field="${proj_channel#*.}"
     val="$(resolve_cred "$(prefs_get "$PROJECT" "$channel" "$field")")"
+    if [ -n "$val" ] || [ "${PROJECT_ISOLATED:-0}" = "1" ]; then
+      printf '%s' "$val"
+      return 0
+    fi
   fi
   if [ -z "$val" ]; then val="${!env_var:-}"; fi
   if [ -z "$val" ]; then val="$(claude plugin config get "$plugin_key" 2>/dev/null || echo "")"; fi
@@ -102,7 +120,8 @@ get_cred() {
 KLAVIYO_KEY="$(get_cred 'klaviyo.private_key' KLAVIYO_PRIVATE_KEY klaviyo_private_key KLAVIYO_PRIVATE_KEY klaviyo key)"
 META_TOKEN="$(get_cred 'meta.access_token' META_ADS_TOKEN meta_ads_token META_ADS_TOKEN meta system_user_token_key)"
 # meta fallback_env names an env-resident token (META_MY-PROJECT_ACCESS_TOKEN) — try it last.
-if [ -z "$META_TOKEN" ]; then
+# Owner-level only: an isolated --project must not inherit the default brand's token.
+if [ -z "$META_TOKEN" ] && [ "${PROJECT_ISOLATED:-0}" != "1" ]; then
   _meta_fb="$(jq -r '.channels.marketing.meta.fallback_env // empty' "$PREFS" 2>/dev/null)"
   [ -n "$_meta_fb" ] && META_TOKEN="${!_meta_fb:-}"
 fi
@@ -110,7 +129,7 @@ META_ACCOUNT="$(get_cred 'meta.ad_account_id' META_AD_ACCOUNT_ID meta_ad_account
 # GA4 property id: prefer the project-scoped tier, then the owner-level
 # channels.marketing.ga4.property_id (a literal id, not a Doppler ref).
 GA4_PROPERTY="$(get_cred 'ga4.property_id' GA4_PROPERTY_ID ga4_property_id)"
-if [ -z "$GA4_PROPERTY" ] && [ -f "$PREFS" ]; then
+if [ -z "$GA4_PROPERTY" ] && [ -f "$PREFS" ] && [ "${PROJECT_ISOLATED:-0}" != "1" ]; then
   GA4_PROPERTY="$(jq -r '.channels.marketing.ga4.property_id // empty' "$PREFS" 2>/dev/null)"
 fi
 # GA4 read auth uses an SA key file (analytics.readonly). prefs names it under
@@ -133,7 +152,7 @@ INSTAGRAM_ACCOUNT_ID="$(get_cred 'instagram.account_id' INSTAGRAM_ACCOUNT_ID ins
 # prefs stores it under channels.marketing.meta.app_secret_key (Doppler ref);
 # also accept a bare META_MY-PROJECT_APP_SECRET @ claude-ops/prd as a known location.
 META_APP_SECRET="$(get_cred 'meta.app_secret' META_APP_SECRET meta_app_secret META_APP_SECRET meta app_secret_key)"
-if [ -z "$META_APP_SECRET" ]; then
+if [ -z "$META_APP_SECRET" ] && [ "${PROJECT_ISOLATED:-0}" != "1" ]; then
   META_APP_SECRET="$(doppler secrets get META_MY-PROJECT_APP_SECRET --project claude-ops --config prd --plain 2>/dev/null || echo "")"
 fi
 
@@ -163,11 +182,26 @@ APPSFLYER_APP_ID="$(get_cred 'appsflyer.app_id' APPSFLYER_APP_ID appsflyer_app_i
 REVENUECAT_KEY="$(get_cred 'revenuecat.api_key' REVENUECAT_API_KEY revenuecat_api_key REVENUECAT_API_KEY revenuecat api_key_key)"
 REVENUECAT_PROJECT="$(get_cred 'revenuecat.project_id' REVENUECAT_PROJECT_ID revenuecat_project_id)"
 
+# Test hook: presence-only JSON (never values), then exit before any network call.
+# Used by tests/test-ops-marketing-dash-brand-isolation.sh.
+if [ "${OPS_MARKETING_DUMP_CRED_PRESENCE:-}" = "1" ]; then
+  jq -n \
+    --arg project "$PROJECT" \
+    --argjson isolated "$PROJECT_ISOLATED" \
+    --argjson amplitude "$([ -n "${AMPLITUDE_API_KEY:-}" ] && echo true || echo false)" \
+    --argjson appsflyer "$([ -n "${APPSFLYER_TOKEN:-}" ] && [ -n "${APPSFLYER_APP_ID:-}" ] && echo true || echo false)" \
+    --argjson revenuecat "$([ -n "${REVENUECAT_KEY:-}" ] && [ -n "${REVENUECAT_PROJECT:-}" ] && echo true || echo false)" \
+    --argjson klaviyo "$([ -n "${KLAVIYO_KEY:-}" ] && echo true || echo false)" \
+    --argjson instagram "$([ -n "${INSTAGRAM_ACCOUNT_ID:-}" ] && echo true || echo false)" \
+    '{project:$project, isolated:($isolated==1), amplitude:$amplitude, appsflyer:$appsflyer, revenuecat:$revenuecat, klaviyo:$klaviyo, instagram:$instagram}'
+  exit 0
+fi
+
 # Meta ad-account id: prefs carries only the Business Manager id (bm_id_key), not
 # an act_ id. If we have a token+secret but no ad account, resolve the first owned
 # ad account via the BM. Leaves META_ACCOUNT empty (meta insights null) on failure
 # — never fabricated.
-if [ -z "$META_ACCOUNT" ] && [ -n "$META_TOKEN" ] && [ -n "$META_APP_SECRET" ] && [ -f "$PREFS" ]; then
+if [ -z "$META_ACCOUNT" ] && [ -n "$META_TOKEN" ] && [ -n "$META_APP_SECRET" ] && [ -f "$PREFS" ] && [ "${PROJECT_ISOLATED:-0}" != "1" ]; then
   _bm_keyname="$(jq -r '.channels.marketing.meta.bm_id_key // empty' "$PREFS" 2>/dev/null)"
   _bm_id=""
   if [ -n "$_bm_keyname" ]; then
