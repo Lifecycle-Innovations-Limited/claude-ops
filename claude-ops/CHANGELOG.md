@@ -102,6 +102,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.9.7] - 2026-08-28
+
+### Changed
+WhatsApp client bridges resolve from plugin-written $PREFS_PATH / registry; no guessed :8080.
+
+
 ## [3.9.6] - 2026-08-27
 
 ### Changed
