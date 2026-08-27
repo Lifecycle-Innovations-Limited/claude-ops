@@ -6,6 +6,14 @@
   health file, no monitor loop. `check_self_upgrade` now picks the newest
   semver cache dir only, ignoring `current` and `ops-daemon-launcher.sh`.
 
+- fix(marketing): `ops-marketing-dash --project` no longer inherits the
+  default brand's env / plugin-config / owner-level Amplitude, AppsFlyer,
+  RevenueCat, Klaviyo, or Instagram credentials. A named project that is not
+  `marketing.default_project` is isolated: missing project keys render as
+  `null`, not another brand's numbers. Owner-brand fallback (no `--project`,
+  or `--project` equal to the default) is unchanged. Guard:
+  `tests/test-ops-marketing-dash-brand-isolation.sh`.
+
 - fix(hooks): PreToolUse WhatsApp bridge health no longer interpolates `$TOOL_INPUT`.
   Grok treats `$VAR` in a hook command as a required env var and skips the hook
   when it is unset (`hook not executed: required env var(s) not set: ${TOOL_INPUT}`).
