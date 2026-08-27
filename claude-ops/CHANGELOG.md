@@ -123,6 +123,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.9.9] - 2026-08-28
+
+### Changed
+ops-marketing-dash --project no longer inherits the default brand's Amplitude, AppsFlyer, RevenueCat, Klaviyo, or Instagram credentials.
+
+
 ## [3.9.8] - 2026-08-28
 
 ### Changed
