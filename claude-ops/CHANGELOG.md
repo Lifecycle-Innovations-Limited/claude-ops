@@ -6,6 +6,12 @@
   health file, no monitor loop. `check_self_upgrade` now picks the newest
   semver cache dir only, ignoring `current` and `ops-daemon-launcher.sh`.
 
+- docs(whatsapp): dual-account MCP names are `whatsapp-nl` / `whatsapp-us` (or
+  `whatsapp-<label>`). `whatsapp-cos` and a bare `whatsapp` client pointing at
+  `/servers/whatsapp-cos/mcp` are not accounts — sending on them is a
+  wrong-number send. Rule 8, ops-inbox, and `scripts/whatsapp/ENDPOINTS.md`
+  now say so.
+
 - fix(marketing): `ops-marketing-dash --project` no longer inherits the
   default brand's env / plugin-config / owner-level Amplitude, AppsFlyer,
   RevenueCat, Klaviyo, or Instagram credentials. A named project that is not
