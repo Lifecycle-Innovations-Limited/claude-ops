@@ -385,6 +385,23 @@ def disable_auth_file(auth_path: Path) -> bool:
 # ---------------------------------------------------------------------------
 # Serialization lease
 # ---------------------------------------------------------------------------
+def _lease_exists(path) -> bool:
+    """True only when the lease file is readable and present.
+
+    `Path.exists()` raises PermissionError when the parent directory is not
+    searchable by the calling user (running as anyone but the service account,
+    or on a box where /opt/<svc>/state is root-owned). That escaped
+    acquire_lease's own OSError handling because it fired on the probe itself,
+    not the read, and crashed the reauth run instead of degrading to "no lease
+    held". Treat an unreadable probe as absent: the write below still fails
+    loudly if the directory is genuinely unusable.
+    """
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def acquire_lease(provider: str, max_wait: int = 120) -> bool:
     """Acquire the serialization lease, waiting up to max_wait seconds.
 
@@ -397,8 +414,8 @@ def acquire_lease(provider: str, max_wait: int = 120) -> bool:
     t0 = time.time()
     first_check = True
     while True:
-        lease_path = LEASE_FILE if LEASE_FILE.exists() else LEGACY_LEASE_FILE
-        if lease_path.exists():
+        lease_path = LEASE_FILE if _lease_exists(LEASE_FILE) else LEGACY_LEASE_FILE
+        if _lease_exists(lease_path):
             try:
                 data = json.loads(lease_path.read_text())
                 age = time.time() - data.get("timestamp", 0)
