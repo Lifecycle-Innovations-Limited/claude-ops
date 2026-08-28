@@ -188,7 +188,11 @@ function card(i, tz) {
     if (src) {
       const img = el('img', { src, loading: 'lazy', alt: i.title || '', referrerPolicy: 'no-referrer' });
       md.append(
-        el('a', { href: src, target: '_blank', rel: 'noopener', className: 'media-link', title: 'Open full size' }, img),
+        el(
+          'a',
+          { href: src, target: '_blank', rel: 'noopener', className: 'media-link', title: 'Open full size' },
+          img,
+        ),
       );
     }
     if (m.type === 'video') md.append(el('span', { className: 'vid-badge' }, '▶ video'));
