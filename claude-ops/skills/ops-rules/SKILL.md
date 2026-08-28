@@ -189,20 +189,26 @@ default, not a guarantee.
 
 An install with more than one WhatsApp account runs one bridge and one MCP server per account, each
 registered under its own name. The usual convention is `whatsapp-<label>`, where the label is the
-account (`whatsapp-personal`, `whatsapp-work`, or a country code). On those machines `mcp__whatsapp__*`
-does not exist at all, and a skill that calls it fails with an unknown tool.
+account (`whatsapp-nl`, `whatsapp-us`, `whatsapp-personal`, `whatsapp-work`). On those machines
+`mcp__whatsapp__*` does not exist at all, and a skill that calls it fails with an unknown tool.
+
+**`whatsapp-cos` is not an account.** It is a leftover CoS/unscoped alias. A mount named
+`whatsapp-cos` (or a client named `whatsapp` that points at `/servers/whatsapp-cos/mcp`) that
+talks to one personal bridge is a defect: sends go out from the wrong number with no error.
+Dual-account installs must register `whatsapp-<label>` per number and must not leave a bare
+`whatsapp` or `whatsapp-cos` as the only send path.
 
 **What every skill must do:**
 
 1. **Resolve the name, do not assume it.** Read the available tool list and use whatever matches
    `mcp__whatsapp*__`. Treat `mcp__whatsapp__*` in this repo as shorthand for "the WhatsApp server that
-   is actually registered here".
+   is actually registered here". Ignore `whatsapp-cos` when labelled accounts exist.
 2. **With two or more accounts, pick deliberately.** Each account has its own contacts and its own
    history, and the stores do not overlap. Choose by where the conversation already lives. If that is
    unclear, ask the user which account to use. Never guess, and never fall back to the first one.
 3. **Never send from an account the thread is not on.** A reply that arrives from the wrong number is
    worse than no reply, because the recipient sees a number they do not recognise.
-4. **Rule 6 applies to every variant.** `mcp__whatsapp-work__send_message` needs the same per-message
+4. **Rule 6 applies to every variant.** `mcp__whatsapp-nl__send_message` needs the same per-message
    approval as `mcp__whatsapp__send_message`. A different server name is not a different gate.
 
 **For `allowed-tools` frontmatter:** entries are exact tool names, so a skill listing only
