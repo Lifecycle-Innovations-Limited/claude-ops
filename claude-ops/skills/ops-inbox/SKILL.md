@@ -68,10 +68,10 @@ Load `ops-rules` before acting. Public repo (no personal data). Outbound: one dr
 For **all** WhatsApp operations in this skill (list chats, read messages, search contacts, send replies, archive chats), use the `mcp__whatsapp__*` tool family backed by the whatsmeow (Go) whatsapp-bridge — upstream `lharries/whatsapp-mcp`. (Earlier docs misnamed this as "Baileys" — Baileys is the Node.js WhatsApp library; this bridge uses `go.mau.fi/whatsmeow`.)
 
 > **Server name.** `mcp__whatsapp__*` is the single-account default. Installs with more than one account
-> register one server per account (`whatsapp-personal`, `whatsapp-work`, ...) and have no plain
-> `mcp__whatsapp__*` at all. Resolve the real name from the available tools before the first call, and
-> when several accounts exist, scan each one separately and keep the results labelled by account. See
-> CLAUDE.md Rule 8.
+> register one server per account (`whatsapp-nl`, `whatsapp-us`, `whatsapp-personal`, `whatsapp-work`, ...)
+> and have no plain `mcp__whatsapp__*` at all. `whatsapp-cos` is not an account — do not send on it.
+> Resolve the real name from the available tools before the first call, and when several accounts exist,
+> scan each one separately and keep the results labelled by account. See CLAUDE.md / ops-rules Rule 8.
 
 **NEVER call the legacy `wacli` CLI** (`wacli chats list`, `wacli messages list`, `wacli send`, `wacli doctor`, `wacli history backfill`, etc). The wacli store and keepalive daemon are deprecated for this skill.
 
@@ -125,9 +125,9 @@ than one is agent-enabled — that is a loop, not a stop.
    unpolicy'd bridges appear with no `api`.
 4. **Reply on the number the thread lives on.** Cross-account replies are never an acceptable fallback.
 5. **Rule 8 applies to the MCP surface too.** With several accounts the servers are named per account
-   (`mcp__whatsapp-personal__*`, `mcp__whatsapp-work__*`) and a bare `mcp__whatsapp__*` may not exist. Match
-   the registered name; do not assume. Hermes `wa status` / `wa thread` / `wa find` is a valid
-   read path on a client box when MCP is down.
+   (`mcp__whatsapp-nl__*`, `mcp__whatsapp-us__*`, or `whatsapp-personal` / `whatsapp-work`) and a bare
+   `mcp__whatsapp__*` / `mcp__whatsapp-cos__*` is not an account. Match the registered name; do not
+   assume. Hermes `wa status` / `wa thread` / `wa find` is a valid read path on a client box when MCP is down.
 
 **Why this section exists:** a full inbox run once followed this skill's hardcoded
 `127.0.0.1:8080` and sent every reply from the wrong number. Guessing a port, or treating a
