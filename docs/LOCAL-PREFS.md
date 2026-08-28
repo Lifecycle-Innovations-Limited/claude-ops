@@ -8,6 +8,10 @@ email addresses, chat IDs / JIDs, Slack channel IDs, or personal issue keys.
 
 - **`~/.claude/ops-prefs.json`** — central, gitignored prefs (owner, companies, issue
   prefixes, channel pointers). Read it at runtime when a skill needs a real value.
+- **`$PREFS_PATH` `.channels.notion.calendars`** — optional array of
+  `{name, data_source_url}` for Notion show-schedule / calendar / appointments
+  databases. Inbox, `/ops:go`, and `/ops:tonight` query these in addition to
+  Google Calendar. Never put those IDs in the repo.
 - **`~/.claude/memory/ops-inbox-slack-channels.md`** — Slack channel IDs + DM handles
   (local, not the repo).
 - **`${CLAUDE_PLUGIN_DATA_DIR}/contact-registry.json`** — resolved contact identities.

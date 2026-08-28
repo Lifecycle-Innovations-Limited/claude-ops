@@ -24,6 +24,8 @@ allowed-tools:
   - mcp__claude_ai_Slack__slack_read_channel
   # Notion — comments/mentions surfaced in the briefing.
   - mcp__claude_ai_Notion__notion-search
+  - mcp__claude_ai_Notion__notion-fetch
+  - mcp__claude_ai_Notion__notion-query-data-sources
   - mcp__claude_ai_Notion__notion-get-comments
 effort: medium
 maxTurns: 40
@@ -207,13 +209,17 @@ else
 fi
 ```
 
-### Calendar (today — all calendars)
+### Calendar (today — all stores, not primary Google only)
+
+Google Calendar **and** Notion calendars when Notion is configured. A miss on one store is not absence (Rule 9). Shows, travel, and appointments often live in a Notion show-schedule database and never sync to Google.
 
 ```!
 gog calendar events --all --today --json --sort start 2>/dev/null | head -60 || echo "calendar unavailable"
 ```
 
 Events include a `CalendarID` field (e.g. `work@example.com`, `personal@gmail.com`). When rendering the briefing, attribute each event with a short calendar label in parentheses — derive it from the CalendarID domain or summary (e.g. work account → `(work)`, personal Gmail → `(personal)`). Show total count + top 3 events sorted by start time with format: `HH:MM  Title (calendar)`.
+
+**Notion calendars (required when Notion is configured):** read `$PREFS_PATH` `.channels.notion.calendars` (array of `{name, data_source_url}` — owner-local). If empty, `mcp__claude_ai_Notion__notion-search` for databases titled like "Show Schedule", "Calendar", "Appointments", then `notion-fetch` + `notion-query-data-sources` for today. Merge those rows into the briefing labelled `(notion)`. Do not report "no events today" until both Google `--all` and this Notion query have run.
 
 Fallback: if `gog` is unavailable and `GOOGLE_CALENDAR_IDS` env var is set (comma-separated calendar IDs), fetch each ID individually:
 

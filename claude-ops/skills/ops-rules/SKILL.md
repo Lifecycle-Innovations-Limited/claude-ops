@@ -227,12 +227,25 @@ not run it, do not write the sentence.
 - "this happened on `<date>`" / "A came after B"
 - "nobody replied" / "it stalled because…"
 - "this needs you" / "that's a human blocker"
+- "that's not on the calendar" / "I'm not playing / meeting / travelling then"
 
 **"It doesn't exist."** Search every configured account, not the default one, and
 page past the first screen. Vary the query at least three ways: by topic keyword,
 by the counterparty's exact address (`to:`/`from:`), and by their domain alone
 plus likely misspellings of the name. A negative from one account, one query, or
 page one is not evidence of absence.
+
+**"That's not on the calendar."** Query every configured calendar store, not
+the primary Google Calendar. That means `gog calendar events --all` for the
+window **and**, when Notion is configured, every Notion calendar / show-schedule
+/ appointments database (resolve IDs from `$PREFS_PATH` `.channels.notion.calendars`,
+or search Notion for databases titled like "Show Schedule", "Calendar",
+"Appointments"). A confirmed date that lives only in Notion is still a date.
+Drafting "nothing on tonight" from Google Calendar alone is a defect.
+
+**Every mailbox, every channel.** `gog auth list` enumerates mailboxes; scan
+each one that is configured. The same for WhatsApp accounts, Slack workspaces,
+iMessage, Telegram, Discord. Context for a draft is the union of those sources.
 
 **"Service X is down."** Enumerate every instance before declaring anything dead:
 all processes, all listening ports, all service labels, all data stores. Probe

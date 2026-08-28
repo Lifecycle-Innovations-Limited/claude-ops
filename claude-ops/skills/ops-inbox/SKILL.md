@@ -33,6 +33,7 @@ allowed-tools:
   # Notion: MCP tools (claude.ai integration or self-hosted)
   - mcp__claude_ai_Notion__notion-search
   - mcp__claude_ai_Notion__notion-fetch
+  - mcp__claude_ai_Notion__notion-query-data-sources
   - mcp__claude_ai_Notion__notion-get-comments
   - mcp__claude_ai_Notion__notion-create-comment
   - mcp__claude_ai_Notion__notion-update-page
@@ -146,9 +147,10 @@ Every run, in order:
    commitments.
 1. Resolve the WhatsApp account (`ops-wa-accounts` — never hardcode a port).
 2. Freshness: `~/bin/wa-inbox-fresh.sh` (blocking, bounded). Then `bin/ops-inbox-scan`.
-3. `bin/ops-inbox-archive-set` report-only. Present KEEP vs ARCHIVE; `--apply` only after explicit OK.
-4. Deep-read KEEP / NEEDS_REPLY. Fan out if volume (`references/fan-out.md`).
-5. Stage drafts one at a time (Rule 6). Archive after a verified send.
+3. **All-context sweep** (Rule 9 + `references/details.md` "ALL CONTEXT SOURCES"): query every configured calendar, mailbox, and messaging channel before any schedule claim or NEEDS_REPLY draft. Google Calendar alone is not enough — Notion show/calendar databases count when Notion is configured. A miss on one store is not absence.
+4. `bin/ops-inbox-archive-set` report-only. Present KEEP vs ARCHIVE; `--apply` only after explicit OK.
+5. Deep-read KEEP / NEEDS_REPLY. Fan out if volume (`references/fan-out.md`).
+6. Stage drafts one at a time (Rule 6). Archive after a verified send.
 
 Channel processing, FULL-THREAD AWARENESS GATE, and per-channel recipes: `references/details.md`.
 
@@ -296,8 +298,8 @@ When this skill runs on Hermes or Grok (no `Workflow` tool, no `AskUserQuestion`
 Read the matching file before acting. Do not skip.
 
 - `references/cli.md` — WhatsApp MCP + gog CLI
-- `references/details.md` — inbox-zero rules, gates, per-channel processing
-- `references/runtime.md` — freshness, Mac fallback, version-heal, watcher
+- `references/details.md` — inbox-zero rules, gates, per-channel processing, **ALL CONTEXT SOURCES**
+- `references/runtime.md` — freshness, Mac fallback, version-heal, watcher, all-context sweep
 - `references/fan-out.md` — Workflow JS, Agent Teams, hard constraints
 - `CHANNELS.md` — channel setup
 - `vip` skill — tier order for step 0; who is answered first
