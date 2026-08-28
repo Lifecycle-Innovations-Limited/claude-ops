@@ -127,7 +127,7 @@ fi
 echo ""
 echo "Checking command interpolations..."
 if command -v jq &>/dev/null; then
-  bad=$(printf '%s\n' "$commands" | grep -E '\$\{?(TOOL_INPUT|TOOL_RESULT|USER_PROMPT)\}?' || true)
+  bad=$(printf '%s\n' "$commands" | grep -E '\$\{?(TOOL_INPUT|TOOL_RESULT|USER_PROMPT|INPUT)\}?' || true)
   if [[ -n "$bad" ]]; then
     err "command interpolates Claude-only payload var (Grok skips the hook): $bad"
   else
