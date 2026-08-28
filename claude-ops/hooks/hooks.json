@@ -10,7 +10,7 @@
           },
           {
             "type": "command",
-            "command": "INPUT=$(cat); (printf %s \"$INPUT\" | bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-inbox-autosync >/dev/null 2>&1 &); exit 0",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-inbox-autosync >/dev/null 2>&1",
             "timeout": 2,
             "async": true
           }
