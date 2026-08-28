@@ -29,7 +29,10 @@ fi
 
 TMP="$(mktemp -d)"
 BROKER_PID=""
+RACE_PID=""
 cleanup() {
+  [[ -n "$RACE_PID" ]] && kill "$RACE_PID" 2>/dev/null
+  [[ -n "$RACE_PID" ]] && wait "$RACE_PID" 2>/dev/null
   [[ -n "$BROKER_PID" ]] && kill "$BROKER_PID" 2>/dev/null
   rm -rf "$TMP"
 }
@@ -105,6 +108,7 @@ else
 fi
 kill "$RACE_PID" 2>/dev/null
 wait "$RACE_PID" 2>/dev/null
+RACE_PID=""
 rm -f "$RACE_SOCK"
 
 # ── Case A: authorized uid (current user) ───────────────────────────────────
