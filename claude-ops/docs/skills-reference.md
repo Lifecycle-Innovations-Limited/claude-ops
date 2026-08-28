@@ -2,10 +2,10 @@
 
 # Skills Reference
 
-_All 64 skills available in claude-ops — your business operations command surface (v2.0 added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`; v2.0.6 added `/ops:credentials`; v2.0.8 added multi-workspace Slack; feature-dev overlay via `/ops:ops-feature-dev`)_
+_All 66 skills available in claude-ops — your business operations command surface (v2.0 added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`; v2.0.6 added `/ops:credentials`; v2.0.8 added multi-workspace Slack; feature-dev overlay via `/ops:ops-feature-dev`)_
 
 [![version](https://img.shields.io/badge/version-3.9.9-blue)](../CHANGELOG.md)
-[![skills](https://img.shields.io/badge/skills-64-8b5cf6)](.)
+[![skills](https://img.shields.io/badge/skills-66-8b5cf6)](.)
 [![license](https://img.shields.io/badge/license-MIT-22c55e)](../LICENSE)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-f59e0b)](.)
 
@@ -111,6 +111,25 @@ Dedicated dashboard + management UI for the v2.3 competitor-intelligence subsyst
 - `/ops:competitors add-url <brand> <competitor> <kind> <url>` — `jq`-merge a page-diff URL into `preferences.json` (kind ∈ pricing/features/careers/blog/changelog) with confirm prompt
 - `/ops:competitors alerts` — tail last 20 of `reports/competitor-intel/alerts.log`
 - `/ops:competitors help` — print subcommand reference
+
+### `/ops:relations` · `skills/relations/SKILL.md`
+
+Relationship manager. Local relationship ledger and decision queue: who is owed a reply, what was promised, what is going cold, and the full context a draft needs. Drafts and stages only — shadow mode is the default, so nothing is ever sent from this skill. All paths come from `userConfig` (`relations_cli`, `relations_db_path`), never a hardcoded path.
+
+- `/ops:relations` — ranked decision queue, one item per person
+- `/ops:relations brief <person>` — commitments, sourced facts, recent threads
+- `/ops:relations find user@example.com` — resolve identity across channels
+- `/ops:relations draft <person>` — full-context draft, staged for approval
+- `/ops:relations audit` — duplicates, unsourced rows, integrity
+
+### `/ops:vip` · `skills/vip/SKILL.md`
+
+VIP list. The priority layer over every inbox: tier-1 and tier-2 people are checked first in any sweep, answered first, and never buried in a bulk digest. Read-only candidate suggestions on volume, frustration, and chain-break signals; tier writes go through the audited ledger CLI, never raw SQL. List path from `userConfig` `vip_list_path` — operator data, never committed (template: `skills/vip/templates/vip-list.example.json`).
+
+- `/ops:vip` — everyone at or above `vip_max_tier`, grouped by tier
+- `/ops:vip show <person>` — tier, type, why, channel, register notes
+- `/ops:vip set <person> --tier 1` — audited tier write, reason required
+- `/ops:vip suggest` — read-only candidate scan, never writes
 
 ### `/ops:linear` · `skills/ops-linear/SKILL.md`
 

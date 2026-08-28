@@ -132,7 +132,7 @@ claude --plugin-dir ./claude-ops/claude-ops
 
 ## Commands
 
-All 64 skills, grouped by category:
+All 66 skills, grouped by category:
 
 | 🧭 Navigation                    | 📊 Daily Ops                           |
 | -------------------------------- | -------------------------------------- |
@@ -141,6 +141,8 @@ All 64 skills, grouped by category:
 | `/ops:setup` — guided wizard     | `/ops:inbox` — deep-context inbox zero |
 | `/ops:uninstall` — clean removal | `/ops:comms` — send/read any channel   |
 |                                  | `/ops:merge` — autonomous PR pipeline  |
+|                                  | `/ops:relations` — relationship manager |
+|                                  | `/ops:vip` — VIP list, answered first  |
 
 | 🛠️ Project & Eng                                                  | 💰 Business                                                      |
 | ----------------------------------------------------------------- | ---------------------------------------------------------------- |

@@ -1,0 +1,47 @@
+{
+  "_doc": "Template for the VIP list. Copy to the path in userConfig `vip_list_path` (default $HOME/.claude-ops/state/vip-list.json). NEVER commit a filled copy: it is operator identity data (ops-rules Rule 0). Tier values are mirrored from the relations ledger `importance_tier`; this file carries the why and the register notes.",
+  "updated": "YYYY-MM-DD",
+  "tier1_inner_circle": [
+    {
+      "person_id": 1,
+      "name": "<Family Member>",
+      "type": "family",
+      "why": "<one line: who they are to the owner>",
+      "channel": "chat +1234567890",
+      "note": "<language, tone, dates to avoid, register file to read first>"
+    },
+    {
+      "person_id": 2,
+      "name": "<Close Friend>",
+      "type": "personal",
+      "why": "<one line>",
+      "channel": "chat +1234567890",
+      "note": "<language>"
+    },
+    {
+      "person_id": 3,
+      "name": "<Key Colleague>",
+      "type": "business",
+      "why": "<one line>",
+      "channel": "user@example.com",
+      "note": "<language>"
+    }
+  ],
+  "tier2_key_business": [
+    {
+      "person_id": 4,
+      "name": "<Advisor>",
+      "type": "vendor",
+      "why": "<one line>",
+      "channel": "user@example.com",
+      "note": "<language>"
+    }
+  ],
+  "rules": [
+    "Checked first in every sweep, answered first, never buried in a bulk digest.",
+    "Read the whole thread, both directions, on every account of that channel.",
+    "Reply in the language the thread is already in.",
+    "No send without the owner's explicit per-message approval (ops-rules Rule 6).",
+    "Tier changes go through the ledger CLI with a reason, never raw SQL."
+  ]
+}

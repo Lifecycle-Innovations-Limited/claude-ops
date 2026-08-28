@@ -385,52 +385,142 @@ def disable_auth_file(auth_path: Path) -> bool:
 # ---------------------------------------------------------------------------
 # Serialization lease
 # ---------------------------------------------------------------------------
+def _read_lease(path):
+    """Return the lease dict, or None when no usable lease is present.
+
+    Raises nothing: an unreadable or corrupt lease is reported as None.
+
+    `Path.exists()` raises PermissionError when the parent directory is not
+    searchable by the calling user (running as anyone but the service account,
+    or on a box where the state dir is root-owned). That escaped acquire_lease's
+    own OSError handling because it fired on the probe itself, not the read,
+    and crashed the reauth run instead of degrading.
+    """
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _try_create_lease(path, provider: str) -> bool:
+    """Atomically create the lease file. False when it already exists.
+
+    O_CREAT|O_EXCL is the actual mutual-exclusion primitive: an exists() probe
+    followed by a write is two syscalls with a window between them, so two
+    processes can both see "no lease" and both write. Creating exclusively
+    makes the check and the claim one operation.
+    """
+    payload = json.dumps({
+        "provider": provider,
+        "timestamp": time.time(),
+        "pid": os.getpid(),
+    })
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        # Non-fatal on purpose: the directory may already exist but be
+        # unwritable by this user, or be owned by the service account. The
+        # exclusive create below is the real gate — let it produce the
+        # authoritative error rather than failing here on a probe.
+        log(f"Lease dir not creatable ({exc}) — continuing to claim attempt")
+    # Build the lease in a private temp file FIRST, then link it into place.
+    # O_CREAT|O_EXCL alone is atomic for the *create* but leaves a window in
+    # which the file exists and is still empty: a racer reading it in that
+    # window sees invalid JSON, classifies the lease as corrupt, removes it,
+    # and claims it too. os.link() is atomic AND the destination already has
+    # its full contents the instant it appears, so the window does not exist.
+    # (Measured: the create-then-write shape let 2 of 8 racers win.)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    try:
+        # 0o600: the lease records a provider name and pid and is only ever
+        # read by the service account that writes it. No reason for group or
+        # world read.
+        fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError as exc:
+        log(f"Lease temp file not creatable ({exc}) — cannot claim")
+        return False
+    try:
+        os.write(fd, payload.encode())
+    finally:
+        os.close(fd)
+
+    try:
+        os.link(str(tmp), str(path))
+        return True
+    except FileExistsError:
+        return False
+    except OSError as exc:
+        log(f"Lease link failed ({exc}) — treating as not acquired")
+        return False
+    finally:
+        try:
+            os.unlink(str(tmp))
+        except OSError:
+            # The temp file is ours alone and already served its purpose; a
+            # failure to remove it leaks one small file and must never turn a
+            # successful claim into a failure.
+            pass
+
+
 def acquire_lease(provider: str, max_wait: int = 120) -> bool:
     """Acquire the serialization lease, waiting up to max_wait seconds.
 
-    If the lease file exists and is recent (younger than
-    LEASE_STALE_SECONDS), polls every 5 seconds until it is released
-    or max_wait is reached.  If the lease is stale, it is removed and a
-    new lease is acquired.  Returns True if the lease was acquired,
-    False on timeout.
+    The claim itself is an atomic exclusive create. If the lease file already
+    exists and is recent (younger than LEASE_STALE_SECONDS), polls every 5
+    seconds until it is released or max_wait is reached. A stale or corrupt
+    lease is removed and the claim retried. Returns True if the lease was
+    acquired, False on timeout.
     """
     t0 = time.time()
     first_check = True
     while True:
-        lease_path = LEASE_FILE if LEASE_FILE.exists() else LEGACY_LEASE_FILE
-        if lease_path.exists():
-            try:
-                data = json.loads(lease_path.read_text())
-                age = time.time() - data.get("timestamp", 0)
-                if age < LEASE_STALE_SECONDS:
-                    if first_check:
-                        log(f"Lease held by {data.get('provider','?')} "
-                            f"({int(age)}s old) — waiting up to {max_wait}s")
-                        first_check = False
-                    if time.time() - t0 >= max_wait:
-                        log(f"Lease wait timed out after {max_wait}s — "
-                            f"another login may still be in progress")
-                        return False
-                    time.sleep(5)
-                    continue
-                # Stale lease — remove it
-                log(f"Stale lease ({int(age)}s old) — removing")
-                lease_path.unlink()
-            except (json.JSONDecodeError, OSError):
-                try:
-                    lease_path.unlink()
-                except OSError:
-                    pass
-        # Lease file doesn't exist or was removed — acquire
-        break
+        if _try_create_lease(LEASE_FILE, provider):
+            log(f"Lease acquired for {provider}")
+            return True
 
-    LEASE_FILE.write_text(json.dumps({
-        "provider": provider,
-        "timestamp": time.time(),
-        "pid": os.getpid(),
-    }))
-    log(f"Lease acquired for {provider}")
-    return True
+        # Someone holds it (or a legacy-named lease is in the way).
+        data = _read_lease(LEASE_FILE)
+        lease_path = LEASE_FILE
+        if data is None:
+            legacy = _read_lease(LEGACY_LEASE_FILE)
+            if legacy is not None:
+                data, lease_path = legacy, LEGACY_LEASE_FILE
+
+        if data is None:
+            # Unreadable or corrupt on both names. Remove and retry the claim;
+            # never fall through to an unconditional overwrite.
+            try:
+                lease_path.unlink()
+            except OSError:
+                if time.time() - t0 >= max_wait:
+                    log("Lease unreadable and not removable — giving up")
+                    return False
+                time.sleep(5)
+            continue
+
+        age = time.time() - data.get("timestamp", 0)
+        if age >= LEASE_STALE_SECONDS:
+            log(f"Stale lease ({int(age)}s old) — removing")
+            try:
+                lease_path.unlink()
+            except OSError as exc:
+                # Another process may have cleared the same stale lease first,
+                # which is the desired outcome, not an error. Loop back and let
+                # the exclusive create decide who actually holds it.
+                log(f"Stale lease already gone or not removable ({exc}) — retrying claim")
+            continue
+
+        if first_check:
+            log(f"Lease held by {data.get('provider','?')} "
+                f"({int(age)}s old) — waiting up to {max_wait}s")
+            first_check = False
+        if time.time() - t0 >= max_wait:
+            log(f"Lease wait timed out after {max_wait}s — "
+                f"another login may still be in progress")
+            return False
+        time.sleep(5)
 
 
 def release_lease():

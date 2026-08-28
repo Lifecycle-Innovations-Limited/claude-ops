@@ -200,7 +200,13 @@ if $IS_MACOS; then
   DISK_USED_PCT=$(df -g / 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}' || echo "?")
   OS_VER=$(sw_vers -productVersion 2>/dev/null || echo "?")
 elif $IS_LINUX || $IS_WSL; then
-  CPU=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | xargs || echo "unknown")
+  # `xargs` with no -r runs `echo` once even on empty input, emitting a bare
+  # newline. On a host whose /proc/cpuinfo has no "model name" line (aarch64,
+  # many ARM SoCs) that newline landed inside the JSON string for "cpu" and
+  # made `--json` output unparseable (invalid control character). Trim to a
+  # single line and fall back explicitly.
+  CPU=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | tr -d '\n' | xargs -r || true)
+  CPU=${CPU:-unknown}
   RAM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 0)
   RAM_GB=$(( RAM_KB / 1048576 ))
   CHIP=$(uname -m)

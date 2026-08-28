@@ -1,6 +1,6 @@
 # claude-ops
 
-> **v3.6.1** — 64 skills · 21 agents · Claude + Grok + Hermes · ops-rules · empty `.mcp.json`
+> **v3.6.1** — 66 skills · 21 agents · Claude + Grok + Hermes · ops-rules · empty `.mcp.json`
 
 ## What's new in v3.6.1
 

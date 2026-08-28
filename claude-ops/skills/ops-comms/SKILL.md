@@ -138,6 +138,11 @@ Draft created for [recipient]:
 
 ## Outbound judgment: verify before you assert
 
+**Before drafting to a person, load `relations` for their brief, open
+commitments and the full-context draft order, and `vip` for their tier.** A
+tier-1 recipient is drafted with extra care and never handled from a digest
+line. Neither skill can send; Rule 6 still owns the send.
+
 Rule 6 governs *whether* a message may go out. This section governs *whether the
 message is right*. Every item below is a failure mode seen on a real run, where
 the approval gate held and the content was still wrong.

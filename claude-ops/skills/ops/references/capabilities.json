@@ -243,6 +243,10 @@
       "summary": "This skill should be used when the user asks to \"sync contacts\", \"people database\", or \"/ops:people\". Sync Apple Contacts to Notion 'People' database. Track last_contacted, relationship_strength, recent_topics, next_nudge_due. Foundation for relationship intelligence — birthdays, anniversaries, overdue-outreach, news-mention nudges."
     },
     {
+      "name": "relations",
+      "summary": "This skill should be used when the user asks to \"who do I owe a reply\", \"relationship manager\", \"follow up with\", \"person brief\", or when any outbound draft to a person is about to be written. Relationship ledger and decision queue: who is owed a reply, what was promised, what is going cold, and the full context a draft needs. Drafts and stages only, never sends."
+    },
+    {
       "name": "setup",
       "summary": "This skill should be used when the user asks to \"/ops:setup\", \"configure ops\", or \"connect WhatsApp/email\". Interactive setup wizard for the claude-ops plugin. Installs missing CLIs, configures env vars for each channel (Telegram, WhatsApp, Email, Slack, Notion, Linear, Sentry, Vercel), builds the project registry, and saves user preferences. Run once after installing the plugin or any time to reconfigure."
     },
@@ -253,6 +257,10 @@
     {
       "name": "uninstall",
       "summary": "This skill should be used when the user asks to \"uninstall ops\", \"remove claude-ops\", or \"/ops:uninstall\". Completely remove claude-ops plugin, all stored credentials, cached files, shell exports, and MCP registrations. Confirms each step before deletion."
+    },
+    {
+      "name": "vip",
+      "summary": "This skill should be used when the user asks to \"vip list\", \"who is a VIP\", \"add someone to the VIP list\", \"prioritize this person\", or before any inbox, chat, or email sweep is ranked. Priority layer over every inbox: VIP tiers are checked first, answered first, never buried in a digest, and new candidates are suggested but never added silently."
     }
   ],
   "agents": [

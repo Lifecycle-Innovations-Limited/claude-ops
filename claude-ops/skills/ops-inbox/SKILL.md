@@ -138,6 +138,12 @@ Default: fan out one read-only scanner per configured channel after the offline 
 
 Every run, in order:
 
+0. **Rank by VIP first.** Load the `vip` skill and resolve the VIP set once
+   (`/ops:vip list`). Tier-1 senders are read and answered before anything else,
+   tier-2 next, everything else after. A VIP with an unanswered inbound is
+   surfaced individually with thread context, never as a line in a digest.
+   Before drafting to any person, load `relations` for their brief and open
+   commitments.
 1. Resolve the WhatsApp account (`ops-wa-accounts` — never hardcode a port).
 2. Freshness: `~/bin/wa-inbox-fresh.sh` (blocking, bounded). Then `bin/ops-inbox-scan`.
 3. `bin/ops-inbox-archive-set` report-only. Present KEEP vs ARCHIVE; `--apply` only after explicit OK.
@@ -294,3 +300,5 @@ Read the matching file before acting. Do not skip.
 - `references/runtime.md` — freshness, Mac fallback, version-heal, watcher
 - `references/fan-out.md` — Workflow JS, Agent Teams, hard constraints
 - `CHANNELS.md` — channel setup
+- `vip` skill — tier order for step 0; who is answered first
+- `relations` skill — person brief, open commitments, draft context

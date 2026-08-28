@@ -61,6 +61,14 @@ Apple Contacts is source of truth. Notion "People" database is the working layer
 - Subsequent runs are silent unless something new is inferred
 - Birthdays without years get treated as recurring annual; first detection asks owner to confirm before storing
 
+## Related skills
+
+- `relations` — the follow-up ledger and decision queue built on this directory
+- `vip` — priority tiers; a `relationship_strength` of close/family is a VIP
+  candidate signal, but a tier is only ever set through the `vip` skill's
+  audited CLI path
+- `ops-inbox` — consumes both when ranking a sweep
+
 ## Ledger writes
 
 ```bash

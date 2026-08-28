@@ -1,7 +1,7 @@
 {
   "name": "ops",
   "version": "3.9.9",
-  "description": "Business operations command center for Claude Code — 64 skills, 21 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), monitoring (Datadog/New Relic/OTEL), and voice (Bland AI/ElevenLabs/Whisper). Includes /ops:ops-ar A&R (audio analysis + demo verdict cards), /gtm go-to-market planner, /ops:projects portfolio dashboard, /ops:ops-mac macOS diagnose-and-fix (bundles the macos-toolkit CLI suite — security, launchd, network, disk, system health), YOLO mode for autonomous operation with 4 parallel C-suite agents, /ops:ops-home smart home control via Homey Pro, /ops:ops-unifi UniFi network control (Site Manager + Network + Protect APIs), and /ops:ops-feature-dev overlay for the feature-dev companion plugin.",
+  "description": "Business operations command center for Claude Code — 66 skills, 21 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), monitoring (Datadog/New Relic/OTEL), and voice (Bland AI/ElevenLabs/Whisper). Includes /ops:ops-ar A&R (audio analysis + demo verdict cards), /gtm go-to-market planner, /ops:projects portfolio dashboard, /ops:ops-mac macOS diagnose-and-fix (bundles the macos-toolkit CLI suite — security, launchd, network, disk, system health), YOLO mode for autonomous operation with 4 parallel C-suite agents, /ops:ops-home smart home control via Homey Pro, /ops:ops-unifi UniFi network control (Site Manager + Network + Protect APIs), and /ops:ops-feature-dev overlay for the feature-dev companion plugin.",
   "author": {
     "name": "Lifecycle Innovations Limited",
     "url": "https://github.com/Lifecycle-Innovations-Limited"
@@ -815,6 +815,104 @@
       "default": 2,
       "min": 0,
       "max": 20
+    },
+    "relations_cli": {
+      "title": "Relationship ledger CLI path",
+      "description": "Executable that owns the relationship ledger (JSON output). Used by /ops:relations and /ops:vip. Defaults to $HOME/.claude-ops/relations/bin/relations-cli.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "relations_db_path": {
+      "title": "Relationship ledger database path",
+      "description": "SQLite file holding people, facts, commitments and follow-ups. Must live outside the plugin repo. Defaults to $HOME/.claude-ops/relations/people.db.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "relations_shadow_mode": {
+      "title": "Relationship shadow mode",
+      "description": "When true, /ops:relations only drafts and stages — no external message is sent on any channel. Turning this off is an owner decision.",
+      "type": "boolean",
+      "sensitive": false,
+      "default": true
+    },
+    "relations_queue_limit": {
+      "title": "Relationship decision-queue size",
+      "description": "Maximum items in one relationship decision-queue report. One item per person.",
+      "type": "number",
+      "sensitive": false,
+      "default": 10,
+      "min": 1,
+      "max": 50
+    },
+    "relations_followup_limit_personal": {
+      "title": "Unanswered follow-up limit (personal)",
+      "description": "How many unanswered follow-ups may be open with one personal contact before the gate stops surfacing new ones.",
+      "type": "number",
+      "sensitive": false,
+      "default": 1,
+      "min": 0,
+      "max": 10
+    },
+    "relations_followup_limit_business": {
+      "title": "Unanswered follow-up limit (business)",
+      "description": "How many unanswered follow-ups may be open with one business contact before the gate stops surfacing new ones.",
+      "type": "number",
+      "sensitive": false,
+      "default": 2,
+      "min": 0,
+      "max": 10
+    },
+    "relations_suppress_days": {
+      "title": "Follow-up suppression window (days)",
+      "description": "Minimum days a dismissed follow-up stays suppressed before it may resurface.",
+      "type": "number",
+      "sensitive": false,
+      "default": 30,
+      "min": 1,
+      "max": 365
+    },
+    "vip_list_path": {
+      "title": "VIP list path",
+      "description": "JSON file with VIP tiers plus the why/register notes. Operator identity data — must live outside the repo. Defaults to $HOME/.claude-ops/state/vip-list.json. Shape: skills/vip/templates/vip-list.example.json.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "vip_max_tier": {
+      "title": "Highest tier treated as VIP",
+      "description": "People at or below this importance tier are checked and answered before general triage. 1 = inner circle only, 2 = inner circle plus key business.",
+      "type": "number",
+      "sensitive": false,
+      "default": 2,
+      "min": 1,
+      "max": 5
+    },
+    "vip_suggest_enabled": {
+      "title": "Suggest new VIPs",
+      "description": "Emit read-only VIP candidate suggestions on volume, frustration, and chain-break signals. Never writes a tier.",
+      "type": "boolean",
+      "sensitive": false,
+      "default": true
+    },
+    "vip_volume_days": {
+      "title": "VIP volume signal window (days)",
+      "description": "Lookback window for the two-way message-volume signal that suggests a VIP candidate.",
+      "type": "number",
+      "sensitive": false,
+      "default": 30,
+      "min": 1,
+      "max": 365
+    },
+    "vip_volume_min": {
+      "title": "VIP volume signal threshold",
+      "description": "Two-way messages within the window with someone off the list before they are suggested as a VIP candidate.",
+      "type": "number",
+      "sensitive": false,
+      "default": 12,
+      "min": 1,
+      "max": 1000
     }
   }
 }
