@@ -1,5 +1,10 @@
 ## Unreleased
 
+- fix(hooks): UserPromptSubmit inbox autosync no longer interpolates `$INPUT`.
+  Grok treats `$VAR` in a hook command as a required env var and skips the
+  hook when it is unset. The script already reads the event JSON from stdin.
+  Guard: `tests/test-hooks.sh` now flags `$INPUT` the same way as `$TOOL_INPUT`.
+
 - fix(daemon): write `daemon-health.json` with builtin `printf` + `mv`, not
   `cat >file <<EOF`. Under launchd stdin is `/dev/null`, so bash's 16KiB
   heredoc pipe never drains and the first health write deadlocks — empty
