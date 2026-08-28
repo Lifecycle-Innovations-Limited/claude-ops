@@ -422,7 +422,10 @@ def _try_create_lease(path, provider: str) -> bool:
     except OSError:
         pass
     try:
-        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        # 0o600: the lease records a provider name and pid and is only ever
+        # read by the service account that writes it. No reason for group or
+        # world read.
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
         return False
     try:

@@ -107,7 +107,7 @@ def test_acquire_lease_unreadable_does_not_steal():
                 assert lease_path.stat().st_mtime_ns != before, "overwrote in place"
         finally:
             try:
-                os.chmod(lease_path, 0o644)
+                os.chmod(lease_path, 0o600)
             except OSError:
                 pass
     bu_reauth.LEASE_FILE = orig_lease
