@@ -11,6 +11,12 @@
   health file, no monitor loop. `check_self_upgrade` now picks the newest
   semver cache dir only, ignoring `current` and `ops-daemon-launcher.sh`.
 
+- docs(whatsapp): dual-account MCP names are `whatsapp-nl` / `whatsapp-us` (or
+  `whatsapp-<label>`). `whatsapp-cos` and a bare `whatsapp` client pointing at
+  `/servers/whatsapp-cos/mcp` are not accounts — sending on them is a
+  wrong-number send. Rule 8, ops-inbox, and `scripts/whatsapp/ENDPOINTS.md`
+  now say so.
+
 - fix(marketing): `ops-marketing-dash --project` no longer inherits the
   default brand's env / plugin-config / owner-level Amplitude, AppsFlyer,
   RevenueCat, Klaviyo, or Instagram credentials. A named project that is not
@@ -134,6 +140,12 @@
 - **ops-desk (new skill):** `/ops:ops-desk` desk sweep — fans out read-only context agents (batched, Workflow tool) over the owner's open decisions/drafts/payments/sign-offs and returns a ranked, ready-to-approve action queue worked down under the per-draft outbound gate. Complements `/ops:ops-inbox`.
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
+
+## [3.10.1] - 2026-08-28
+
+### Changed
+Fixed multi-source inbox checks, full-resolution social ads and Google Ads v24, WhatsApp account naming, and a broker socket readiness race.
+
 
 ## [3.10.0] - 2026-08-28
 
