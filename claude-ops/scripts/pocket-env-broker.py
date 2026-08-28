@@ -373,10 +373,13 @@ def serve() -> int:
     old_umask = os.umask(0o177)
     try:
         srv.bind(str(SOCK_PATH))
+        # Make the socket connectable before post-bind ACL work. The restrictive
+        # umask already keeps the inode owner-only, so this closes the window
+        # where the path exists but clients get ECONNREFUSED without widening access.
+        srv.listen(16)
     finally:
         os.umask(old_umask)
     _harden_socket_perms(want_uid)
-    srv.listen(16)
     with _METRICS_LOCK:
         _METRICS["started_at"] = now_iso()
         _write_health(_health_snapshot_locked())
