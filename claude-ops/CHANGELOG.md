@@ -14,6 +14,13 @@
   or `--project` equal to the default) is unchanged. Guard:
   `tests/test-ops-marketing-dash-brand-isolation.sh`.
 
+- fix(ops-inbox): always query every configured calendar, mailbox, and messaging
+  channel before a schedule claim or NEEDS_REPLY draft. Google Calendar primary
+  is not the show/tour SSOT — Notion show-schedule / calendar / appointments
+  databases count when Notion is configured. A miss on one store is not absence.
+  Rule 9, `ops-go`, and `tonight` carry the same gate. Owner-local calendar IDs
+  live in `$PREFS_PATH` `.channels.notion.calendars`, never in this repo.
+
 - fix(hooks): PreToolUse WhatsApp bridge health no longer interpolates `$TOOL_INPUT`.
   Grok treats `$VAR` in a hook command as a required env var and skips the hook
   when it is unset (`hook not executed: required env var(s) not set: ${TOOL_INPUT}`).

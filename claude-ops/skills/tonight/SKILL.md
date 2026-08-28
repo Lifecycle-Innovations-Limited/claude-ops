@@ -16,7 +16,9 @@ The "before-bed brief." Counterpart to `/ops:go` (morning).
 ## Output sections
 
 1. **Tomorrow's calendar** — every meeting >=15min with: attendees, prep status (brief
-   exists Y/N), and the suggested 1-line prep ask if no brief exists.
+   exists Y/N), and the suggested 1-line prep ask if no brief exists. Query **every**
+   calendar store (Google `--all` **and** Notion show/calendar/appointments databases
+   when Notion is configured). A miss on Google Calendar is not "nothing tomorrow."
 2. **Birthdays / anniversaries tomorrow** — from Notion People DB. Pre-drafted
    message ready to send.
 3. **Overdue outreach** — anyone whose `next_nudge_due <= tomorrow`. Top 3 only.

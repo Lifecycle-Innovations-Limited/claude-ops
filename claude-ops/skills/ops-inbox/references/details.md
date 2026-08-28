@@ -222,6 +222,7 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
    - `mcp__whatsapp__list_messages {query: "<topic keywords>", limit: 5}` — related WA messages
    - Summarize: what this topic is about, any deadlines, any pending decisions
 4. **ops-memories** (if available) — check `~/.claude/plugins/data/ops-ops-marketplace/memories/` for any stored context about this contact or topic
+5. **Calendars and every mailbox** — ALL CONTEXT SOURCES above. If the thread names a date, gig, trip, or "are you free", query Google `--all` **and** Notion calendars (when configured) and search every mailbox, not the default one.
 
 **When presenting a NEEDS REPLY item:**
 
@@ -250,6 +251,25 @@ Stage this per the **PER-DRAFT APPROVAL** principle below. On Telegram/Hermes, d
 - **WAITING** — you sent last message, waiting for them (no action needed)
 - **HANDLED** — conversation concluded, can be archived
 - **FYI** — newsletters, notifications, automated messages (bulk archive)
+
+## Core principle: ALL CONTEXT SOURCES — NEVER ONE CALENDAR, NEVER ONE MAILBOX
+
+Rule 9 ("Exhaust before concluding") applies to **schedule and context**, not only to "was this email sent." A draft that states a date, a gig, travel, availability, or "already answered" must be grounded in the **union** of every configured store. One empty search is not absence.
+
+**Do this on every `/ops:ops-inbox` run, before the first schedule claim or NEEDS_REPLY draft:**
+
+1. **Calendars — all of them.**
+   - Google: `gog calendar events --all --from <start> --to <end>` (every calendar the account can see, not primary only).
+   - Notion, when configured: query every calendar / show-schedule / appointments database. Resolve from `$PREFS_PATH` `.channels.notion.calendars` (array of `{name, data_source_url}` — owner-local, never in this repo). If that key is empty, `notion-search` for databases titled like "Show Schedule", "Calendar", "Appointments", then `notion-fetch` + `notion-query-data-sources` for the same date window.
+   - A confirmed row in a Notion show-schedule database that is missing from Google Calendar is still a confirmed event. Google Calendar is **not** the touring/show SSOT.
+
+2. **Mailboxes — all of them.** `gog auth list`. Search each configured mailbox for the contact and the topic. The default account is not the whole estate.
+
+3. **Messaging channels — all of them that are configured.** Every agent-enabled WhatsApp account, every Slack workspace, iMessage, Telegram, Discord. Same person, same ask.
+
+4. **A miss is not a fact.** "Not on Google Calendar" does not mean "not playing tonight." "No email in the default inbox" does not mean "nobody wrote." Label the claim as unverified until the other stores have been queried.
+
+**Forbidden:** drafting "I'm not playing / free / travelling then" after only `gog calendar events` on the primary calendar.
 
 ## Core principle: TONE & LANGUAGE MATCH (every draft, every channel)
 
@@ -290,7 +310,7 @@ Only after steps 1–7 ALL come up empty is a thread a true NEEDS_REPLY candidat
 8. **Fact-verified redraft gate (MANDATORY, before staging ANY draft — owner directive 2026-07-04).** Clearing steps 1–7 makes a thread a genuine NEEDS_REPLY; it does NOT mean the draft you are about to write is safe to stage. Before staging any draft, the drafter MUST additionally:
    - **(a) Deep-read the full target thread, both directions** — not the summary from step 1–7, an actual re-read of every message for the specific facts the draft will state or rely on.
    - **(b) Read RELATED threads** — same contact across other channels, and any other thread about the same topic/deal (a different contact, a group, an earlier email chain) that could bear on what the draft should say.
-   - **(c) Verify every load-bearing factual claim in the draft with a cheap check** before it goes in the draft — a web search for a price/value, a prior email/thread for "who currently holds X", a calendar check for availability, etc. Never state a load-bearing fact in a draft from memory or assumption alone.
+   - **(c) Verify every load-bearing factual claim in the draft with a cheap check** before it goes in the draft — a web search for a price/value, a prior email/thread for "who currently holds X", **every configured calendar** (Google `--all` **and** Notion show/calendar databases when Notion is configured) for availability / gigs / travel, every configured mailbox for the same topic. Never state a load-bearing fact in a draft from memory or from one store alone. See **ALL CONTEXT SOURCES** above.
    - **Failure mode this prevents:** a draft routed a master clearance to the wrong label until the RELATED threads proved Spinnin'/WMG actually held it (checking only the target thread would have missed this); a watch's stated value (€22.600) changed the negotiation advice the draft gave, and stating the wrong figure from memory would have misled the recipient. Both are "the target thread alone looked fine" failures — that is exactly why (b) and (c) are mandatory, not optional enrichment.
 
 Only after steps 1–7 come up empty may you draft; only after step 8 is satisfied may you stage that draft. This is the FULL-THREAD AWARENESS GATE, extended cross-channel, cross-request, and fact-verified. **Surfacing a NEEDS_REPLY without having run the cross-thread, cross-channel, cross-request, and already-sent checks (steps 1–7) is a scan bug — do not present it; do not stage a draft until step 8 is clean.** None of this changes the outbound path: even a genuine, fact-verified NEEDS_REPLY is still drafted and sent only in the main session under the Rule-6 gate, per-draft, per the PER-DRAFT APPROVAL principle below.
@@ -436,7 +456,7 @@ For each channel, detect availability at runtime:
    - 0 workspaces configured → skip Slack with a one-line note: "Slack: no workspaces configured — run /ops:setup slack".
 4. **Telegram**: Only via user-auth MCP (tdlib/MTProto). Check `TELEGRAM_ENABLED` env var. Never use BotFather bots.
 5. **Discord**: Via `${CLAUDE_PLUGIN_ROOT}/bin/ops-discord read <CHANNEL_ID> --limit 20 --json`. Requires `DISCORD_BOT_TOKEN` (v1 is channel-scoped — no DM/gateway support yet). Pre-configured read list lives at `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` under `discord.inbox_channels` (array of channel IDs). If neither a bot token nor a read list is configured, skip Discord with a one-line note ("Discord not configured — run `/ops:setup discord`") rather than prompting — ops-inbox is not a setup flow. Rule 3 still applies to `/ops:setup`.
-6. **Notion**: Only via MCP tools (`mcp__claude_ai_Notion__*` or self-hosted Notion MCP). Check `NOTION_MCP_ENABLED` env var. Searches workspace for recent comments, mentions, and assigned tasks.
+6. **Notion**: Only via MCP tools (`mcp__claude_ai_Notion__*` or self-hosted Notion MCP). Check `NOTION_MCP_ENABLED` env var. Searches workspace for recent comments, mentions, and assigned tasks. **Also a calendar source:** when Notion is configured, the all-context sweep must query Notion calendar / show-schedule / appointments databases (see **ALL CONTEXT SOURCES**), not only comments.
 7. **iMessage**: Only via the official `imessage` plugin MCP (`mcp__plugin_imessage_imessage__*`). No bridge, no daemon — `chat_messages` reads `~/Library/Messages/chat.db` directly (allowlist-scoped) and `reply` sends via AppleScript to Messages.app. Availability check is a single probe — load the tool schemas:
    - `ToolSearch select:mcp__plugin_imessage_imessage__chat_messages,mcp__plugin_imessage_imessage__reply`. If the tools load, the channel is up. If `chat_messages` returns `(no allowlisted chats — configure via /imessage:access)`, the plugin is wired but no chats are allowlisted yet — surface a one-line note ("iMessage: no allowlisted chats — run `/imessage:access allow <handle>`") and move on; do NOT invoke `/imessage:access` yourself.
    - **MCP flap / reconnect**: the imessage plugin can flap — its bun process holds the `chat.db` handle open and is occasionally reaped (orphan-MCP reaper, TCC re-prompt, or session churn), after which `mcp__plugin_imessage_imessage__*` calls fail until it respawns. Per the MCP auto-reconnect rule: on a failed call wait 5s and retry the same call; if it fails again wait 15s and retry once more (the PreToolUse hook kills the stale process so Claude Code respawns it). Only after 3 total attempts declare iMessage unavailable. The first `chat.db` read after a cold start can also trigger a macOS TCC prompt ("allow Terminal/iTerm/your IDE to control Messages") — if reads return a permission error, surface that the user must click **Allow** on the system prompt.
@@ -1184,6 +1204,7 @@ wrong classification or a wrong draft.
 - **LID and phone mirrors duplicate rows.** The same message can appear once per JID with the same message ID. Deduplicate by message ID before counting toward any minimum-messages rule and before deciding which message is genuinely last.
 - **Same-name searches conflate different people and companies.** Verify the recipient address, domain, and topic before demoting a candidate as already answered.
 - **A meeting on the calendar does not resolve a different open question** from the same person. Match on the specific ask, not on the fact that you have contact with them.
+- **Google Calendar is not the show/tour SSOT.** Confirmed dates often live in a Notion show-schedule or appointments database and never sync to Google. Query every configured calendar store (Google `--all` **and** Notion) before stating "nothing on tonight" / "I'm not playing." A miss on one store is not absence.
 - **An old time, price, or status is context, not proof** of the current fact. Re-verify anything load-bearing against its own source.
 - **An unanswered message is not automatically NEEDS_REPLY.** It may be an action item you owe, a social close that needs nothing, or a request now owned by the other party.
 - **Subagent triage output is a research artifact, not a finished report.** Read the JSON it actually returned before restating its conclusions, and check that it covered every item you gave it. A partial pass that reports confidently will carry its gaps into the user's reply verbatim.

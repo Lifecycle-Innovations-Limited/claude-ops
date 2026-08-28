@@ -90,6 +90,13 @@ The whatsmeow bridge can **silently miss inbound messages** when its history/app
    - `topics_active.md` — check for active threads or deadlines related to this contact
    - `donts.md` — never violate these restrictions in drafts
 
-5. **Launch the live inbox watcher (background job, every session)** — right after the steps above, start `bin/ops-inbox-live-watch.sh` via Bash with `run_in_background: true`. It polls the Gmail inbox (via `gog`) every ~4 minutes and exits — with a `NEW INBOX MAIL: <from> | <subject> | <date> | id=<id>` summary line — the instant a genuinely new inbound message lands; it also exits (with a `watcher expired` line) after ~6h if nothing new arrives. **The job's exit IS the new-mail ping** — treat it exactly like a direct orchestrator notification: when it fires, re-scan the affected channel and relaunch the watcher (same command) so live coverage never lapses. Pure bash + python3 + `gog`, no systemd/launchd dependency, cross-platform (Linux + macOS).
+5. **All-context sweep (calendars + mailboxes + channels) — every invocation, before the first draft.** Rule 9 and `details.md` **ALL CONTEXT SOURCES**. Google Calendar primary is not enough:
+   - `gog calendar events --all` for the relevant window (today through the next few days, or the dates named in KEEP threads).
+   - When Notion is configured: `$PREFS_PATH` `.channels.notion.calendars`, else search Notion for "Show Schedule" / "Calendar" / "Appointments" databases and query that window.
+   - `gog auth list` then search every mailbox for the contact and topic of each NEEDS_REPLY candidate.
+   - Every configured messaging channel (each WhatsApp account, each Slack workspace, iMessage, Telegram, Discord).
+   A miss on one store is not absence. Do not draft a schedule fact ("not playing tonight", "free then") until this sweep has run.
+
+6. **Launch the live inbox watcher (background job, every session)** — right after the steps above, start `bin/ops-inbox-live-watch.sh` via Bash with `run_in_background: true`. It polls the Gmail inbox (via `gog`) every ~4 minutes and exits — with a `NEW INBOX MAIL: <from> | <subject> | <date> | id=<id>` summary line — the instant a genuinely new inbound message lands; it also exits (with a `watcher expired` line) after ~6h if nothing new arrives. **The job's exit IS the new-mail ping** — treat it exactly like a direct orchestrator notification: when it fires, re-scan the affected channel and relaunch the watcher (same command) so live coverage never lapses. Pure bash + python3 + `gog`, no systemd/launchd dependency, cross-platform (Linux + macOS).
 
 Channel processing, FULL-THREAD AWARENESS GATE, and per-channel recipes: `details.md`.
