@@ -141,6 +141,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.10.2] - 2026-08-28
+
+### Changed
+Grok skipped the inbox autosync hook because $INPUT in hooks.json is treated as a required env var.
+
+
 ## [3.10.1] - 2026-08-28
 
 ### Changed
