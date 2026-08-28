@@ -38,6 +38,11 @@ SERVICES_CONFIG="$DATA_DIR/daemon-services.json"
 HEALTH_FILE="$DATA_DIR/daemon-health.json"
 MAX_LOG_SIZE=2097152  # 2MB
 DAEMON_START=$(date +%s)
+# Stderr capture files for the external `gog` calls in prefetch_briefing_cache
+# and prefetch_calendar. These exist so a hard failure from gog lands in the log
+# instead of /dev/null; removed by cleanup() on shutdown.
+TMP_GOG_EMAIL_ERR="$DATA_DIR/cache/.gog_email.err"
+TMP_GOG_CAL_ERR="$DATA_DIR/cache/.gog_calendar.err"
 
 mkdir -p "$LOG_DIR"
 mkdir -p "$DATA_DIR/cache"
@@ -657,11 +662,26 @@ print(json.dumps({'total_chats':len(recent),'count':len(data)}))
   _refresh_pids+=($!)
 
   # Email count
-  (command -v gog &>/dev/null && gog gmail search -j --results-only --no-input --max 10 "in:inbox" 2>/dev/null | python3 -c "
+  # Never swallow gog's stderr. This call used 2>/dev/null, so a hard error
+  # ("missing --account", expired auth) came back as an empty result and got
+  # logged as a quiet inbox — the same failure that kept the memory extractor
+  # looking healthy while it extracted nothing. Capture stderr and surface it.
+  (if command -v gog &>/dev/null; then
+    local _email_raw=""
+    _email_raw=$(gog gmail search -j --results-only --no-input --max 10 "in:inbox" 2>"$TMP_GOG_EMAIL_ERR" || true)
+    if [[ -n "$_email_raw" ]]; then
+      printf '%s' "$_email_raw" | python3 -c "
 import json,sys
 data=json.load(sys.stdin)
 print(json.dumps({'unread_count':len(data)}))
-" > "$tmpdir/email.json" 2>/dev/null) &
+" > "$tmpdir/email.json" 2>>"$TMP_GOG_EMAIL_ERR" || true
+    fi
+    if [[ ! -s "$tmpdir/email.json" ]]; then
+      local _gog_err=""
+      [[ -s "$TMP_GOG_EMAIL_ERR" ]] && _gog_err=$(tr '\n' ' ' < "$TMP_GOG_EMAIL_ERR" | cut -c1-300)
+      log "BRAIN: gog gmail search returned no data${_gog_err:+ -- ${_gog_err}} (skipping email count)"
+    fi
+  fi) &
   _refresh_pids+=($!)
 
   # Open PRs
@@ -732,9 +752,53 @@ if urgent:
 }
 
 # Trigger memory extraction early when new high-value messages arrive.
+#
+# This is an "run EARLIER than the next scheduled run", not a second schedule.
+# It used to behave as the latter, for two compounding reasons:
+#
+#   1. It read the wrong key out of memories/.health. The extractor writes
+#      "last_run"; this read "timestamp", which is never present, so last_ts was
+#      always empty and the new-message test fell through to its `data[:5]`
+#      fallback -- a constant 5, permanently above the >3 threshold. Every
+#      10-minute check therefore fired, and the log shows the signature
+#      plainly: 106 consecutive "5 new messages since last extraction" entries
+#      on 2026-08-24, one per check, regardless of actual message activity.
+#
+#   2. Nothing related the trigger to the 30-minute cron entry, so its runs were
+#      purely additive: 106 smart + 36 cron = 142 starts in 18 hours against a
+#      documented schedule of 48/day.
+#
+# Fixes: read "last_run", and refuse to fire unless MIN_EXTRACTION_GAP has
+# elapsed since the extractor last actually ran. That gap is measured from
+# .health, which the extractor writes on every run whatever started it, so the
+# floor applies across BOTH trigger paths rather than only to this one.
+#
+# The gap is 20 min against a 30-min cron period. That lets a genuine burst of
+# messages pull the next extraction forward by up to 10 minutes while making it
+# impossible for this path to add more than one run per cron period. A shorter
+# gap would buy a little more responsiveness for a store that is only re-read
+# every half hour anyway; 20 min is the conservative choice.
+#
+# Overlap itself is no longer this function's problem: ops-memory-extractor.sh
+# now holds its own lock, so cron, this trigger and manual runs cannot collide
+# whatever the timing. The PID check below is kept as a cheap early-out that
+# avoids spawning a process only for it to exit on the lock.
 trigger_smart_memory_extraction() {
   local MEMORY_TRIGGER="$DATA_DIR/cache/.memory_trigger_ts"
-  local MEM_SCRIPT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")}/scripts/ops-memory-extractor.sh"
+  # Prefer the desk wrapper when it is installed. It runs the same extractor,
+  # but with OPS_DATA_DIR pointed at a staging root that holds no contact_*.md,
+  # so no contact list reaches the prompt, and it files the run's person output
+  # in the relationship desk instead of in flat memory. Without this line the
+  # cron path would go through the wrapper (see daemon-services.json) while
+  # this 10-minute trigger kept writing contact_*.md straight into memories/.
+  local MEM_SCRIPT="$DATA_DIR/bin/ops-memory-to-desk.sh"
+  if [[ ! -x "$MEM_SCRIPT" ]]; then
+    MEM_SCRIPT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")}/scripts/ops-memory-extractor.sh"
+  fi
+  # Minimum seconds between any two extraction runs, whichever trigger starts
+  # them. Must stay below the 30-min cron period or it would suppress the
+  # scheduled run instead of merely rate-limiting the early one.
+  local MIN_EXTRACTION_GAP=1200
 
   # Only check every 10 min
   if [[ -f "$MEMORY_TRIGGER" ]]; then
@@ -748,14 +812,43 @@ trigger_smart_memory_extraction() {
   # Check if new messages arrived since last extraction
   local last_extraction="$DATA_DIR/memories/.health"
   if [[ -f "$last_extraction" ]]; then
-    local last_ts
+    local last_ts last_epoch
+    # "last_run" is the key the extractor actually writes; "timestamp" is
+    # tolerated so a .health left by an older build still parses.
     last_ts=$(python3 -c "
 import json
 try:
     d=json.load(open('$last_extraction'))
-    print(d.get('timestamp',''))
+    print(d.get('last_run') or d.get('timestamp') or '')
 except: print('')
 " 2>/dev/null)
+
+    # Enforce the floor between runs. If we cannot establish when the extractor
+    # last ran we do NOT fire: cron still covers the store on its own schedule,
+    # so the safe failure mode is to skip the early run, not to add one. This is
+    # what the old `data[:5]` fallback got backwards.
+    if [[ -z "$last_ts" ]]; then
+      log "BRAIN: no readable last_run in .health — leaving extraction to cron"
+      date +%s > "$MEMORY_TRIGGER"
+      return 0
+    fi
+    last_epoch=$(python3 -c "
+import datetime,sys
+try:
+    print(int(datetime.datetime.strptime('$last_ts','%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc).timestamp()))
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)
+    if (( last_epoch <= 0 )); then
+      log "BRAIN: could not parse last_run ('$last_ts') — leaving extraction to cron"
+      date +%s > "$MEMORY_TRIGGER"
+      return 0
+    fi
+    local since=$(( $(date +%s) - last_epoch ))
+    if (( since < MIN_EXTRACTION_GAP )); then
+      date +%s > "$MEMORY_TRIGGER"
+      return 0
+    fi
 
     # Read from keepalive cache to check for new messages (no store-lock contention)
     local wacli_chats_cache="$DATA_DIR/cache/wacli_chats.json"
@@ -765,7 +858,7 @@ except: print('')
 import json,datetime
 data=json.load(open('$wacli_chats_cache')).get('data',[]) or []
 last='${last_ts:-}'
-recent=[c for c in data if c.get('LastMessageTS','')>last] if last else data[:5]
+recent=[c for c in data if c.get('LastMessageTS','')>last]
 print(len(recent))
 " 2>/dev/null || echo 0)
 
@@ -884,7 +977,15 @@ prefetch_calendar() {
 
   if command -v gog &>/dev/null; then
     log "BRAIN: refreshing calendar cache"
-    gog calendar events primary --today --json > "$CAL_CACHE" 2>/dev/null || echo '[]' > "$CAL_CACHE"
+    # Never swallow gog's stderr. With 2>/dev/null a hard error fell straight
+    # through to the '[]' fallback and was indistinguishable from "no meetings
+    # today", so a broken calendar fetch could run for weeks unnoticed.
+    if ! gog calendar events primary --today --json > "$CAL_CACHE" 2>"$TMP_GOG_CAL_ERR" || [[ ! -s "$CAL_CACHE" ]]; then
+      echo '[]' > "$CAL_CACHE"
+      local _gog_err=""
+      [[ -s "$TMP_GOG_CAL_ERR" ]] && _gog_err=$(tr '\n' ' ' < "$TMP_GOG_CAL_ERR" | cut -c1-300)
+      log "BRAIN: gog calendar returned no data${_gog_err:+ -- ${_gog_err}} (cached empty)"
+    fi
     date +%s > "$LAST_FETCH"
   fi
 }
@@ -1691,6 +1792,7 @@ cleanup() {
   for name in "${!SERVICE_PIDS[@]}"; do
     stop_service "$name"
   done
+  rm -f "$TMP_GOG_EMAIL_ERR" "$TMP_GOG_CAL_ERR"
   write_daemon_health
   log "SHUTDOWN: all services stopped — exiting"
   exit 0
