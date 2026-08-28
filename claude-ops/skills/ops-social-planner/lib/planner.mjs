@@ -67,6 +67,105 @@ function resolveSecret(ref) {
   return process.env[ref] || ref; // raw env name or literal
 }
 
+const GRAPH = 'https://graph.facebook.com/v21.0';
+const GADS_API = 'https://googleads.googleapis.com/v24';
+
+async function graphGet(url, timeoutMs = 20000) {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok) {
+      let msg = 'HTTP ' + r.status;
+      try {
+        msg = (await r.json()).error?.message || msg;
+      } catch {}
+      return { ok: false, reason: msg };
+    }
+    return { ok: true, json: await r.json() };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
+function graphAuth(token, proof) {
+  const q = new URLSearchParams({ access_token: token });
+  if (proof) q.set('appsecret_proof', proof);
+  return q;
+}
+
+function creativeVideoIds(cr) {
+  const oss = cr.object_story_spec || {};
+  return oss.video_data && oss.video_data.video_id ? [String(oss.video_data.video_id)] : [];
+}
+
+function isVideoCreative(cr) {
+  if (creativeVideoIds(cr).length) return true;
+  if (cr.video_id) return true;
+  return ((cr.asset_feed_spec && cr.asset_feed_spec.videos) || []).length > 0;
+}
+
+function creativeImageHashes(cr) {
+  const hashes = [];
+  if (cr.image_hash) hashes.push(cr.image_hash);
+  const oss = cr.object_story_spec || {};
+  if (oss.video_data && oss.video_data.image_hash) hashes.push(oss.video_data.image_hash);
+  if (oss.photo_data && oss.photo_data.image_hash) hashes.push(oss.photo_data.image_hash);
+  if (oss.link_data && oss.link_data.image_hash) hashes.push(oss.link_data.image_hash);
+  for (const im of (cr.asset_feed_spec && cr.asset_feed_spec.images) || []) {
+    if (im.hash) hashes.push(im.hash);
+  }
+  for (const v of (cr.asset_feed_spec && cr.asset_feed_spec.videos) || []) {
+    if (v.thumbnail_hash) hashes.push(v.thumbnail_hash);
+  }
+  return [...new Set(hashes)];
+}
+
+function hiResFromVideo(meta) {
+  if (!meta || meta.error) return null;
+  const thumbs = (meta.thumbnails && meta.thumbnails.data) || [];
+  const ranked = thumbs.slice().sort((a, b) => {
+    const pref = (b.is_preferred ? 1 : 0) - (a.is_preferred ? 1 : 0);
+    if (pref) return pref;
+    return (b.width || 0) * (b.height || 0) - (a.width || 0) * (a.height || 0);
+  });
+  if (ranked[0] && ranked[0].uri) return ranked[0].uri;
+  const fmts = (meta.format || []).slice().sort((a, b) => (b.width || 0) - (a.width || 0));
+  return (fmts[0] && fmts[0].picture) || meta.picture || null;
+}
+
+function isBrowserDeadUrl(url) {
+  return !url || url.includes('facebook.com/ads/image');
+}
+
+function pickCreativeMedia(cr, videoById, imageByHash) {
+  const oss = cr.object_story_spec || {};
+  const feed = cr.asset_feed_spec || {};
+  const videoIds = creativeVideoIds(cr);
+  let url = null;
+  for (const id of videoIds) {
+    url = hiResFromVideo(videoById[id]);
+    if (url) break;
+  }
+  if (!url) url = cr.image_url;
+  if (!url && oss.photo_data) url = oss.photo_data.url;
+  if (!url && oss.link_data) url = oss.link_data.picture;
+  if (!url) {
+    const im = ((feed.images || []).find((x) => x.url) || {}).url;
+    if (im) url = im;
+  }
+  if (!url) {
+    for (const h of creativeImageHashes(cr)) {
+      if (imageByHash[h]) {
+        url = imageByHash[h];
+        break;
+      }
+    }
+  }
+  if (isBrowserDeadUrl(url)) url = null;
+  if (!url) url = cr.thumbnail_url;
+  if (!url) return [];
+  return [{ type: isVideoCreative(cr) ? 'video' : 'image', url, thumb: cr.thumbnail_url || url }];
+}
+
 /* ---------- rationale (deterministic heuristic) ---------- */
 function deriveRationale(channel, copy, scheduledAt) {
   const hour = new Date(scheduledAt).getUTCHours();
@@ -196,28 +295,52 @@ async function fetchMetaAds(cfg) {
   if (!token) return { ok: false, reason: 'no token', items: [] };
   const secret = resolveSecret(m.app_secret);
   const proof = secret ? crypto.createHmac('sha256', secret).update(token).digest('hex') : null;
-  const u = new URL(`https://graph.facebook.com/v21.0/${adAccountId}/ads`);
-  u.searchParams.set(
+  const auth = graphAuth(token, proof);
+  const adsUrl = new URL(GRAPH + '/' + adAccountId + '/ads');
+  adsUrl.search = auth.toString();
+  adsUrl.searchParams.set(
     'fields',
-    'name,effective_status,created_time,creative{title,body,thumbnail_url},adset{daily_budget,targeting{publisher_platforms}}',
+    'name,effective_status,created_time,creative{title,body,thumbnail_url,image_url,image_hash,video_id,object_story_spec{link_data{picture,image_hash},video_data{video_id,image_url,image_hash},photo_data{url,image_hash}},asset_feed_spec{images{hash,url},videos{video_id,thumbnail_url,thumbnail_hash}}},adset{daily_budget,targeting{publisher_platforms}}',
   );
-  u.searchParams.set('limit', '50');
-  u.searchParams.set('access_token', token);
-  if (proof) u.searchParams.set('appsecret_proof', proof);
-  let r;
-  try {
-    r = await fetch(u, { signal: AbortSignal.timeout(15000) });
-  } catch (e) {
-    return { ok: false, reason: e.message, items: [] };
+  adsUrl.searchParams.set('limit', '50');
+  const adsRes = await graphGet(adsUrl, 20000);
+  if (!adsRes.ok) return { ok: false, reason: adsRes.reason, items: [] };
+  const ads = (adsRes.json && adsRes.json.data) || [];
+
+  const videoIds = [...new Set(ads.flatMap((a) => creativeVideoIds(a.creative || {})))];
+  const videoById = {};
+  if (videoIds.length) {
+    const vUrl = new URL(GRAPH + '/');
+    vUrl.search = auth.toString();
+    vUrl.searchParams.set('ids', videoIds.join(','));
+    vUrl.searchParams.set('fields', 'picture,format,thumbnails.limit(8){uri,height,width,is_preferred}');
+    const vRes = await graphGet(vUrl, 20000);
+    if (vRes.ok && vRes.json) Object.assign(videoById, vRes.json);
   }
-  if (!r.ok) {
-    let msg = `HTTP ${r.status}`;
-    try {
-      msg = (await r.json()).error?.message || msg;
-    } catch {}
-    return { ok: false, reason: msg, items: [] };
+
+  const hashes = [
+    ...new Set(
+      ads.flatMap((a) => {
+        const cr = a.creative || {};
+        if (cr.image_url) return [];
+        if (creativeVideoIds(cr).some((id) => hiResFromVideo(videoById[id]))) return [];
+        return creativeImageHashes(cr);
+      }),
+    ),
+  ];
+  const imageByHash = {};
+  for (let i = 0; i < hashes.length; i += 8) {
+    const chunk = hashes.slice(i, i + 8);
+    const iUrl = new URL(GRAPH + '/' + adAccountId + '/adimages');
+    iUrl.search = auth.toString();
+    iUrl.searchParams.set('hashes', JSON.stringify(chunk));
+    iUrl.searchParams.set('fields', 'hash,url,permalink_url,original_width,original_height');
+    const iRes = await graphGet(iUrl, 15000);
+    for (const im of (iRes.ok && iRes.json && iRes.json.data) || []) {
+      if (im.hash && im.url) imageByHash[im.hash] = im.url;
+    }
   }
-  const ads = (await r.json()).data || [];
+
   const items = ads.map((a) => {
     const cr = a.creative || {};
     const pp = a.adset?.targeting?.publisher_platforms || [];
@@ -225,16 +348,17 @@ async function fetchMetaAds(cfg) {
     if (channel === 'audience_network' || channel === 'messenger') channel = 'meta';
     const budget = a.adset?.daily_budget ? ' · $' + (a.adset.daily_budget / 100).toFixed(0) + '/day' : '';
     const copy = [cr.title, cr.body].filter(Boolean).join('\n\n') || a.name;
+    const media = pickCreativeMedia(cr, videoById, imageByHash);
     return {
       id: 'meta-' + a.id,
       channel,
       kind: 'ad',
-      type: 'ad',
+      type: media[0] && media[0].type === 'video' ? 'video' : 'ad',
       scheduled_at: a.created_time || null,
       ad_status: a.effective_status,
       copy,
       rationale: 'Meta ad · ' + a.effective_status + budget + ' · placement: ' + (pp.join(', ') || 'auto') + '.',
-      media: cr.thumbnail_url ? [{ type: 'image', url: cr.thumbnail_url, thumb: cr.thumbnail_url }] : [],
+      media,
       links: [],
       char_count: copy.length,
       title: a.name,
@@ -282,7 +406,7 @@ async function fetchGoogleAds(cfg) {
     "SELECT campaign.name, campaign.status, ad_group_ad.ad.responsive_search_ad.headlines, ad_group_ad.ad.final_urls FROM ad_group_ad WHERE campaign.status != 'REMOVED' LIMIT 50";
   let rows = [];
   try {
-    const r = await fetch('https://googleads.googleapis.com/v20/customers/' + cust + '/googleAds:searchStream', {
+    const r = await fetch(GADS_API + '/customers/' + cust + '/googleAds:search', {
       method: 'POST',
       headers,
       body: JSON.stringify({ query }),
