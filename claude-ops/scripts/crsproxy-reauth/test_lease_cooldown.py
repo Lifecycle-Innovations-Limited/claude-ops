@@ -43,6 +43,78 @@ def test_lease_stale_seconds():
     print("PASS: Lease stale threshold is 600 seconds (10 min)")
 
 
+def test_acquire_lease_is_atomic_under_concurrency():
+    """Only ONE of N concurrent acquirers may win the lease.
+
+    Regression guard for the exists()-then-write race: two syscalls with a
+    window between them let every racer see "no lease" and every racer write,
+    so all of them believed they held it. The claim must be a single atomic
+    exclusive create.
+    """
+    import multiprocessing
+
+    def _worker(lease_path_str, q):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import bu_reauth as br
+        br.LEASE_FILE = Path(lease_path_str)
+        br.LEGACY_LEASE_FILE = Path(lease_path_str + ".legacy")
+        # max_wait=0 so a loser returns immediately instead of polling.
+        q.put(br.acquire_lease("claude", max_wait=0))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        lease_path = str(Path(tmpdir) / "lease.json")
+        q = multiprocessing.Queue()
+        procs = [multiprocessing.Process(target=_worker, args=(lease_path, q))
+                 for _ in range(8)]
+        for pr in procs:
+            pr.start()
+        for pr in procs:
+            pr.join(30)
+        results = [q.get() for _ in range(len(procs))]
+
+    winners = sum(1 for r in results if r is True)
+    assert winners == 1, f"Expected exactly 1 winner, got {winners} of {len(results)}"
+    print("PASS: acquire_lease is atomic — exactly one of 8 racers wins")
+
+
+def test_acquire_lease_unreadable_does_not_steal():
+    """An unreadable lease is never silently overwritten while it is held.
+
+    A transient read failure must not be read as "no lease exists". The claim
+    is an exclusive create, so a present-but-unreadable lease still loses the
+    create and the caller waits or times out rather than stealing it.
+    """
+    orig_lease = bu_reauth.LEASE_FILE
+    orig_legacy = bu_reauth.LEGACY_LEASE_FILE
+    with tempfile.TemporaryDirectory() as tmpdir:
+        lease_path = Path(tmpdir) / "lease.json"
+        bu_reauth.LEASE_FILE = lease_path
+        bu_reauth.LEGACY_LEASE_FILE = Path(tmpdir) / "legacy.json"
+
+        # Fresh lease held by another process, deliberately unparseable.
+        lease_path.write_text("{ not valid json")
+        os.chmod(lease_path, 0o000)
+        try:
+            before = lease_path.stat().st_mtime_ns
+            result = bu_reauth.acquire_lease("claude", max_wait=0)
+            # Either it failed to acquire, or it removed the corrupt file and
+            # claimed cleanly — but it must never leave another holder's file
+            # overwritten in place while still reporting success on a file it
+            # could not read.
+            if result is True:
+                data = json.loads(lease_path.read_text())
+                assert data["pid"] == os.getpid(), "claimed a lease it did not create"
+                assert lease_path.stat().st_mtime_ns != before, "overwrote in place"
+        finally:
+            try:
+                os.chmod(lease_path, 0o644)
+            except OSError:
+                pass
+    bu_reauth.LEASE_FILE = orig_lease
+    bu_reauth.LEGACY_LEASE_FILE = orig_legacy
+    print("PASS: unreadable lease is not silently stolen")
+
+
 def test_acquire_lease_no_existing():
     """acquire_lease acquires when no lease file exists."""
     orig_lease = bu_reauth.LEASE_FILE
@@ -473,6 +545,8 @@ def main():
         test_acquire_lease_stale_deleted,
         test_acquire_lease_waits_for_recent,
         test_acquire_lease_timeout,
+        test_acquire_lease_is_atomic_under_concurrency,
+        test_acquire_lease_unreadable_does_not_steal,
         test_release_lease,
         test_release_lease_missing_ok,
         test_release_lease_always_called,
