@@ -29,7 +29,10 @@ fi
 
 TMP="$(mktemp -d)"
 BROKER_PID=""
+RACE_PID=""
 cleanup() {
+  [[ -n "$RACE_PID" ]] && kill "$RACE_PID" 2>/dev/null
+  [[ -n "$RACE_PID" ]] && wait "$RACE_PID" 2>/dev/null
   [[ -n "$BROKER_PID" ]] && kill "$BROKER_PID" 2>/dev/null
   rm -rf "$TMP"
 }
@@ -65,6 +68,48 @@ run_client() { # $1 = var → prints value, sets global RC
   OUT="$(POCKET_ENV_BROKER_SOCK="$SOCK" POCKET_STATE_DIR="$TMP" "$PY" "$CLIENT" "$1" 2>/dev/null)"
   RC=$?
 }
+
+# The socket path must not advertise readiness before listen() is active. Slow
+# the post-bind hardening step and prove a client can connect while it is paused.
+RACE_SOCK="$TMP/readiness.sock"
+RACE_READY="$TMP/hardening-started"
+POCKET_ENV_BROKER_SOCK="$RACE_SOCK" POCKET_ENV_BROKER_POLICY="$POLICY" \
+  POCKET_ENV_BROKER_AUDIT="$TMP/readiness-audit.log" \
+  POCKET_ENV_BROKER_HEALTH="$TMP/readiness-health.json" \
+  POCKET_WORKER_USER="$(id -un)" BROKER_PATH="$BROKER" RACE_READY="$RACE_READY" \
+  "$PY" -c '
+import importlib.util, os, pathlib, sys, time
+spec = importlib.util.spec_from_file_location("pocket_env_broker", os.environ["BROKER_PATH"])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+original = module._harden_socket_perms
+def delayed(uid):
+    pathlib.Path(os.environ["RACE_READY"]).touch()
+    time.sleep(1)
+    original(uid)
+module._harden_socket_perms = delayed
+sys.exit(module.serve())
+' &
+RACE_PID=$!
+for _ in $(seq 1 50); do
+  [[ -S "$RACE_SOCK" && -f "$RACE_READY" ]] && break
+  sleep 0.02
+done
+if POCKET_ENV_BROKER_SOCK="$RACE_SOCK" "$PY" -c '
+import os, socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(0.2)
+s.connect(os.environ["POCKET_ENV_BROKER_SOCK"])
+s.close()
+'; then
+  ok "socket becomes connectable before post-bind hardening finishes"
+else
+  err "socket readiness" "path existed before listen() accepted connections"
+fi
+kill "$RACE_PID" 2>/dev/null
+wait "$RACE_PID" 2>/dev/null
+RACE_PID=""
+rm -f "$RACE_SOCK"
 
 # ── Case A: authorized uid (current user) ───────────────────────────────────
 ME="$(id -un)"
