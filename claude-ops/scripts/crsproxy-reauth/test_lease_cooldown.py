@@ -109,6 +109,9 @@ def test_acquire_lease_unreadable_does_not_steal():
             try:
                 os.chmod(lease_path, 0o600)
             except OSError:
+                # Cleanup only, so the TemporaryDirectory can be removed. The
+                # file is gone whenever acquire_lease cleared the corrupt
+                # lease, which is a valid outcome of this test.
                 pass
     bu_reauth.LEASE_FILE = orig_lease
     bu_reauth.LEGACY_LEASE_FILE = orig_legacy

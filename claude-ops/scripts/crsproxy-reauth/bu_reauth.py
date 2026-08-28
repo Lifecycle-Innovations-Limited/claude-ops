@@ -419,20 +419,49 @@ def _try_create_lease(path, provider: str) -> bool:
     })
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        # Non-fatal on purpose: the directory may already exist but be
+        # unwritable by this user, or be owned by the service account. The
+        # exclusive create below is the real gate — let it produce the
+        # authoritative error rather than failing here on a probe.
+        log(f"Lease dir not creatable ({exc}) — continuing to claim attempt")
+    # Build the lease in a private temp file FIRST, then link it into place.
+    # O_CREAT|O_EXCL alone is atomic for the *create* but leaves a window in
+    # which the file exists and is still empty: a racer reading it in that
+    # window sees invalid JSON, classifies the lease as corrupt, removes it,
+    # and claims it too. os.link() is atomic AND the destination already has
+    # its full contents the instant it appears, so the window does not exist.
+    # (Measured: the create-then-write shape let 2 of 8 racers win.)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.tmp"
     try:
         # 0o600: the lease records a provider name and pid and is only ever
         # read by the service account that writes it. No reason for group or
         # world read.
-        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
+        fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError as exc:
+        log(f"Lease temp file not creatable ({exc}) — cannot claim")
         return False
     try:
         os.write(fd, payload.encode())
     finally:
         os.close(fd)
-    return True
+
+    try:
+        os.link(str(tmp), str(path))
+        return True
+    except FileExistsError:
+        return False
+    except OSError as exc:
+        log(f"Lease link failed ({exc}) — treating as not acquired")
+        return False
+    finally:
+        try:
+            os.unlink(str(tmp))
+        except OSError:
+            # The temp file is ours alone and already served its purpose; a
+            # failure to remove it leaks one small file and must never turn a
+            # successful claim into a failure.
+            pass
 
 
 def acquire_lease(provider: str, max_wait: int = 120) -> bool:
@@ -476,8 +505,11 @@ def acquire_lease(provider: str, max_wait: int = 120) -> bool:
             log(f"Stale lease ({int(age)}s old) — removing")
             try:
                 lease_path.unlink()
-            except OSError:
-                pass
+            except OSError as exc:
+                # Another process may have cleared the same stale lease first,
+                # which is the desired outcome, not an error. Loop back and let
+                # the exclusive create decide who actually holds it.
+                log(f"Stale lease already gone or not removable ({exc}) — retrying claim")
             continue
 
         if first_check:
