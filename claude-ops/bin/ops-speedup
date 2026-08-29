@@ -334,11 +334,37 @@ probe_runtime() {
       tcp_counts=$(netstat -an 2>/dev/null | awk '$6=="CLOSE_WAIT"{cw++} $6=="TIME_WAIT"{tw++} END{printf "%d %d",cw+0,tw+0}')
     elif $IS_LINUX || $IS_WSL; then
       local top_out
-      # top's FIRST sample on Linux is cumulative since boot, so -bn1 reports a
-      # number that is not "now" and swings wildly (observed: two scans 90s
-      # apart on the same unchanged host read 0.0% and 57% idle, flipping the
-      # health score between 48 and 80). Take a second sample and read that.
-      top_out=$(top -bn2 -d 1 2>/dev/null | grep '%Cpu' | tail -1)
+      # Derive CPU from /proc/stat deltas rather than top. Two independent
+      # reasons top is wrong here:
+      #   1. top's FIRST sample on Linux is cumulative since boot, so -bn1
+      #      reports a number that is not "now" and swings wildly (observed:
+      #      two scans 90s apart on the same unchanged host read 0.0% and 57%
+      #      idle, flipping the health score between 48 and 80).
+      #   2. top's per-CPU display mode (persisted in toprc) replaces the
+      #      single "%Cpu(s):" aggregate with one "%CpuN:" line per core, so
+      #      any '%Cpu' line match silently reads one core instead of the box.
+      # /proc/stat has neither problem and needs no subprocess sampling.
+      # OPS-SPEEDUP-LINUX-CPU-BEGIN
+      __cpu_s1=$(awk '/^cpu /{print; exit}' /proc/stat 2>/dev/null)
+      sleep 1
+      __cpu_s2=$(awk '/^cpu /{print; exit}' /proc/stat 2>/dev/null)
+      top_out=$(awk -v a="$__cpu_s1" -v b="$__cpu_s2" 'BEGIN{
+        na=split(a,A," "); nb=split(b,B," ");
+        if (na<8 || nb<8) exit;
+        n=(na<nb?na:nb); tot=0;
+        for(i=2;i<=n;i++){ d=B[i]-A[i]; if(d<0) exit; tot+=d }
+        if (tot<=0) exit;
+        user=((B[2]-A[2])+(B[3]-A[3]))/tot*100;
+        sys=((B[4]-A[4])+(B[7]-A[7])+(B[8]-A[8]))/tot*100;
+        idle=(B[5]-A[5])/tot*100;
+        printf "%.1f us, %.1f sy, %.1f id", user, sys, idle;
+      }' 2>/dev/null)
+      # Fall back to top only if /proc/stat was unreadable. Ask for two samples
+      # and take the last aggregate line, since the first is since-boot.
+      if [ -z "$top_out" ]; then
+        top_out=$(top -bn2 -d 1 2>/dev/null | grep -F '%Cpu(s)' | tail -1)
+      fi
+      # OPS-SPEEDUP-LINUX-CPU-END
       # Robust parse: field labels vary (us/user, sy/system, id/idle) and
       # awk -F'[:,%]' can yield non-numeric tokens like "Cpu(s)" / "us".
       cpu_user=$(echo "$top_out" | grep -oE '[0-9]+([.][0-9]+)?[[:space:]]*(us|user)' | head -1 | grep -oE '[0-9]+([.][0-9]+)?' || true)
