@@ -334,7 +334,11 @@ probe_runtime() {
       tcp_counts=$(netstat -an 2>/dev/null | awk '$6=="CLOSE_WAIT"{cw++} $6=="TIME_WAIT"{tw++} END{printf "%d %d",cw+0,tw+0}')
     elif $IS_LINUX || $IS_WSL; then
       local top_out
-      top_out=$(top -bn1 2>/dev/null | grep -m1 '%Cpu')
+      # top's FIRST sample on Linux is cumulative since boot, so -bn1 reports a
+      # number that is not "now" and swings wildly (observed: two scans 90s
+      # apart on the same unchanged host read 0.0% and 57% idle, flipping the
+      # health score between 48 and 80). Take a second sample and read that.
+      top_out=$(top -bn2 -d 1 2>/dev/null | grep '%Cpu' | tail -1)
       # Robust parse: field labels vary (us/user, sy/system, id/idle) and
       # awk -F'[:,%]' can yield non-numeric tokens like "Cpu(s)" / "us".
       cpu_user=$(echo "$top_out" | grep -oE '[0-9]+([.][0-9]+)?[[:space:]]*(us|user)' | head -1 | grep -oE '[0-9]+([.][0-9]+)?' || true)
