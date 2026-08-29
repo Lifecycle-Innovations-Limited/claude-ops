@@ -141,6 +141,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.10.4] - 2026-08-29
+
+### Changed
+Fix Linux/WSL startup probe counting the systemctl legend line as a failed unit, which applied a permanent -5 health penalty and a false failed-startup-units factor on healthy boxes.
+
+
 ## [3.10.3] - 2026-08-29
 
 ### Changed
