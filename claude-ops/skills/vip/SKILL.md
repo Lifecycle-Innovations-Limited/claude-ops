@@ -53,6 +53,16 @@ VIP_LIST_PATH="${VIP_LIST_PATH:-$(read_pref vip_list_path)}"
 VIP_LIST_PATH="${VIP_LIST_PATH:-$HOME/.claude-ops/state/vip-list.json}"
 VIP_MAX_TIER="${VIP_MAX_TIER:-$(read_pref vip_max_tier)}"
 VIP_MAX_TIER="${VIP_MAX_TIER:-2}"
+
+# "No VIPs" and "the VIP list was never set up" are DIFFERENT answers and must
+# never look the same. An unconfigured install that silently reports an empty
+# list turns this skill into a no-op: every inbox sweep then treats the most
+# important people as ordinary traffic and nobody finds out. Fail loud.
+if [ ! -f "$VIP_LIST_PATH" ]; then
+  echo "vip: no list at $VIP_LIST_PATH — set userConfig vip_list_path or VIP_LIST_PATH." >&2
+  echo "vip: copy templates/vip-list.example.json there to start one." >&2
+  exit 3
+fi
 ```
 
 The list file lives OUTSIDE the repo tree — it is the operator's identity and
