@@ -82,6 +82,28 @@ state_counts=$(bash "$BIN" --classify-process-states \
   "$tmpdir/states-1" "$tmpdir/states-2" "$tmpdir/states-3")
 assert_eq "transient U is ignored and persistent U is counted" "5 2 1 1" "$state_counts"
 
+# SSH automation on macOS can leave a defunct child under a still-live
+# sshd-session parent. That is the agent's own connection lifecycle, not a
+# machine-health defect. Ignore only that exact parent relationship; an
+# unrelated zombie must still count.
+for n in 1 2; do
+  cat >"$tmpdir/states-sshd-$n" <<'EOF'
+700 S 1 sshd-session
+701 S 700 child
+800 S 1 ordinary-parent
+801 S 800 child
+EOF
+done
+cat >"$tmpdir/states-sshd-3" <<'EOF'
+700 S 1 sshd-session
+701 Z 700 child
+800 S 1 ordinary-parent
+801 Z 800 child
+EOF
+sshd_zombies=$(bash "$BIN" --classify-process-states \
+  "$tmpdir/states-sshd-1" "$tmpdir/states-sshd-2" "$tmpdir/states-sshd-3")
+assert_eq "sshd-session zombie is ignored but unrelated zombie counts" "4 0 0 1" "$sshd_zombies"
+
 cat >"$tmpdir/states-none-1" <<'EOF'
 11 U
 12 S
@@ -107,17 +129,17 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   cat >"$tmpdir/mock-bin/ps" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == "-Ao pid=,stat=" ]]; then
+if [[ "$*" == "-Ao pid=,stat=,ppid=,comm=" ]]; then
   count_file="$OPS_SPEEDUP_PS_COUNT"
   count=0
   [[ -f "$count_file" ]] && count=$(cat "$count_file")
   count=$((count + 1))
   printf '%s\n' "$count" >"$count_file"
   case "${OPS_SPEEDUP_PS_SCENARIO}:${count}" in
-    transient:1) printf '101 U\n202 S\n' ;;
-    transient:2) printf '101 S\n202 U\n' ;;
-    transient:3) printf '101 R\n202 S\n' ;;
-    persistent:*) printf '101 U\n202 S\n' ;;
+    transient:1) printf '101 U 1 worker\n202 S 1 worker\n' ;;
+    transient:2) printf '101 S 1 worker\n202 U 1 worker\n' ;;
+    transient:3) printf '101 R 1 worker\n202 S 1 worker\n' ;;
+    persistent:*) printf '101 U 1 worker\n202 S 1 worker\n' ;;
     *) exit 3 ;;
   esac
 else
