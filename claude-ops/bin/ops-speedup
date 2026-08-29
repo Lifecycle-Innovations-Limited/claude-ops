@@ -24,22 +24,36 @@ else
 fi
 
 # Count the latest runnable/zombie states and only call a PID stuck when the
-# same PID remains blocked across all three samples. Kept as one shared helper
-# so regression checks exercise the exact classifier used by the live probe.
+# same PID remains blocked across all three samples. Optional columns 3/4 are
+# PPID and command. A zombie parented by sshd-session is the agent's own SSH
+# connection lifecycle on macOS, not a machine-health defect; ignore only that
+# exact relationship. Kept as one shared helper so regression checks exercise
+# the exact classifier used by the live probe.
 classify_process_state_samples() {
   awk '
     FNR == 1 { sample++ }
     {
       pid=$1; state=$2
       if (!(pid in seen)) { seen[pid]=1; total++ }
-      if (sample == 3 && state ~ /^R/) running++
-      if (sample == 3 && state ~ /^Z/) zombies++
+      if (sample == 3) {
+        latest_state[pid]=state
+        latest_ppid[pid]=$3
+        latest_comm[pid]=$4
+      }
       if (state ~ /^U/) blocked[pid]++
     }
     END {
       if (sample != 3) {
         print "classify_process_state_samples: expected 3 samples, got " sample+0 " (empty or missing ps output?)" > "/dev/stderr"
         exit 1
+      }
+      running=0; zombies=0
+      for (pid in latest_state) {
+        if (latest_state[pid] ~ /^R/) running++
+        if (latest_state[pid] ~ /^Z/) {
+          parent=latest_ppid[pid]
+          if (latest_comm[parent] !~ /^sshd-session/) zombies++
+        }
       }
       persistent=0
       for (pid in blocked) if (blocked[pid] == 3) persistent++
@@ -326,9 +340,9 @@ probe_runtime() {
       states1=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
       states2=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
       states3=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
-      ps -Ao pid=,stat= 2>/dev/null >"$states1"; sleep 1
-      ps -Ao pid=,stat= 2>/dev/null >"$states2"; sleep 1
-      ps -Ao pid=,stat= 2>/dev/null >"$states3"
+      ps -Ao pid=,stat=,ppid=,comm= 2>/dev/null >"$states1"; sleep 1
+      ps -Ao pid=,stat=,ppid=,comm= 2>/dev/null >"$states2"; sleep 1
+      ps -Ao pid=,stat=,ppid=,comm= 2>/dev/null >"$states3"
       process_counts=$(classify_process_state_samples "$states1" "$states2" "$states3")
       rm -f "$states1" "$states2" "$states3"
       tcp_counts=$(netstat -an 2>/dev/null | awk '$6=="CLOSE_WAIT"{cw++} $6=="TIME_WAIT"{tw++} END{printf "%d %d",cw+0,tw+0}')
