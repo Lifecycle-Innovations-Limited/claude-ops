@@ -17,6 +17,7 @@ HOOK = os.environ.get(
     os.path.expanduser("~/.claude/scripts/hooks/block-outbound-comms.py"),
 )
 BR = "http://127.0.0.1:%d/api/send"
+UP = "http://127.0.0.1:%d/api/v1/" + "media"
 G = "gog gmail"
 
 MUST_BLOCK = [
@@ -51,6 +52,14 @@ MUST_PASS = [
                        "tool_input": {"chat_jid": "x@lid"}}),
     ("whatsapp archive", {"tool_name": "mcp__whatsapp-nl__archive_chat",
                           "tool_input": {"chat_jid": "x@lid", "archive": True}}),
+    # Staging bytes on the bridge host is not a send. The bridges run on ai-hub, so
+    # a file anywhere else must be uploaded before it can be attached; gating that
+    # would cost an approval token before the real send even happens, and one token
+    # is one send. Pinned because the tool name sits one word away from send_file.
+    ("whatsapp upload", {"tool_name": "mcp__whatsapp-nl__upload_media",
+                         "tool_input": {"filename": "qr.png", "content_base64": "aGk="}}),
+    ("bridge upload curl", {"tool_name": "Bash",
+                            "tool_input": {"command": "curl -s -X POST " + (UP % 8083) + " -d @x"}}),
     ("plain ls", {"tool_name": "Bash", "tool_input": {"command": "ls -la /tmp"}}),
 ]
 
