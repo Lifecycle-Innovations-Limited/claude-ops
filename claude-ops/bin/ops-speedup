@@ -492,7 +492,15 @@ probe_startup() {
       echo "launch_agents=$agents"
     elif $IS_LINUX || $IS_WSL; then
       local failed enabled
-      failed=$(systemctl --failed --no-pager 2>/dev/null | grep -c "loaded" || echo 0)
+      # `systemctl --failed --no-pager` prints a trailing legend even when
+      # nothing failed ("0 loaded units listed."), so grep -c "loaded"
+      # returned 1 on a perfectly healthy box and cost 5 health points
+      # forever (verified 2026-08-29: host had 0 failed units in BOTH system
+      # and user scope while the scan reported failed_units=1). Use
+      # --no-legend and count real rows. Note `|| true`, not `|| echo 0`:
+      # grep -c prints 0 AND exits 1 on no match, which would concatenate.
+      failed=$(systemctl --failed --no-legend --no-pager 2>/dev/null | grep -c . || true)
+      failed=${failed:-0}
       enabled=$(systemctl list-unit-files --state=enabled --no-pager --no-legend 2>/dev/null | wc -l | tr -d ' ')
       echo "failed_units=$failed"
       echo "enabled_units=$enabled"
