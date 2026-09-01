@@ -406,9 +406,12 @@ TOTAL_PROBES=13
   if [[ -n "$FINOPS_URL" && -n "$FINOPS_TOKEN" ]]; then
     RAW=$(curl -sf -H "Authorization: Bearer $FINOPS_TOKEN" \
       "${FINOPS_URL}/api/ops/snapshot" --max-time 5 2>/dev/null)
-    ANOM=$(curl -sf -H "Authorization: Bearer $FINOPS_TOKEN" \
+    ANOM=$(curl -sf -H "Authorization: Bearer ***" \
       "${FINOPS_URL}/api/ops/anomalies" --max-time 5 2>/dev/null || echo '[]')
     [[ -z "$ANOM" ]] && ANOM='[]'
+    echo "$ANOM" | jq -e . >/dev/null 2>&1 || ANOM='[]'
+    _ANOM_COUNT=$(echo "$ANOM" | jq -c . 2>/dev/null | wc -l | tr -d ' ')
+    [[ "$_ANOM_COUNT" == "1" ]] || ANOM='[]'
     if [[ -n "$RAW" ]]; then
       echo "$RAW" | jq --argjson anom "$ANOM" '{
         mrr: (.revenue_snapshot.total_mrr_usd | tostring),
@@ -473,6 +476,7 @@ TOTAL_PROBES=13
   _TMPLINEAR=$(mktemp -d)
 
   for _KEY_VAR in LINEAR_API_KEY MY-PROJECT_LINEAR_API_KEY EXAMPLE-PROJECT_LINEAR_API_KEY; do
+    [[ "$_KEY_VAR" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
     _TOKEN="${!_KEY_VAR:-}"
     [[ -z "$_TOKEN" ]] && continue
 
@@ -493,6 +497,9 @@ TOTAL_PROBES=13
   DEDUPED=$(cat "${_TMPLINEAR}"/*.json 2>/dev/null \
     | jq -s 'add // [] | [group_by(.id)[] | first]' 2>/dev/null || echo "[]")
   rm -rf "$_TMPLINEAR"
+  _DEDUPED_COUNT=$(echo "$DEDUPED" | jq -c . 2>/dev/null | wc -l | tr -d ' ')
+  { [[ "$_DEDUPED_COUNT" == "1" ]] && echo "$DEDUPED" | jq -e 'type == "array"' >/dev/null 2>&1; } || DEDUPED='[]'
+  [[ "$WORKSPACE_COUNT" =~ ^[0-9]+$ ]] || WORKSPACE_COUNT=0
 
   jq -n --argjson nodes "$DEDUPED" --argjson ws "$WORKSPACE_COUNT" \
     '{"nodes": $nodes, "workspace_count": $ws}' \
@@ -1136,9 +1143,9 @@ render_section_marketing() {
 render_section_linear() {
   section_hdr "📊" "LINEAR"
 
-  # Check at least one key is set
-  if [[ -z "${LINEAR_API_KEY:-}" && -z "${MY-PROJECT_LINEAR_API_KEY:-}" && -z "${EXAMPLE-PROJECT_LINEAR_API_KEY:-}" ]]; then
-    p "  ${DIM2}No LINEAR_API_KEY / MY-PROJECT_LINEAR_API_KEY / EXAMPLE-PROJECT_LINEAR_API_KEY set.${RST}"; p ""; return
+  # Check at least one key is set (hyphenated names are placeholder examples, not valid bash vars)
+  if [[ -z "${LINEAR_API_KEY:-}" ]]; then
+    p "  ${DIM2}No LINEAR_API_KEY set.${RST}"; p ""; return
   fi
 
   NODES=$(echo "$LINEAR_JSON" | jq '.nodes // []' 2>/dev/null || echo "[]")

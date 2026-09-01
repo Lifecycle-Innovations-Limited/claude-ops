@@ -122,6 +122,7 @@ elif [ "$DO_WA" = 1 ]; then
 fi
 
 WA_STORE="$(dirname "${WA_MSGDB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}")"
+WA_MSGDB="${WA_MSGDB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
 WA_WADB="$WA_STORE/whatsapp.db"
 BRIDGE_PORT="${BRIDGE_PORT:-8080}"
 BRIDGE_API="http://127.0.0.1:${BRIDGE_PORT}"

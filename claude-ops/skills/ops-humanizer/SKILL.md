@@ -1,5 +1,5 @@
 ---
-name: humanizer
+name: ops-humanizer
 description: "OPS on-demand: This skill should be used when the user asks to \"humanize this\", \"this reads like…"
 argument-hint: '[pasted text | path/to/file.md]'
 allowed-tools:
