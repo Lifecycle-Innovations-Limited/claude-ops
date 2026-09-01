@@ -11,10 +11,6 @@
       "summary": "This skill should be used when the user asks to \"/ops:flow\", \"dev lifecycle\", or \"where am I in the pipeline\". ONE entrypoint for the whole dev lifecycle — ideate, spec, plan, design, build, review, test, ship, deploy, monitor, retro. Routes to the single canonical command per stage (gstack / GSD / claude-ops) and picks project-mode (GSD phase machine) vs ad-hoc-mode (gstack stateless) from repo `.planning/` state. Bare `/flow` prints the lifecycle map + your current \"you are here\" position."
     },
     {
-      "name": "humanizer",
-      "summary": "This skill should be used when the user asks to \"humanize this\", \"this reads like ChatGPT\", or \"make it sound human\". Strip the tells of AI-generated writing out of a draft so it reads as if a person wrote it. Use before any text leaves the machine (email, PR body, commit message, doc, landing copy, release note), or when the owner says \"humanize this\", \"this reads like ChatGPT\", \"make it sound human\". Detects inflated significance, promotional tone, participle padding, vague attribution, em dashes, rule of three, AI vocabulary, negative parallelism, sycophancy, and filler, then rewrites without inventing facts."
-    },
-    {
       "name": "ledger",
       "summary": "This skill should be used when the user asks to \"ops ledger\", \"what did we handle\", or \"/ops:ledger\". Inspect the shared Ops Ledger — what's awaiting owner, what was handled autonomously, what claude-ops or Perplexity did in the last 24h. Always the single source of truth between the two systems."
     },
@@ -97,6 +93,10 @@
     {
       "name": "ops-home",
       "summary": "This skill should be used when the user asks to \"homey\", \"smart home\", or \"/ops:ops-home\". Smart home command center via Homey Pro. Devices, flows, scenes, energy, climate, presence, alarms. Works via Homey local API (preferred) + Athom cloud API fallback. Configure once via /ops:setup."
+    },
+    {
+      "name": "ops-humanizer",
+      "summary": "This skill should be used when the user asks to \"humanize this\", \"this reads like ChatGPT\", or \"make it sound human\". Strip the tells of AI-generated writing out of a draft so it reads as if a person wrote it. Use before any text leaves the machine (email, PR body, commit message, doc, landing copy, release note), or when the owner says \"humanize this\", \"this reads like ChatGPT\", \"make it sound human\". Detects inflated significance, promotional tone, participle padding, vague attribution, em dashes, rule of three, AI vocabulary, negative parallelism, sycophancy, and filler, then rewrites without inventing facts."
     },
     {
       "name": "ops-inbox",

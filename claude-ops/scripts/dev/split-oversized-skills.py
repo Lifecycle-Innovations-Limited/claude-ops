@@ -16,7 +16,7 @@ CUT = {
     "ops-home": "## CLI/API Reference",
     "ops-unifi": "## CLI/API Reference",
     "ops-comms": "## CLI/API Reference",
-    "humanizer": "## Content patterns",
+    "ops-humanizer": "## Content patterns",
     "ops-ecom": "## CLI/API Reference",
     "ops-orchestrate": "## CLI/API Reference",
     "ops-gtm": "## Agent Teams support",

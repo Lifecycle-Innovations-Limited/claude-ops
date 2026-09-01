@@ -39,7 +39,7 @@ TRIGGERS = {
     ),
     "ops-go": ('"morning briefing", "/ops:ops-go", or "what should I do today"'),
     "ops-status": ('"ops status", "/ops:ops-status", or "are integrations green"'),
-    "humanizer": (
+    "ops-humanizer": (
         '"humanize this", "this reads like ChatGPT", or "make it sound human"'
     ),
     "setup": ('"/ops:setup", "configure ops", or "connect WhatsApp/email"'),
