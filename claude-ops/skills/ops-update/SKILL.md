@@ -90,6 +90,30 @@ pruned, which files would be rewritten. If the dry-run shows
 `already on <ver>` and nothing to prune/rewrite, tell the user the box is
 already current and stop (offer `--force` only if they suspect a stale cache).
 
+**"already on <ver>" is a lie when the marketplace clone is stuck.** Step 1
+prints `✓ marketplace catalogue refreshed` even when the underlying git pull
+silently did nothing, so step 2 resolves a stale target and the whole run
+no-ops. `~/.claude/plugins/marketplaces/ops-marketplace` is a real checkout of
+this repo; a dirty worktree (a local edit, stray `.bak` files) blocks the
+fast-forward. Verified 2026-09-05: it sat 28 commits behind on v3.10.3 while
+v3.10.5 was published, and the update reported the box current.
+
+Whenever the target version does not match what you just released, check the
+clone before reaching for `--force`:
+
+```bash
+cd ~/.claude/plugins/marketplaces/ops-marketplace
+git fetch -q origin
+git status -sb                 # ahead/behind AND porcelain lines
+grep -o '"version": *"[^"]*"' .claude-plugin/marketplace.json | head -1
+```
+
+Repair: diff each modified file against `origin/main` first — a local edit that
+is byte-identical to upstream is safe to drop, anything else is real work that
+must be salvaged before you touch it. Then clean the tree,
+`git merge --ff-only origin/main`, and re-run the dry-run. The target version
+should now be the published one.
+
 ### 2. Confirm
 
 Use **AskUserQuestion** before applying:

@@ -125,6 +125,38 @@ It works inside an **isolated worktree** (`$REPO_ROOT/.worktrees/release/vX.Y.Z`
 branched from `origin/main`), so a dirty main checkout never leaks unrelated WIP
 into the release commit. The worktree is removed on exit.
 
+## The run outlives an agent's foreground timeout — check before re-running
+
+A full release takes longer than a Hermes/agent foreground terminal call allows
+(~7 min hard kill regardless of the requested timeout). When the call dies, the
+script has usually **already** branched, pushed, opened the PR, waited for CI
+and merged — you just never saw the output. Verified 2026-09-05: the timeout
+fired, and a blind retry opened a duplicate release PR (#923) alongside the
+script's own already-merged #922.
+
+Before doing anything after a timeout, read the live state:
+
+```bash
+gh pr list --state merged --limit 5 --json number,title,headRefName
+git fetch --tags origin && git ls-remote --tags origin "v$NEW"
+git show origin/main:claude-ops/.claude-plugin/plugin.json | head -3
+```
+
+Then finish only what is genuinely missing:
+
+- PR merged, version on `origin/main`, **tag absent** → the script died between
+  merge and tag. Tag the merge commit yourself:
+  `git tag -a vX.Y.Z <merge-sha> -m "vX.Y.Z" && git push origin vX.Y.Z`.
+- PR still open → let it finish, do not open a second one.
+- Nothing pushed → re-run the release.
+
+If you did open a duplicate, close it referencing the real one and delete the
+remote branch it shares — both PRs point at the same `release/vX.Y.Z` head, so
+deleting that branch after the real merge is what cleans up.
+
+Better: run the apply step with `background=true, notify=true` instead of a
+foreground call, and let the completion notification carry the output.
+
 ## Mobile / SSH (Rule 7)
 
 The bin auto-detects a non-TTY and drops colour; its output is already
