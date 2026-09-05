@@ -104,11 +104,52 @@ step "1/11  Refresh marketplace catalogue ($MARKETPLACE)"
 if [[ "$DRY" -eq 1 ]]; then
   say "  ${c_dim}[dry-run] (refresh runs for real — read-only catalogue pull, no plugin state changes)${c_rst}"
 fi
+# `claude plugin marketplace update` exits 0 and prints "Successfully updated"
+# even when the clone did not move — a dirty worktree in $MKT_CLONE blocks the
+# fast-forward silently. That turns the whole run into a no-op against a stale
+# catalogue, and step 2 then reports "already on <ver>" for a version that was
+# superseded days ago. Verified 2026-09-05: the clone sat 28 commits behind on
+# v3.10.3 while v3.10.5 was published, and ops-update called the box current.
+# So do not trust the exit code — compare the clone's HEAD before and after.
+MKT_HEAD_BEFORE="$(git -C "$MKT_CLONE" rev-parse HEAD 2>/dev/null || echo unknown)"
 if claude plugin marketplace update "$MARKETPLACE" >/dev/null 2>&1; then
   ok "marketplace catalogue refreshed via CLI"
 else
   warn "CLI marketplace update failed — falling back to git pull on the clone"
   git -C "$MKT_CLONE" pull --ff-only >/dev/null 2>&1 && ok "git pull ok" || err "git pull failed (continuing)"
+fi
+
+# Verify the clone is actually at its remote tip, whatever the CLI claimed.
+mkt_clone_is_stale() {
+  local branch remote_sha local_sha
+  git -C "$MKT_CLONE" fetch -q origin >/dev/null 2>&1 || return 1
+  branch="$(git -C "$MKT_CLONE" rev-parse --abbrev-ref HEAD 2>/dev/null)" || return 1
+  [[ -n "$branch" && "$branch" != HEAD ]] || return 1
+  remote_sha="$(git -C "$MKT_CLONE" rev-parse "origin/$branch" 2>/dev/null)" || return 1
+  local_sha="$(git -C "$MKT_CLONE" rev-parse HEAD 2>/dev/null)" || return 1
+  [[ "$local_sha" != "$remote_sha" ]]
+}
+
+if mkt_clone_is_stale; then
+  MKT_BEHIND="$(git -C "$MKT_CLONE" rev-list --count "HEAD..origin/$(git -C "$MKT_CLONE" rev-parse --abbrev-ref HEAD)" 2>/dev/null || echo '?')"
+  err "marketplace clone is STALE: $MKT_BEHIND commit(s) behind its remote, despite the refresh reporting success"
+  say "  clone:  $MKT_CLONE"
+  say "  at:     $(git -C "$MKT_CLONE" log --oneline -1 2>/dev/null)"
+  say "  remote: $(git -C "$MKT_CLONE" log --oneline -1 "origin/$(git -C "$MKT_CLONE" rev-parse --abbrev-ref HEAD)" 2>/dev/null)"
+  if [[ -n "$(git -C "$MKT_CLONE" status --porcelain 2>/dev/null)" ]]; then
+    say "  cause:  the clone has local changes, which block the fast-forward:"
+    git -C "$MKT_CLONE" status --porcelain 2>/dev/null | sed 's/^/          /'
+    say "  fix:    diff each modified file against its remote tip first — an edit"
+    say "          identical to upstream is safe to drop, anything else is real"
+    say "          work to salvage. Then clean the tree and re-run this command."
+  else
+    say "  fix:    git -C \"$MKT_CLONE\" merge --ff-only @{u}   then re-run this command"
+  fi
+  err "refusing to continue against a STALE CATALOGUE — every version below would be wrong"
+  exit 1
+fi
+if [[ "$MKT_HEAD_BEFORE" != "$(git -C "$MKT_CLONE" rev-parse HEAD 2>/dev/null)" ]]; then
+  ok "catalogue advanced to $(git -C "$MKT_CLONE" log --oneline -1 2>/dev/null)"
 fi
 
 # ── 2. Resolve target version ──────────────────────────────────────────────
