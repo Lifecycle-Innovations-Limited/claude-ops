@@ -7,7 +7,7 @@ import { detectAll, AGENT_DEFS } from "./detect.mjs";
 import { ensureSource, listSourceSkills, listSourceBin } from "./source.mjs";
 import { planMirror, applyActions } from "./mirror.mjs";
 import { planBinLinks, applyBinLinks } from "./bin.mjs";
-import { verifyAgent } from "./verify.mjs";
+import { verifyAgent, verifyNativePlugin } from "./verify.mjs";
 import { runDoctor as runDoctorChecks } from "./doctor.mjs";
 import {
   loadManifest,
@@ -343,6 +343,14 @@ export async function runVerify(flags) {
   const agents = pickAgents(cfg, flags.agents);
   const reports = [];
   for (const [name, a] of Object.entries(agents)) {
+    if (a.pluginPath) {
+      const p = verifyNativePlugin({
+        srcDir: src.dir,
+        agentName: `${name}:plugin`,
+        pluginPath: a.pluginPath,
+      });
+      if (!p.skipped) reports.push(p);
+    }
     if (!a.skillsPath) {
       reports.push({ name, skipped: true });
       continue;

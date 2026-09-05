@@ -9,6 +9,7 @@ import { listSourceSkills, listSourceBin } from "../src/source.mjs";
 import { planBinLinks, applyBinLinks } from "../src/bin.mjs";
 import { planMirror } from "../src/mirror.mjs";
 import { planAll, planNativePlugin } from "../src/dispatch.mjs";
+import { verifyNativePlugin } from "../src/verify.mjs";
 import {
   loadManifest,
   saveManifest,
@@ -175,6 +176,58 @@ try {
     pluginPlan.action.from.endsWith(`${path.sep}hermes-plugin`) ||
       pluginPlan.action.from.endsWith("/hermes-plugin"),
     "plugin symlink source is hermes-plugin/",
+  );
+
+  // 5. verify must catch a native plugin that drifted into a real directory.
+  // Regression: verify/doctor checked skills only, so a box running a stale
+  // COPY of hermes-plugin (old version, local edits) reported clean while the
+  // agent loaded outdated plugin code. Found live 2026-09-05: one host sat on
+  // plugin 3.10.1 with a hand-edited __init__.py; every skill verified green.
+  const pluginLinked = path.join(scratch, "plugin-linked", "ops");
+  fs.mkdirSync(path.dirname(pluginLinked), { recursive: true });
+  fs.symlinkSync(path.join(SRC, "hermes-plugin"), pluginLinked);
+  const linkedReport = verifyNativePlugin({
+    srcDir: SRC,
+    agentName: "hermes",
+    pluginPath: pluginLinked,
+  });
+  assert(
+    linkedReport.ok === 1 && linkedReport.drifts.length === 0,
+    "verifyNativePlugin passes a correct symlink",
+  );
+
+  const pluginCopied = path.join(scratch, "plugin-copied", "ops");
+  fs.mkdirSync(pluginCopied, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginCopied, "plugin.yaml"),
+    'version: "0.0.1"\n',
+  );
+  const copiedReport = verifyNativePlugin({
+    srcDir: SRC,
+    agentName: "hermes",
+    pluginPath: pluginCopied,
+  });
+  assert(
+    copiedReport.drifts.length === 1 &&
+      copiedReport.drifts[0].reason.includes("not a symlink"),
+    "verifyNativePlugin flags a stale real-directory copy as drift",
+  );
+
+  const pluginAbsent = path.join(scratch, "plugin-absent", "ops");
+  const absentReport = verifyNativePlugin({
+    srcDir: SRC,
+    agentName: "hermes",
+    pluginPath: pluginAbsent,
+  });
+  assert(
+    absentReport.missing.length === 1,
+    "verifyNativePlugin reports an absent plugin link as missing",
+  );
+
+  assert(
+    verifyNativePlugin({ srcDir: SRC, agentName: "codex", pluginPath: null })
+      .skipped === true,
+    "verifyNativePlugin skips agents with no plugin path",
   );
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });

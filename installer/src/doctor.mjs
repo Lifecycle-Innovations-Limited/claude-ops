@@ -1,7 +1,7 @@
 // doctor.mjs — verify + tool checks + env checks.
 
 import { execSync } from "node:child_process";
-import { verifyAgent } from "./verify.mjs";
+import { verifyAgent, verifyNativePlugin } from "./verify.mjs";
 
 function tryExec(cmd) {
   try {
@@ -17,8 +17,25 @@ function tryExec(cmd) {
 
 export async function runDoctor({ srcDir, agents }) {
   const checks = [];
-  // 1. Each agent's mirror
+  // 1. Each agent's mirror, plus its native plugin link when it has one.
   for (const [name, a] of Object.entries(agents)) {
+    if (a.pluginPath) {
+      const p = verifyNativePlugin({
+        srcDir,
+        agentName: name,
+        pluginPath: a.pluginPath,
+      });
+      if (!p.skipped) {
+        checks.push({
+          name: `${name}:plugin`,
+          ok: p.drifts.length === 0 && p.missing.length === 0,
+          msg:
+            p.drifts.length || p.missing.length
+              ? p.drifts[0]?.reason || "plugin link missing"
+              : a.pluginPath,
+        });
+      }
+    }
     if (!a.skillsPath) {
       checks.push({ name, ok: false, msg: "no skillsPath" });
       continue;

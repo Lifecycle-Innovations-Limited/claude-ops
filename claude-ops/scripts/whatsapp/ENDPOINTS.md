@@ -139,11 +139,11 @@ it's a typed wrapper. So the MCP can never succeed where the REST endpoint fails
    one-draft → one-approval gate (token at `/tmp/.claude-send-ok`).
 
    **Attachments cross a host boundary.** `send_file` reads `media_path` off the **bridge's own
-   filesystem**, and the bridges run on ai-hub — not on the machine the agent is on. A local path
-   from anywhere else fails with `HTTP 500 - Error reading media file`. There is no server-side
-   fallback and there cannot be one: the MCP server runs on ai-hub too, so it cannot read the
-   agent's disk either. Read the file, base64 it, `upload_media`, then `send_file` with the
-   `media_path` that comes back.
+   filesystem**, and the bridges run on the bridge host — not on the machine the agent is on. A
+   local path from anywhere else fails with `HTTP 500 - Error reading media file`. There is no
+   server-side fallback and there cannot be one: the MCP server runs on that same bridge host, so
+   it cannot read the agent's disk either. Read the file, base64 it, `upload_media`, then
+   `send_file` with the `media_path` that comes back.
 
    `upload_media` is deliberately **not** gated by the outbound guard — staging bytes is not a
    send, and gating it would spend the approval token before the real send. The send still needs
