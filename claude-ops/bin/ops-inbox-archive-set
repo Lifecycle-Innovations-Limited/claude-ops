@@ -46,6 +46,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timezone
 
 # --------------------------------------------------------------------------
 # email label guardrail
@@ -320,6 +321,43 @@ def archive_whatsapp(rows, port, dry):
     return ok, fail
 
 
+def write_sweep_watermarks(archived_jids, store_paths):
+    """Record WHEN each chat was archived, next to the store it lives in.
+
+    The archive flag alone cannot answer "did they reply since we dealt with
+    this?": WhatsApp never moves it when a new message lands, so a swept thread
+    that gets an answer an hour later stays invisible and inbox zero is reported
+    over live questions. The scan needs a per-chat timestamp to compare an
+    inbound against, and it must survive a restart, so it goes on disk beside
+    messages.db rather than into any process state. Best-effort by design: a
+    missing file only costs the scan its precision, never its correctness.
+    """
+    if not archived_jids:
+        return
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S+00:00")
+    for store in store_paths:
+        if not store:
+            continue
+        path = os.path.join(os.path.dirname(store), "ops-sweep-watermarks.json")
+        marks = {}
+        try:
+            with open(path) as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict):
+                marks = loaded
+        except (OSError, ValueError):
+            marks = {}
+        for jid in archived_jids:
+            marks[jid] = stamp
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(marks, fh, indent=1, sort_keys=True)
+            os.replace(tmp, path)
+        except OSError as exc:                       # noqa: BLE001 - never fatal
+            print("  watermark write failed (%s): %s" % (path, exc), file=sys.stderr)
+
+
 def archive_email(rows, account, dry):
     ids = [r["threadId"] for r in rows if r.get("threadId")]
     if not ids or dry:
@@ -488,6 +526,19 @@ def main():
             ok += o2
             fail += f2
         eok, efail = archive_email(em_archive, args.gmail_account, args.dry_run)
+        if not args.dry_run:
+            # Stamp what we just archived, so a reply arriving afterwards can
+            # reopen the thread on the next scan instead of vanishing behind
+            # the archive flag.
+            swept = []
+            for row in wa_archive:
+                swept.extend([row.get("jid")] + list(row.get("alt_jids") or []))
+            for e in extra:
+                for row in e["archive"]:
+                    swept.extend([row.get("jid")] + list(row.get("alt_jids") or []))
+            stores = [(scan or {}).get("whatsapp_account", {}).get("store")]
+            stores += list(args.wa_store or [])
+            write_sweep_watermarks([j for j in swept if j], stores)
         result["applied"] = True
         result["apply_result"] = {"whatsapp_ok": ok, "whatsapp_failed": fail,
                                   "email_ok": eok, "email_failed": efail,
