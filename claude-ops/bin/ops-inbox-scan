@@ -692,12 +692,35 @@ def scan_whatsapp():
                 )
     else:
         done_pred = "archived=0"
-    chats = list(con.execute(
-        "SELECT jid, name, last_message_time FROM chats "
-        f"WHERE {done_pred} OR last_message_time >= datetime('now', ?) "
-        "ORDER BY last_message_time DESC",
-        (f"-{DAYS} days",)
-    ))
+    # The recency floor is a corruption net, NOT a second working set. It may
+    # only reopen a chat the flags could be LYING about, and after an
+    # intentional inbox-zero run they are not lying: on 2026-09-06 a US account
+    # with every chat deliberately archived still reported 23 needs_reply, all
+    # 23 already archived, because "active in the last 7 days" outranked the
+    # archive. Archived means dealt with; that is the whole contract of the
+    # sweep. So the net is armed only where corruption is actually plausible --
+    # a store that has never been swept clean.
+    try:
+        n_open_now = con.execute(
+            "SELECT count(*) FROM chats WHERE archived=0").fetchone()[0]
+    except sqlite3.Error:
+        n_open_now = 1
+    if n_open_now:
+        chats = list(con.execute(
+            "SELECT jid, name, last_message_time FROM chats "
+            f"WHERE {done_pred} OR last_message_time >= datetime('now', ?) "
+            "ORDER BY last_message_time DESC",
+            (f"-{DAYS} days",)
+        ))
+    else:
+        notes.append(
+            "whatsapp: inbox is fully archived — recency net disarmed so a "
+            "deliberately archived chat is not reopened as unanswered"
+        )
+        chats = list(con.execute(
+            "SELECT jid, name, last_message_time FROM chats "
+            f"WHERE {done_pred} ORDER BY last_message_time DESC"
+        ))
 
     # Build merged DM groups keyed by canonical jid.
     groups = {}   # canonical_jid -> {member_jids:set, name, latest_ts}
