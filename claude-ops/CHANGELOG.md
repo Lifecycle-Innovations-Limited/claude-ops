@@ -141,6 +141,47 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.10.6] - 2026-09-06
+
+### Changed
+### Fixed — inbox zero was unreachable by construction
+
+Three defects in the inbox toolchain, all found in one live run, all failing the
+same way: a value was read from configuration, or from one store, when the truth
+lived somewhere else.
+
+- **A completed inbox-zero run was diagnosed as flag corruption.** With every
+  chat archived, `ops-inbox-scan` fell back to `handled=0` as its working set.
+  Nothing in the toolchain ever writes `handled`, so that predicate matched 1803
+  of 1806 archived chats and the entire history came back as unanswered asks —
+  171 false NEEDS_REPLY across two accounts, moments after the inbox was
+  genuinely empty. The better a sweep did its job, the louder the next scan
+  disagreed. The corruption fallback now fires only when `handled` is
+  demonstrably in use; genuine corruption still recovers the live thread, and
+  the scan states which verdict it reached and why.
+- **A reply sent from one WhatsApp number did not count on the other.** One
+  person exists in both stores under different jids, and an outgoing message
+  lands only in the store it was sent from — so the second account still saw an
+  unanswered thread and offered a duplicate reply. The scan now reads every
+  other account's store as read-only evidence and demotes those threads with a
+  stated `reconciled` reason. Auto-discovered; `--peer-store` names one
+  explicitly, `--no-peer-stores` disables it. This matters more now that
+  `--all-accounts` scans both numbers in a single pass.
+- **The bridge port came from a launcher script that need not exist.**
+  `ops-wa-accounts` scanned `run-bridge.sh` for `WA_PORT` and fell back to 8080,
+  so two bridges started any other way both reported 8080 while actually
+  listening on 8082 and 8083 — pointing every read, archive and reply at one
+  number. The port is now read from the live listening socket via `/proc`, the
+  same way the phone number is read from the store, and every account reports
+  `port_source` so a caller can tell a live value from a guess.
+
+Also: `ops-inbox-archive-set --dry-run` no longer reports zero planned archives
+on a multi-account box. It refused to count anything when the bridge port was
+unresolved, including under a dry run that contacts no bridge at all, so the
+preview silently disagreed with the real run. The refusal now applies only to a
+live `--apply`, where a wrong port is unrecoverable.
+
+
 ## [3.10.5] - 2026-09-05
 
 ### Changed
