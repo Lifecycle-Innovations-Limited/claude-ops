@@ -172,10 +172,22 @@ def classify_whatsapp(scan, stale_min, dead_group_min):
     archive, keep, fyi = [], [], []
     wa = scan.get("whatsapp", {})
 
+    def _acct(rec):
+        """Which number this row lives on.
+
+        A merged multi-account scan tags every row with its account and bridge
+        port. Falling back to a single "default" here is how an archive lands on
+        the wrong number — so carry the tag whenever the scan provides one.
+        """
+        out = {"account": rec.get("account") or "default"}
+        if rec.get("bridge_port"):
+            out["bridge_port"] = rec["bridge_port"]
+        return out
+
     for rec in wa.get("needs_reply", []):
         age = rec.get("age_min") or 0
         row = {"who": rec.get("who"), "jid": rec.get("jid"),
-               "alt_jids": rec.get("alt_jids") or [], "account": "default"}
+               "alt_jids": rec.get("alt_jids") or [], **_acct(rec)}
         if age > stale_min:
             row["why"] = "stale (older than window)"
             archive.append(row)
@@ -189,18 +201,18 @@ def classify_whatsapp(scan, stale_min, dead_group_min):
 
     for rec in wa.get("waiting", []):
         archive.append({"who": rec.get("who"), "jid": rec.get("jid"),
-                        "alt_jids": rec.get("alt_jids") or [], "account": "default",
+                        "alt_jids": rec.get("alt_jids") or [], **_acct(rec),
                         "why": "WAITING (you sent last)"})
 
     for rec in wa.get("fyi", []):
         fyi.append({"who": rec.get("who"), "jid": rec.get("jid"),
-                    "alt_jids": [], "account": "default",
+                    "alt_jids": [], **_acct(rec),
                     "why": rec.get("reason") or "newsletter/broadcast"})
 
     for rec in wa.get("groups", []):
         if (rec.get("age_min") or 0) > dead_group_min:
             archive.append({"who": rec.get("who"), "jid": rec.get("jid"),
-                            "alt_jids": [], "account": "default",
+                            "alt_jids": [], **_acct(rec),
                             "why": "dead group chat"})
     return archive, keep, fyi
 
@@ -255,7 +267,7 @@ def classify_email(scan):
     document, a failed payment and four ACTION REQUIRED notices - a bucket that
     can contain those is a bucket a human reads before anything is swept."""
     fyi, kept = [], []
-    for item in scan.get("email", {}).get("fyi", []):
+    for item in (scan.get("email") or {}).get("fyi", []) or []:
         label = protecting_label(item.get("labels"))
         row = {"who": item.get("who"), "subject": item.get("subject"),
                "threadId": item.get("threadId")}
@@ -272,9 +284,23 @@ def classify_email(scan):
 # --------------------------------------------------------------------------
 
 def archive_whatsapp(rows, port, dry):
+    """Archive each chat on ITS OWN bridge.
+
+    `port` is only the fallback for rows that carry no account tag. A merged
+    multi-account scan tags every row with the bridge it came from, and sending
+    all of them to one port would archive a thread on a number it does not live
+    on — the same wrong-number class this toolchain already fixed once for
+    sending. Rows whose tagged port is unknown are LEFT ALONE, never guessed.
+    """
     import urllib.request
     ok = fail = 0
     for row in rows:
+        row_port = row.get("bridge_port") or port
+        if not row_port:
+            fail += 1
+            print("  archive skipped %s: no bridge port for account %s"
+                  % (row.get("jid"), row.get("account")), file=sys.stderr)
+            continue
         for jid in [row.get("jid")] + list(row.get("alt_jids") or []):
             if not jid:
                 continue
@@ -283,7 +309,7 @@ def archive_whatsapp(rows, port, dry):
                 continue
             body = json.dumps({"chat_jid": jid, "archive": True}).encode()
             req = urllib.request.Request(
-                "http://127.0.0.1:%d/api/archive" % port, data=body,
+                "http://127.0.0.1:%d/api/archive" % int(row_port), data=body,
                 headers={"Content-Type": "application/json"})
             try:
                 urllib.request.urlopen(req, timeout=20).read()
@@ -425,15 +451,21 @@ def main():
             except (OSError, subprocess.SubprocessError):
                 pass
     if main_port is None and wa_archive:
-        errors.append(
-            "WhatsApp archive skipped: could not resolve which account these "
-            "chats belong to. Pass --default-bridge-port, or set agent_enabled "
-            "in the ops-wa-accounts policy file.")
+        # Rows that carry their own bridge_port do not need a global default;
+        # only the untagged remainder is genuinely unroutable.
+        untagged = [r for r in wa_archive if not r.get("bridge_port")]
+        if untagged:
+            errors.append(
+                "WhatsApp archive skipped for %d chat(s): could not resolve which "
+                "account they belong to. Pass --default-bridge-port, or set "
+                "agent_enabled in the ops-wa-accounts policy file." % len(untagged))
+        else:
+            port_source = "per-row account tag (merged multi-account scan)"
     result["whatsapp_bridge_port"] = main_port
     result["whatsapp_bridge_port_source"] = port_source
 
     if args.apply:
-        if main_port is None:
+        if main_port is None and not any(r.get("bridge_port") for r in wa_archive):
             ok, fail = 0, 0
         else:
             ok, fail = archive_whatsapp(wa_archive, main_port, args.dry_run)

@@ -38,12 +38,87 @@ grep -q 'EMAIL_QUERY="in:inbox"' "$CODE" \
   || fail "email working set must default to the whole inbox"
 grep -q 'newer_than' "$CODE" \
   && fail "email query must not be sliced by a recency window"
-grep -q 'WHERE archived=0 OR last_message_time' "$CODE" \
-  || fail "whatsapp working set must be driven by the archived flag"
+grep -q 'WHERE {done_pred} OR last_message_time' "$CODE" \
+  || fail "whatsapp working set must be a done-flag predicate, not a recency slice"
+grep -q 'done_pred = "archived=0"' "$CODE" \
+  || fail "whatsapp must fall back to archived=0 when there is no handled column"
+grep -q 'done_pred = "handled=0"' "$CODE" \
+  || fail "whatsapp must fall back to handled=0 when every chat is flagged archived"
+grep -q 'unread_count' "$CODE" \
+  && fail "whatsapp working set must never be driven by unread_count (a display state)"
 
 # gog treats bare args as MESSAGE ids; the scan emits THREAD ids.
 grep -q '"--thread"' "$SPLIT" \
   || fail "gmail archive must pass --thread when given thread ids"
+
+# --------------------------------------------------------------------------
+# EMPTY IS NOT BROKEN (regression guard, 2026-09-06).
+# `gog whoami` prints name/email/photo on separate lines and the address is not
+# on the first one, so `head -1 | grep` threw the account away. Every gog call
+# then ran without --account, gog refused with "missing --account", and the scan
+# reported an unreachable mailbox that was perfectly reachable — a real inbox
+# read as inbox zero. Two invariants: resolve the account from ANY line, and
+# keep "empty result" distinguishable from "call failed".
+# --------------------------------------------------------------------------
+grep -q 'head -1 | grep' "$CODE" \
+  && fail "gmail account must not be parsed from only the first whoami line"
+grep -q 'OIS_GMAIL_OK' "$CODE" \
+  || fail "a successful-but-empty gmail search must be distinguishable from a failure"
+
+FAKEBIN="$TMP/fakebin"
+mkdir -p "$FAKEBIN"
+cat >"$FAKEBIN/gog" <<'SH'
+#!/usr/bin/env bash
+# whoami puts the address on line 2, exactly like the real CLI.
+if [ "$1" = "whoami" ]; then
+  printf 'name\tTest User\nemail\towner@example.com\nphoto\thttps://example.com/a.png\n'
+  exit 0
+fi
+# refuse unless an account was passed, exactly like a multi-token box.
+case " $* " in
+  *" -a "*) echo '[]'; exit 0 ;;
+  *) echo 'missing --account' >&2; exit 2 ;;
+esac
+SH
+chmod +x "$FAKEBIN/gog"
+
+PATH="$FAKEBIN:$PATH" OIS_NO_REFRESH=1 "$SCAN" --email-only >"$TMP/empty.json" 2>/dev/null \
+  || fail "email-only scan must not fail on an empty inbox"
+"$PY" - "$TMP/empty.json" <<'PY' || exit 1
+import json, sys
+d = json.load(open(sys.argv[1]))
+e = d["email"]
+assert e["account"] == "owner@example.com", \
+    "account must be read from the email line, got %r" % e["account"]
+assert e["reachable"] is True, "an empty inbox is reachable, not broken: %r" % e
+assert e.get("empty") is True, "an empty inbox must say so explicitly"
+print("empty-inbox vs unreachable: PASS")
+PY
+
+# --------------------------------------------------------------------------
+# A MISSING STORE IS A FAILED SCAN, NOT AN EMPTY INBOX (guard, 2026-09-06).
+# On a client box the bridge lives on another host and there is no local
+# messages.db. The scan used to answer with empty buckets plus a soft note, and
+# an agent reading only those buckets reported inbox zero over a full inbox.
+# --------------------------------------------------------------------------
+OIS_NO_REFRESH=1 OIS_SSH= OIS_SSH_FALLBACK= "$SCAN" --whatsapp-only \
+  --wa-store "$TMP/does-not-exist.db" --bridge-port 9 >"$TMP/nostore.json" 2>/dev/null \
+  || fail "missing-store scan must still emit valid JSON"
+"$PY" - "$TMP/nostore.json" <<'PY' || exit 1
+import json, sys
+d = json.load(open(sys.argv[1]))
+w = d["whatsapp"]
+assert w["reachable"] is False, "a missing store is not reachable"
+assert w.get("blocked") is True, "a missing store must be marked as a blocked scan"
+note = " ".join(d["notes"]).lower()
+assert "failed scan" in note, "the note must say the scan failed, not that it is empty"
+assert "do not report inbox zero" in note, "the note must forbid claiming inbox zero"
+print("missing-store is a blocker: PASS")
+PY
+
+# The remote pull must use a consistent sqlite snapshot, never a hot-file copy.
+grep -q 'VACUUM INTO' "$CODE" \
+  || fail "remote store pull must use VACUUM INTO, not a raw copy of a live db"
 
 # --------------------------------------------------------------------------
 # fixture
@@ -148,8 +223,11 @@ grep -q "apply_result" "$TMP/out.json" \
 
 # --------------------------------------------------------------------------
 # --apply --dry-run walks the apply path without calling out.
+# The fixture carries no whatsapp_account, so a port must be supplied: without
+# one the tool correctly refuses to archive rather than aim at a guessed bridge.
 # --------------------------------------------------------------------------
-run_json --apply --dry-run >"$TMP/dry.json" || fail "dry-run failed"
+run_json --apply --dry-run --default-bridge-port 8080 >"$TMP/dry.json" \
+  || fail "dry-run failed"
 "$PY" - "$TMP/dry.json" <<'PY' || exit 1
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -161,6 +239,61 @@ assert r["whatsapp_ok"] >= len(d["archive"]["whatsapp_default"]), "alt_jids must
 assert r["email_ok"] == 0, "a default sweep must not touch FYI mail"
 print("dry-run apply: PASS")
 PY
+
+# --------------------------------------------------------------------------
+# MULTI-ACCOUNT ROUTING (regression guard, 2026-09-06).
+# Two defects shipped together and both were silent:
+#   1. a merged scan tagged each row with its account, but the split dropped
+#      the tag and stamped every row "default";
+#   2. the archiver sent every row to ONE port, so a chat on number A was
+#      archived against number B's bridge — the wrong-number class already
+#      fixed once for sending.
+# A row that carries bridge_port must route to THAT port, and an untagged row
+# with no default must be refused rather than guessed.
+# --------------------------------------------------------------------------
+cat >"$TMP/multi.json" <<'JSON'
+{
+ "whatsapp": {
+  "needs_reply": [],
+  "waiting": [
+   {"who":"OnA","jid":"11@s.whatsapp.net","alt_jids":[],"account":"acct_a","bridge_port":8483},
+   {"who":"OnB","jid":"12@s.whatsapp.net","alt_jids":[],"account":"acct_b","bridge_port":8482},
+   {"who":"Untagged","jid":"13@s.whatsapp.net","alt_jids":[]}
+  ],
+  "fyi": [], "groups": []
+ },
+ "counts": {}, "notes": []
+}
+JSON
+"$PY" "$SPLIT" --scan "$TMP/multi.json" --json >"$TMP/multi-out.json" \
+  || fail "multi-account run failed"
+"$PY" - "$TMP/multi-out.json" <<'PY' || exit 1
+import json, sys
+d = json.load(open(sys.argv[1]))
+rows = {r["who"]: r for r in d["archive"]["whatsapp_default"]}
+assert rows["OnA"]["account"] == "acct_a", "account tag must survive the split"
+assert rows["OnB"]["account"] == "acct_b", "account tag must survive the split"
+assert rows["OnA"]["bridge_port"] == 8483, "each row must keep its own bridge port"
+assert rows["OnB"]["bridge_port"] == 8482, "each row must keep its own bridge port"
+assert rows["Untagged"]["account"] == "default", "an untagged row falls back to default"
+assert "bridge_port" not in rows["Untagged"], "an untagged row must not invent a port"
+print("multi-account tagging: PASS")
+PY
+
+# The untagged row has no port and no --default-bridge-port: it must be counted
+# as a failure and skipped, never sent to whichever bridge happens to answer.
+"$PY" "$SPLIT" --scan "$TMP/multi.json" --json --apply --dry-run \
+  >"$TMP/multi-dry.json" 2>"$TMP/multi-dry.err" || fail "multi dry-run failed"
+"$PY" - "$TMP/multi-dry.json" <<'PY' || exit 1
+import json, sys
+d = json.load(open(sys.argv[1]))
+r = d["apply_result"]
+assert r["whatsapp_ok"] == 2, "both tagged rows must route to their own bridge, got %s" % r
+assert r["whatsapp_failed"] == 1, "the untagged row must be refused, not guessed"
+print("per-row bridge routing: PASS")
+PY
+grep -q "no bridge port" "$TMP/multi-dry.err" \
+  || fail "a skipped untagged row must say why on stderr"
 
 # --------------------------------------------------------------------------
 # stale window is configurable and actually moves a thread across the line.
