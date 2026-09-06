@@ -204,6 +204,15 @@ On a client box (bridge on another host) the scan pulls the remote store itself 
 policy `ssh` + `remote_store` entries, using `VACUUM INTO` for a consistent snapshot. It
 only reports `blocked` when that genuinely fails.
 
+**ARCHIVED MEANS "DEALT WITH AS OF NOW", NOT FOREVER.** WhatsApp never moves
+the archive flag when a new message lands, so a swept thread that gets an answer
+an hour later would sit invisible while the scan reports inbox zero (observed
+2026-09-06: five people replied within four hours of a sweep). `--apply` writes
+a per-chat watermark (`ops-sweep-watermarks.json`, beside `messages.db`) and the
+scan reopens any archived chat whose newest inbound is later than that mark,
+noting how many. An archived chat that stayed quiet stays archived, and history
+stays shut: the reopen is bounded by `--days`.
+
 **CROSS-ACCOUNT: a reply on one number counts for the other.** One person often
 exists in both stores under different jids. A reply sent from account A lands
 only in A's database, so B's copy still ends on their inbound line and looks
