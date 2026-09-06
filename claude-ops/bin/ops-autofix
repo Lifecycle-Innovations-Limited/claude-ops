@@ -214,17 +214,18 @@ fix_channel_health() {
   fi
 
   # ── Email (gog): auth'd but API broken ──
+  # shellcheck source=../lib/gog-account.sh
+  . "$(cd "$(dirname "$0")/.." && pwd)/lib/gog-account.sh"
   if command -v gog >/dev/null 2>&1; then
-    GOG_AUTH=$(gog auth status 2>&1)
-    if echo "$GOG_AUTH" | grep -qi "authenticated\|logged in\|valid"; then
-      GOG_TEST=$(gog gmail labels list --json 2>/dev/null | head -5)
+    if ops_gog_ready; then
+      GOG_TEST=$(gog gmail labels list -a "$OPS_GOG_ACCOUNT" --json 2>/dev/null | head -5)
       if [ -z "$GOG_TEST" ] || echo "$GOG_TEST" | grep -qi "error\|failed"; then
-        log_fail "gog-health: authenticated but Gmail API failing (token may need refresh — run gog auth login)"
+        log_fail "gog-health: $OPS_GOG_ACCOUNT resolves but Gmail API failing (token may need refresh — run gog auth add $OPS_GOG_ACCOUNT)"
       else
-        log_skip "gog-health: email working"
+        log_skip "gog-health: email working ($OPS_GOG_ACCOUNT)"
       fi
     else
-      log_skip "gog-health: not authenticated"
+      log_fail "gog-health: $OPS_GOG_NOTE"
     fi
   fi
 

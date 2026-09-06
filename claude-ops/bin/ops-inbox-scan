@@ -347,8 +347,17 @@ GMAIL_OK=0
 if [ "$DO_EMAIL" = 1 ]; then
   GMAIL_JSON_FILE="$(mktemp "${TMPDIR:-/tmp}/ois-gmail.XXXXXX")"
   trap 'rm -f "$GMAIL_JSON_FILE" "${OIS_SENDLOG_FILE:-}"' EXIT
+  # gog rejects a bare call once more than one token is stored, and again when
+  # the keyring is locked. Resolve the account and unlock first, so a config
+  # problem never reads as an empty inbox.
+  # shellcheck source=../lib/gog-account.sh
+  . "$(cd "$(dirname "$0")/.." && pwd)/lib/gog-account.sh"
   ACCT_ARGS=()
-  [ -n "$GMAIL_ACCOUNT" ] && ACCT_ARGS=(-a "$GMAIL_ACCOUNT")
+  if ops_gog_ready; then
+    ACCT_ARGS=(-a "$OPS_GOG_ACCOUNT")
+  else
+    GMAIL_ERR="$OPS_GOG_NOTE"
+  fi
   # FULL INBOX, always. The working set is "not archived" -- i.e. everything
   # still carrying the INBOX label -- never "unread", and never a recency slice.
   # This used to be `in:inbox newer_than:${DAYS}d --max 30`, which silently hid

@@ -441,9 +441,10 @@ TOTAL_PROBES=13
 # 13) Calendar — today's events across ALL calendars (PR #286 wired into dash)
 (
   CAL_JSON='{"configured":false,"events":[]}'
-  if command -v gog &>/dev/null; then
-    # Probe auth first — gog calendar exits non-zero or returns error if no auth
-    RAW=$(gog calendar events --all --today -j --sort start --no-input 2>/dev/null || echo '')
+  # shellcheck source=../lib/gog-account.sh
+  . "${PLUGIN_ROOT}/lib/gog-account.sh"
+  if ops_gog_ready; then
+    RAW=$(gog calendar events -a "$OPS_GOG_ACCOUNT" --all --today -j --sort start --no-input 2>/dev/null || echo '')
     if [[ -n "$RAW" ]] && echo "$RAW" | jq -e '.events' >/dev/null 2>&1; then
       CAL_JSON=$(echo "$RAW" | jq '{
         configured: true,
@@ -456,10 +457,10 @@ TOTAL_PROBES=13
         }))
       }' 2>/dev/null || echo '{"configured":true,"events":[]}')
     else
-      CAL_JSON='{"configured":false,"events":[],"note":"gog not authenticated"}'
+      CAL_JSON='{"configured":true,"events":[]}'
     fi
   else
-    CAL_JSON='{"configured":false,"events":[],"note":"gog CLI not installed"}'
+    CAL_JSON=$(jq -nc --arg n "$OPS_GOG_NOTE" '{configured:false,events:[],note:$n}')
   fi
   echo "$CAL_JSON" > "$TMPDIR_DASH/calendar.json"
   touch "$TMPDIR_DASH/done_calendar"

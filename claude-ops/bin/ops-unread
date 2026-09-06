@@ -36,25 +36,14 @@ else
 fi
 
 # ── Email via gog ──
-GMAIL_ACCT="${GMAIL_ACCOUNT:-}"
-if command -v gog &>/dev/null; then
-  # Auto-detect account if not set
-  if [ -z "$GMAIL_ACCT" ]; then
-    GMAIL_ACCT=$(gog gmail search -j --results-only --no-input --max 1 "in:inbox" 2>/dev/null | python3 -c "
-import json, sys
-try:
-    data = json.loads(sys.stdin.read())
-    # gog worked without -a, so default account is fine
-    print('auto')
-except:
-    print('')
-" 2>/dev/null || echo "")
-  fi
+# gog needs BOTH an explicit --account (any multi-token store rejects a bare
+# call) and an unlocked keyring. lib/gog-account.sh resolves both and reports
+# the real reason on failure instead of a blanket "not authenticated".
+# shellcheck source=../lib/gog-account.sh
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/gog-account.sh"
 
-  if [ -n "$GMAIL_ACCT" ]; then
-    ACCT_FLAG=""
-    [ "$GMAIL_ACCT" != "auto" ] && ACCT_FLAG="-a $GMAIL_ACCT"
-    EMAIL_COUNT=$(gog gmail search $ACCT_FLAG -j --results-only --no-input --max 50 "in:inbox" 2>/dev/null | python3 -c "
+if ops_gog_ready; then
+  EMAIL_COUNT=$(gog gmail search -a "$OPS_GOG_ACCOUNT" -j --results-only --no-input --max 50 "in:inbox" 2>/dev/null | python3 -c "
 import json, sys
 try:
     data = json.loads(sys.stdin.read())
@@ -63,13 +52,12 @@ try:
 except:
     print(0)
 " 2>/dev/null || echo "0")
-    [[ "$EMAIL_COUNT" =~ ^[0-9]+$ ]] || EMAIL_COUNT="0"
-    RESULT=$(echo "$RESULT" | jq --argjson c "$EMAIL_COUNT" '.channels.email = {"inbox_count": $c, "available": true}')
-  else
-    RESULT=$(echo "$RESULT" | jq '.channels.email = {"inbox_count": 0, "available": false, "note": "gog not authenticated — run: gog gmail auth"}')
-  fi
+  [[ "$EMAIL_COUNT" =~ ^[0-9]+$ ]] || EMAIL_COUNT="0"
+  RESULT=$(echo "$RESULT" | jq --argjson c "$EMAIL_COUNT" --arg a "$OPS_GOG_ACCOUNT" \
+    '.channels.email = {"inbox_count": $c, "available": true, "account": $a}')
 else
-  RESULT=$(echo "$RESULT" | jq '.channels.email = {"inbox_count": 0, "available": false, "note": "gog not installed — install gogcli: `brew install gogcli` (macOS/Linuxbrew), `winget install -e --id steipete.gogcli` (Windows), or see https://github.com/steipete/gogcli"}')
+  RESULT=$(echo "$RESULT" | jq --arg n "$OPS_GOG_NOTE" \
+    '.channels.email = {"inbox_count": 0, "available": false, "note": $n}')
 fi
 
 # ── Slack — multi-workspace support ──

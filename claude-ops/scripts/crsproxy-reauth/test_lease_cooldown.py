@@ -43,6 +43,24 @@ def test_lease_stale_seconds():
     print("PASS: Lease stale threshold is 600 seconds (10 min)")
 
 
+def _lease_race_worker(lease_path_str, q):
+    """Child-process body for the concurrency test.
+
+    MUST stay at module level. Under the `spawn` start method (the default on
+    macOS since Python 3.8, and on every platform from 3.14) the target is
+    pickled by qualified name, and a function nested inside the test raises
+    "Can't pickle local object" before a single racer ever runs — the guard
+    then fails for a reason that has nothing to do with the lease.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import bu_reauth as br
+
+    br.LEASE_FILE = Path(lease_path_str)
+    br.LEGACY_LEASE_FILE = Path(lease_path_str + ".legacy")
+    # max_wait=0 so a loser returns immediately instead of polling.
+    q.put(br.acquire_lease("claude", max_wait=0))
+
+
 def test_acquire_lease_is_atomic_under_concurrency():
     """Only ONE of N concurrent acquirers may win the lease.
 
@@ -53,24 +71,20 @@ def test_acquire_lease_is_atomic_under_concurrency():
     """
     import multiprocessing
 
-    def _worker(lease_path_str, q):
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        import bu_reauth as br
-        br.LEASE_FILE = Path(lease_path_str)
-        br.LEGACY_LEASE_FILE = Path(lease_path_str + ".legacy")
-        # max_wait=0 so a loser returns immediately instead of polling.
-        q.put(br.acquire_lease("claude", max_wait=0))
-
     with tempfile.TemporaryDirectory() as tmpdir:
         lease_path = str(Path(tmpdir) / "lease.json")
         q = multiprocessing.Queue()
-        procs = [multiprocessing.Process(target=_worker, args=(lease_path, q))
+        procs = [multiprocessing.Process(target=_lease_race_worker, args=(lease_path, q))
                  for _ in range(8)]
         for pr in procs:
             pr.start()
         for pr in procs:
             pr.join(30)
-        results = [q.get() for _ in range(len(procs))]
+        # Collect before joining is impossible here (queue is drained after),
+        # so assert every child actually ran rather than trusting a short queue.
+        for pr in procs:
+            assert pr.exitcode == 0, f"racer exited {pr.exitcode}, not 0"
+        results = [q.get(timeout=30) for _ in range(len(procs))]
 
     winners = sum(1 for r in results if r is True)
     assert winners == 1, f"Expected exactly 1 winner, got {winners} of {len(results)}"
