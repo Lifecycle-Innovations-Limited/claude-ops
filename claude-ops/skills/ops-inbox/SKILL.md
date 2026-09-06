@@ -185,6 +185,23 @@ guess** when that is ambiguous. Its JSON carries a `whatsapp_account` block (`ph
 `store`, `resolved_by`) — that is the account every downstream archive and reply must use, and
 `ops-inbox-archive-set` reads it so the two can never drift onto different numbers.
 
+**THE WORKING SET IS "NOT ARCHIVED", NEVER "UNREAD".** Read/unread says only
+whether a human glanced at a screen; on a phone every thread reads as seen
+within minutes, so an unread filter reports an empty inbox while real asks sit
+there. WhatsApp's working set is `archived=0`, email's is `in:inbox`. Anything
+still in that set is unhandled by definition and stays in scope until it is
+answered, or archived, or both. No recency window hides it either: a question
+from three weeks ago is still a question.
+
+**CROSS-ACCOUNT: a reply on one number counts for the other.** One person often
+exists in both stores under different jids. A reply sent from account A lands
+only in A's database, so B's copy still ends on their inbound line and looks
+unanswered. The scan therefore reads every OTHER account's store as read-only
+evidence and demotes such a thread to `waiting` with
+`reconciled: "answered from another WhatsApp account"`. That discovery is
+automatic; `--peer-store DB` names one explicitly and `--no-peer-stores` turns
+it off. Never draft a reply for a thread carrying a `reconciled` field.
+
 **ARCHIVE/KEEP SPLIT — `bin/ops-inbox-archive-set`.** The scan says what the
 inbox looks like; this turns that into the two lists inbox-zero actually needs,
 deterministically, instead of re-deciding a few hundred rows by eye every run:

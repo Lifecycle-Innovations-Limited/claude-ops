@@ -425,15 +425,28 @@ def main():
             except (OSError, subprocess.SubprocessError):
                 pass
     if main_port is None and wa_archive:
-        errors.append(
-            "WhatsApp archive skipped: could not resolve which account these "
-            "chats belong to. Pass --default-bridge-port, or set agent_enabled "
-            "in the ops-wa-accounts policy file.")
+        # A dry run contacts no bridge, so an unresolved port cannot send an
+        # archive to the wrong number. Blocking it there made the preview
+        # machine-dependent: on a box with two agent-enabled accounts the
+        # resolver refuses to pick one, and the dry run reported 0 planned
+        # archives -- a preview that silently disagreed with the real run.
+        # The refusal still stands for a live --apply, which is where a wrong
+        # port is unrecoverable.
+        if not args.dry_run:
+            errors.append(
+                "WhatsApp archive skipped: could not resolve which account these "
+                "chats belong to. Pass --default-bridge-port, or set agent_enabled "
+                "in the ops-wa-accounts policy file.")
+        else:
+            errors.append(
+                "WhatsApp bridge port unresolved: dry run counts the planned "
+                "archives, but a live --apply will refuse until you pass "
+                "--default-bridge-port.")
     result["whatsapp_bridge_port"] = main_port
     result["whatsapp_bridge_port_source"] = port_source
 
     if args.apply:
-        if main_port is None:
+        if main_port is None and not args.dry_run:
             ok, fail = 0, 0
         else:
             ok, fail = archive_whatsapp(wa_archive, main_port, args.dry_run)
