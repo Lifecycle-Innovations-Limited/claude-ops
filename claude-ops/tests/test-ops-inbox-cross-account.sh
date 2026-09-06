@@ -256,5 +256,56 @@ b="$(bucket_of "$COUT" Victim)"
 [ "$b" = "needs_reply" ] && ok "real flag corruption still recovers the live thread" \
                          || bad "Victim was '$b'; corruption fallback no longer fires"
 
+
+echo "archived means dealt with"
+# A fully-archived store must report inbox zero. The recency floor is a
+# corruption net; after a deliberate sweep it must not reopen what was archived
+# on purpose (2026-09-06: 23 needs_reply, all 23 already archived).
+SWEPT_DIR="$TMP/whatsapp-bridge-swept"
+SWEPT_STORE="$(mk_store "$SWEPT_DIR")"
+python3 - "$SWEPT_STORE/messages.db" <<'PY'
+import sqlite3, sys, datetime
+con = sqlite3.connect(sys.argv[1])
+# Recent AND archived: yesterday, so any recency window would catch it.
+ts = (datetime.datetime.now(datetime.timezone.utc)
+      - datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S+00:00")
+con.execute("INSERT INTO chats VALUES ('888111@lid','Swept',?,1,0)", (ts,))
+con.execute("INSERT INTO contacts VALUES ('888111@lid','Swept','888111','test',0)")
+con.execute("INSERT INTO messages VALUES ('s1','888111@lid','888111',"
+            "'Anything left to do?',?,0,'','')", (ts,))
+con.commit(); con.close()
+PY
+
+SWEPT_OUT="$("$SCAN" --whatsapp-only --pretty --no-peer-stores \
+  --wa-store "$SWEPT_STORE/messages.db" --bridge-port 8098 2>/dev/null)"
+b="$(bucket_of "$SWEPT_OUT" Swept)"
+[ "$b" = "ABSENT" ] && ok "archived-but-recent chat stays out of the working set" \
+                    || bad "Swept came back as '$b': archive loses to the recency net"
+
+if grep -q "recency net disarmed" <<<"$SWEPT_OUT"; then
+  ok "scan states that the recency net was disarmed"
+else
+  bad "no note explaining why the recency net was skipped"
+fi
+
+# The net must still exist where corruption is plausible: one open chat means
+# the store was never swept, so a recent archived thread is still surfaced.
+python3 - "$SWEPT_STORE/messages.db" <<'PY'
+import sqlite3, sys, datetime
+con = sqlite3.connect(sys.argv[1])
+ts = (datetime.datetime.now(datetime.timezone.utc)
+      - datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S+00:00")
+con.execute("INSERT INTO chats VALUES ('888222@lid','StillOpen',?,0,0)", (ts,))
+con.execute("INSERT INTO contacts VALUES ('888222@lid','StillOpen','888222','test',0)")
+con.execute("INSERT INTO messages VALUES ('s2','888222@lid','888222',"
+            "'And me?',?,0,'','')", (ts,))
+con.commit(); con.close()
+PY
+MIXED_OUT="$("$SCAN" --whatsapp-only --pretty --no-peer-stores \
+  --wa-store "$SWEPT_STORE/messages.db" --bridge-port 8098 2>/dev/null)"
+b="$(bucket_of "$MIXED_OUT" Swept)"
+[ "$b" != "ABSENT" ] && ok "corruption net still armed on a store with open chats" \
+                     || bad "recency net lost entirely: a mass-archived store would go silent"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
