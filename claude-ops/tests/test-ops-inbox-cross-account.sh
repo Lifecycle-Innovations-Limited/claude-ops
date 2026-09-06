@@ -190,5 +190,71 @@ fi
 kill "$LISTENER" 2>/dev/null || true
 wait "$LISTENER" 2>/dev/null || true
 
+echo "fully-archived store is inbox zero, not corruption"
+# A store where every chat is archived on purpose, with a `handled` column that
+# nothing maintains. The old fallback treated this as flag corruption and
+# switched the working set to handled=0, which reopened the entire history --
+# 1803 of 1806 archived chats came back as unanswered asks, so a box that had
+# just reached inbox zero could never stay there.
+ZERO_DIR="$TMP/whatsapp-bridge-zero"
+ZERO_STORE="$(mk_store "$ZERO_DIR")"
+python3 - "$ZERO_STORE/messages.db" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("ALTER TABLE chats ADD COLUMN handled INTEGER NOT NULL DEFAULT 0")
+# Old, deliberately archived, and last word was theirs: the shape the fallback
+# used to resurrect. Well outside the recency floor.
+for i in range(6):
+    jid = "8000%02d@lid" % i
+    con.execute("INSERT INTO chats VALUES (?,?, '2025-01-05 10:00:00+00:00', 1, 0, 0)",
+                (jid, "Old%d" % i))
+    con.execute("INSERT INTO messages VALUES (?,?,?,'an old question',"
+                "'2025-01-05 10:00:00+00:00',0,'','')", ("mm%d" % i, jid, jid))
+con.commit(); con.close()
+PY
+
+ZOUT="$("$SCAN" --whatsapp-only --pretty --no-peer-stores \
+        --wa-store "$ZERO_STORE/messages.db" --bridge-port 8098 2>/dev/null)"
+n_needs="$(python3 -c '
+import json,sys
+d=json.loads(sys.stdin.read() or "{}")
+print(len(d.get("whatsapp",{}).get("needs_reply",[])))' <<<"$ZOUT")"
+[ "$n_needs" = "0" ] && ok "archived history stays archived (needs_reply=0)" \
+                     || bad "$n_needs archived chats resurrected; inbox zero unreachable"
+
+if grep -q "not flag corruption" <<<"$ZOUT"; then
+  ok "scan states why it trusted the archive flag"
+else
+  bad "no note explaining the archived-store verdict"
+fi
+
+# The genuine corruption case must STILL be caught: archived=1 everywhere while
+# `handled` is actively maintained means the flag, not the inbox, is wrong.
+CORRUPT_DIR="$TMP/whatsapp-bridge-corrupt"
+CORRUPT_STORE="$(mk_store "$CORRUPT_DIR")"
+python3 - "$CORRUPT_STORE/messages.db" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("ALTER TABLE chats ADD COLUMN handled INTEGER NOT NULL DEFAULT 0")
+# handled is maintained here: most rows carry it, one live thread does not.
+for i in range(5):
+    jid = "9000%02d@lid" % i
+    con.execute("INSERT INTO chats VALUES (?,?, '2025-01-05 10:00:00+00:00', 1, 0, 1)",
+                (jid, "Done%d" % i))
+    con.execute("INSERT INTO messages VALUES (?,?,?,'settled',"
+                "'2025-01-05 10:00:00+00:00',1,'','')", ("cm%d" % i, jid, jid))
+con.execute("INSERT INTO chats VALUES ('900099@lid','Victim',"
+            "'2025-01-06 10:00:00+00:00', 1, 0, 0)")
+con.execute("INSERT INTO messages VALUES ('cv','900099@lid','900099',"
+            "'you never answered me','2025-01-06 10:00:00+00:00',0,'','')")
+con.commit(); con.close()
+PY
+
+COUT="$("$SCAN" --whatsapp-only --pretty --no-peer-stores \
+        --wa-store "$CORRUPT_STORE/messages.db" --bridge-port 8097 2>/dev/null)"
+b="$(bucket_of "$COUT" Victim)"
+[ "$b" = "needs_reply" ] && ok "real flag corruption still recovers the live thread" \
+                         || bad "Victim was '$b'; corruption fallback no longer fires"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

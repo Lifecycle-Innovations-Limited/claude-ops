@@ -38,6 +38,7 @@
 #   --gmail-account ADDR             override Gmail account (default: gog default)
 #   --wa-store DB                    WhatsApp messages.db to scan
 #   --bridge-port N                  bridge REST port for that store
+#   --all-accounts                   scan EVERY agent-enabled account, not one
 #   --peer-store DB                  another account's store, read ONLY to see
 #                                    whether a person was already answered there
 #                                    (repeatable; auto-discovered by default)
@@ -61,6 +62,7 @@ EMAIL_QUERY="in:inbox"
 EMAIL_MAX=400
 WA_STORE_OVERRIDE=""
 BRIDGE_PORT_OVERRIDE=""
+ALL_ACCOUNTS=0
 PEER_STORES=""
 AUTO_PEERS=1
 
@@ -74,6 +76,7 @@ while [ $# -gt 0 ]; do
     --gmail-account) GMAIL_ACCOUNT="${2:-}"; shift ;;
     --wa-store)      WA_STORE_OVERRIDE="${2:-}"; shift ;;
     --bridge-port)   BRIDGE_PORT_OVERRIDE="${2:-}"; shift ;;
+    --all-accounts)  ALL_ACCOUNTS=1 ;;
     --peer-store)    PEER_STORES="${PEER_STORES}${PEER_STORES:+:}${2:-}"; shift ;;
     --no-peer-stores) AUTO_PEERS=0 ;;
     --pretty)        PRETTY=1 ;;
@@ -83,6 +86,102 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+# ------------------------------------------------- every agent-enabled acct ----
+# THE DEFECT THIS CLOSES (2026-09-06). With two agent-enabled numbers the
+# resolver correctly refuses to pick one and this script exited 3. Callers then
+# either passed one account (silently scanning half the inbox) or fell back to
+# an `unread` listing — and `unread` is a DISPLAY state, empty for every thread
+# the owner already opened on their phone. A person's real unanswered ask does
+# not have to be unread. So: scan EVERY enabled account and merge, labelled.
+if [ "$ALL_ACCOUNTS" = 1 ]; then
+  [ -n "$WA_STORE_OVERRIDE$BRIDGE_PORT_OVERRIDE" ] && {
+    echo "ops-inbox-scan: --all-accounts cannot be combined with --wa-store/--bridge-port" >&2
+    exit 2
+  }
+  _resolver="$(dirname "$0")/ops-wa-accounts"
+  [ -x "$_resolver" ] || { echo "ops-inbox-scan: ops-wa-accounts not found" >&2; exit 4; }
+  _self="$0"
+  "$_resolver" | OIS_SELF="$_self" OIS_DAYS="$DAYS" OIS_DO_EMAIL="$DO_EMAIL" \
+    OIS_EMAIL_QUERY="$EMAIL_QUERY" OIS_EMAIL_MAX="$EMAIL_MAX" \
+    OIS_GMAIL_ACCOUNT="$GMAIL_ACCOUNT" OIS_PRETTY="$PRETTY" python3 -c '
+import json, os, subprocess, sys
+
+blob = json.load(sys.stdin)
+enabled = [a for a in blob.get("accounts", []) if a.get("agent_enabled") is True]
+if not enabled:
+    print(json.dumps({"error": "no agent-enabled WhatsApp account", "notes": blob.get("notes", [])}))
+    sys.exit(3)
+
+self_bin = os.environ["OIS_SELF"]
+merged = {"generated_at": None, "window_days": int(os.environ["OIS_DAYS"]),
+          "notes": [], "whatsapp_accounts": []}
+first = True
+for acct in enabled:
+    store = acct.get("store") or acct.get("remote_store") or ""
+    port = acct.get("port")
+    cmd = [self_bin, "--whatsapp-only", "--days", os.environ["OIS_DAYS"],
+           "--wa-store", store, "--bridge-port", str(port)]
+    env = dict(os.environ, OIS_SSH=acct.get("ssh") or "",
+               OIS_SSH_FALLBACK=acct.get("ssh_fallback") or "",
+               OIS_REMOTE_STORE=acct.get("remote_store") or "",
+               OIS_LABEL=acct.get("label") or "", OIS_PHONE=acct.get("phone") or "")
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
+        one = json.loads(out.stdout or "{}")
+    except Exception as exc:  # a broken account must be LOUD, never silent
+        one = {"whatsapp": {"reachable": False, "error": str(exc)}}
+    merged["generated_at"] = merged["generated_at"] or one.get("generated_at")
+    merged["notes"].extend(one.get("notes", []))
+    merged["whatsapp_accounts"].append({
+        "account": acct.get("label"), "phone": acct.get("phone"),
+        "bridge_port": port, "store": store,
+        **one.get("whatsapp", {}),
+    })
+    first = False
+
+if os.environ.get("OIS_DO_EMAIL") == "1":
+    cmd = [self_bin, "--email-only", "--email-query", os.environ["OIS_EMAIL_QUERY"],
+           "--email-max", os.environ["OIS_EMAIL_MAX"]]
+    if os.environ.get("OIS_GMAIL_ACCOUNT"):
+        cmd += ["--gmail-account", os.environ["OIS_GMAIL_ACCOUNT"]]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        one = json.loads(out.stdout or "{}")
+        merged["email"] = one.get("email")
+        merged["notes"].extend(one.get("notes", []))
+    except Exception as exc:
+        merged["email"] = {"reachable": False, "note": "email scan failed: %s" % exc}
+
+merged["counts"] = {
+    "whatsapp": {a["account"]: {b: len(a.get(b) or []) for b in
+                 ("needs_reply", "waiting", "groups", "fyi")}
+                 for a in merged["whatsapp_accounts"]},
+    "email": {b: len((merged.get("email") or {}).get(b) or [])
+              for b in ("needs_reply", "waiting", "fyi")} if merged.get("email") else None,
+}
+# BACK-COMPAT: every existing consumer (ops-inbox-archive-set, ops-inbox-zero)
+# iterates scan["whatsapp"][bucket]. Adding only the per-account list would make
+# them silently see nothing — the exact silent-drop class this fix exists to
+# kill. So also emit the flat union, with each row tagged by account so a reply
+# still goes out on the number the thread actually lives on.
+flat = {"needs_reply": [], "waiting": [], "groups": [], "fyi": [],
+        "reachable": any(a.get("reachable") is not False for a in merged["whatsapp_accounts"])}
+for a in merged["whatsapp_accounts"]:
+    for b in ("needs_reply", "waiting", "groups", "fyi"):
+        for row in (a.get(b) or []):
+            row = dict(row)
+            row["account"] = a.get("account")
+            row["bridge_port"] = a.get("bridge_port")
+            flat[b].append(row)
+for b in ("needs_reply", "waiting", "groups", "fyi"):
+    flat[b].sort(key=lambda x: x.get("age_min") if x.get("age_min") is not None else 1 << 30)
+merged["whatsapp"] = flat
+print(json.dumps(merged, indent=2 if os.environ.get("OIS_PRETTY") == "1" else None,
+                 ensure_ascii=False))
+'
+  exit $?
+fi
 
 # --------------------------------------------------------- which account ----
 # Resolution order: explicit flags, then the long-standing WHATSAPP_BRIDGE_*
@@ -135,9 +234,51 @@ WA_WADB="$WA_STORE/whatsapp.db"
 BRIDGE_PORT="${BRIDGE_PORT:-8080}"
 BRIDGE_API="http://127.0.0.1:${BRIDGE_PORT}"
 
+# ------------------------------------------------------- remote store pull ----
+# THE DEFECT THIS CLOSES (2026-09-06). When the bridge runs on another host this
+# box is a CLIENT: there is no local messages.db at all. The scan used to answer
+# that with empty buckets plus a note telling the agent to "use live MCP" — and
+# an agent that only calls the unread listing then reports inbox zero on a
+# mailbox full of unanswered asks. Empty output is never evidence of an empty
+# inbox. Policy already carries `ssh` + `remote_store`, so USE them: snapshot the
+# remote sqlite read-only into a temp file and classify it exactly like a local
+# store. Only when that genuinely fails do we fall back to the remote-only note.
+WA_REMOTE_PULLED=0
+if [ "$DO_WA" = 1 ] && [ ! -f "$WA_MSGDB" ]; then
+  _rs="${OIS_REMOTE_STORE:-$WA_MSGDB}"
+  for _host in "${OIS_SSH:-}" "${OIS_SSH_FALLBACK:-}"; do
+    [ -n "$_host" ] || continue
+    _tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/ois-wa.XXXXXX")"
+    # VACUUM INTO is the only safe way to copy a live sqlite db: it takes a
+    # consistent snapshot without a writer lock and never risks the WAL. A plain
+    # `scp` of a hot db can copy a torn page set.
+    if ssh -o BatchMode=yes -o ConnectTimeout=8 "$_host" \
+         "rm -f /tmp/ois-snap.db && sqlite3 'file:${_rs}?mode=ro' \"VACUUM INTO '/tmp/ois-snap.db'\"" \
+         >/dev/null 2>&1 &&
+       scp -q -o BatchMode=yes -o ConnectTimeout=8 "$_host:/tmp/ois-snap.db" "$_tmpdir/messages.db" 2>/dev/null; then
+      ssh -o BatchMode=yes -o ConnectTimeout=8 "$_host" "rm -f /tmp/ois-snap.db" >/dev/null 2>&1 || true
+      WA_MSGDB="$_tmpdir/messages.db"
+      WA_STORE="$_tmpdir"
+      WA_WADB="$_tmpdir/whatsapp.db"   # optional; absent => lid map falls back
+      WA_REMOTE_PULLED=1
+      WA_ACCOUNT_SOURCE="${WA_ACCOUNT_SOURCE}+ssh:${_host}"
+      break
+    fi
+    rm -rf "$_tmpdir"
+  done
+fi
+export OIS_WA_REMOTE_PULLED="$WA_REMOTE_PULLED"
+
 # Resolve a default Gmail account from gog if not supplied (best-effort).
+# `gog whoami` prints several tab-separated lines (name, email, photo...) and
+# the address is NOT on the first one. Piping through `head -1` therefore threw
+# the account away, and every downstream call ran without --account: on a box
+# with many tokens gog then refuses with "missing --account" and the scan
+# reports an unreachable mailbox that is in fact perfectly reachable. Scan all
+# lines and take the first address.
 if [ "$DO_EMAIL" = 1 ] && [ -z "$GMAIL_ACCOUNT" ]; then
-  GMAIL_ACCOUNT="$(gog whoami 2>/dev/null | head -1 | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+' || true)"
+  GMAIL_ACCOUNT="$(gog whoami 2>/dev/null \
+    | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' | head -1 || true)"
 fi
 
 export OIS_DAYS="$DAYS" OIS_DO_WA="$DO_WA" OIS_DO_EMAIL="$DO_EMAIL"
@@ -241,6 +382,7 @@ export OIS_SENDLOG_FILE
 # python never shells out. Empty file => python emits an "unreachable" note.
 GMAIL_JSON_FILE=""
 GMAIL_ERR=""
+GMAIL_OK=0
 if [ "$DO_EMAIL" = 1 ]; then
   GMAIL_JSON_FILE="$(mktemp "${TMPDIR:-/tmp}/ois-gmail.XXXXXX")"
   trap 'rm -f "$GMAIL_JSON_FILE" "${OIS_SENDLOG_FILE:-}"' EXIT
@@ -257,10 +399,17 @@ if [ "$DO_EMAIL" = 1 ]; then
         --max "$EMAIL_MAX" "$EMAIL_QUERY" >"$GMAIL_JSON_FILE" 2>"${GMAIL_JSON_FILE}.err"; then
     GMAIL_ERR="$(head -c 400 "${GMAIL_JSON_FILE}.err" 2>/dev/null | tr '\n' ' ')"
     : >"$GMAIL_JSON_FILE"   # blank => unreachable
+  else
+    # A GENUINELY EMPTY INBOX IS A RESULT, NOT A FAILURE. gog prints `[]` for
+    # zero hits, and the old code could not tell that apart from a call that
+    # never ran — both left an unusable file and the scan said "unreachable".
+    # Marking the success explicitly keeps "inbox zero" and "scan broke" as two
+    # different answers, which is the whole point.
+    GMAIL_OK=1
   fi
   rm -f "${GMAIL_JSON_FILE}.err" 2>/dev/null || true
 fi
-export OIS_GMAIL_JSON_FILE="$GMAIL_JSON_FILE" OIS_GMAIL_ERR="$GMAIL_ERR"
+export OIS_GMAIL_JSON_FILE="$GMAIL_JSON_FILE" OIS_GMAIL_ERR="$GMAIL_ERR" OIS_GMAIL_OK="$GMAIL_OK"
 
 python3 <<'PY'
 import os, sys, json, sqlite3, re
@@ -275,6 +424,7 @@ ACCT      = os.environ.get("OIS_GMAIL_ACCOUNT", "")
 PRETTY    = os.environ.get("OIS_PRETTY") == "1"
 GMAIL_F   = os.environ.get("OIS_GMAIL_JSON_FILE", "")
 GMAIL_ERR = os.environ.get("OIS_GMAIL_ERR", "")
+GMAIL_OK  = os.environ.get("OIS_GMAIL_OK") == "1"
 SENDLOG_F = os.environ.get("OIS_SENDLOG_FILE", "")
 PEER_STORES = [p for p in os.environ.get("OIS_PEER_STORES", "").split(":") if p]
 
@@ -407,19 +557,19 @@ def peer_answered_after(jids, inbound_ep):
 def scan_whatsapp():
     out = {"needs_reply": [], "waiting": [], "groups": [], "fyi": []}
     if not os.path.exists(MSGDB):
-        # No local WhatsApp store. Treat WhatsApp as REMOTE-ONLY: the canonical
-        # bridge may run on a remote host, reached via the live MCP tools
-        # (mcp__whatsapp__*). An absent local sqlite store must NOT be read as
-        # "no messages" — signal the orchestrator to scan WhatsApp via live MCP.
+        # No store, local OR pulled. The SSH snapshot above already tried and
+        # failed, so this is a genuine blocker, not a quiet "nothing here".
         out["reachable"] = False
         out["source"] = "remote"
         out["scan_via"] = "live-mcp"
+        out["blocked"] = True
         notes.append(
-            "whatsapp: no local store — scan via the LIVE MCP tools "
-            "(mcp__whatsapp__list_chats / list_messages), which read the canonical "
-            "bridge. Do NOT treat these empty buckets as 'no messages'. WA replies are "
-            "DRAFT-ONLY: never auto-send based on store state (the store can lag "
-            "phone-sent messages)."
+            "whatsapp: NO STORE — the local store is absent and the ssh/remote_store "
+            "snapshot failed. These empty buckets are a FAILED SCAN, not an empty "
+            "inbox. Do not report inbox zero. Fix the ssh path in policy, or scan "
+            "every non-handled chat via the live bridge tools (find/thread — NOT the "
+            "unread listing, which is a display state and is empty for any thread "
+            "already opened on a phone). WA replies stay DRAFT-ONLY."
         )
         return out
     con = ro(MSGDB)
@@ -471,15 +621,71 @@ def scan_whatsapp():
                     return cand
         return jid
 
-    # Working set: non-archived OR any chat with activity in the recency window.
-    # The local `archived` flag has been observed mass-corrupted (every chat
-    # flagged archived=1, including live two-way threads), which silently blinds
-    # the scan into a false "inbox zero". Falling back to recency guarantees a
-    # corrupt flag can NEVER hide an actively-conversing chat; genuinely-archived
-    # OLD chats (no msgs in the window) still stay hidden. (2026-06-09 fix.)
+    # Working set: everything the owner has not DEALT WITH yet.
+    #
+    # Three columns can define "still in my inbox" and only one of them means
+    # what we need:
+    #   * unread_count  — a DISPLAY state. The owner reads on a phone, so every
+    #                     real thread reads 0. Scanning unread reports inbox
+    #                     zero on a mailbox full of unanswered asks. Never use it.
+    #   * archived      — has been observed mass-corrupted (every chat flagged
+    #                     archived=1, live two-way threads included), which
+    #                     silently blinds the scan the same way.
+    #   * handled       — set by this toolchain when a thread was actioned or
+    #                     swept. That is the real "done" bit, so `handled=0` is
+    #                     the working set when the column exists.
+    # Recency is kept as a floor so a corrupt flag can never hide an actively
+    # conversing chat, and genuinely old dealt-with chats still stay hidden.
+    has_handled = False
+    try:
+        has_handled = any(r[1] == "handled" for r in
+                          con.execute("PRAGMA table_info(chats)"))
+    except sqlite3.Error:
+        pass
+    if has_handled:
+        done_pred = "(handled=0 AND archived=0)"
+        # "Every chat is archived" has two very different causes:
+        #   * flag corruption — the store mass-set archived=1 while threads were
+        #     still live and unanswered (observed 2026-06-09).
+        #   * a completed inbox-zero run — every chat archived ON PURPOSE.
+        # The old code assumed the first and fell back to `handled=0`. That is
+        # only a working set if something actually WRITES `handled`. Nothing in
+        # this toolchain does, so on a genuinely-empty inbox the fallback
+        # reopened the entire history: 1803 of 1806 archived chats came back as
+        # unanswered asks, and inbox zero became unreachable by construction.
+        # A column nobody maintains cannot arbitrate anything, so use it only
+        # when it is demonstrably in use.
+        try:
+            n_open = con.execute("SELECT count(*) FROM chats WHERE archived=0").fetchone()[0]
+        except sqlite3.Error:
+            n_open = 1
+        if not n_open:
+            try:
+                n_handled = con.execute(
+                    "SELECT count(*) FROM chats WHERE handled=1").fetchone()[0]
+                n_total = con.execute("SELECT count(*) FROM chats").fetchone()[0]
+            except sqlite3.Error:
+                n_handled, n_total = 0, 0
+            # In use = it tracks the archiving it is being asked to stand in for.
+            # A handful of rows out of thousands is a leftover, not a signal.
+            if n_total and n_handled * 2 >= n_total:
+                done_pred = "handled=0"
+                notes.append(
+                    "whatsapp: every chat is flagged archived=1 (known corruption); "
+                    "using handled=0 as the working set instead"
+                )
+            else:
+                notes.append(
+                    "whatsapp: every chat is archived and `handled` is not "
+                    "maintained (%d of %d rows), so the archive is taken at face "
+                    "value: inbox zero, not flag corruption"
+                    % (n_handled, n_total)
+                )
+    else:
+        done_pred = "archived=0"
     chats = list(con.execute(
         "SELECT jid, name, last_message_time FROM chats "
-        "WHERE archived=0 OR last_message_time >= datetime('now', ?) "
+        f"WHERE {done_pred} OR last_message_time >= datetime('now', ?) "
         "ORDER BY last_message_time DESC",
         (f"-{DAYS} days",)
     ))
@@ -674,6 +880,11 @@ def scan_email():
     res = {"account": ACCT or "(gog default account)",
            "needs_reply": [], "waiting": [], "fyi": [], "reachable": True}
     if not GMAIL_F or not os.path.exists(GMAIL_F) or os.path.getsize(GMAIL_F) == 0:
+        if GMAIL_OK:
+            # The call succeeded and returned nothing: a real, empty inbox.
+            res["empty"] = True
+            res["note"] = "inbox is empty (gog gmail search returned no results)"
+            return res
         res["reachable"] = False
         res["note"] = "gmail unreachable: " + (GMAIL_ERR or "empty result from gog gmail search")
         return res
@@ -685,6 +896,12 @@ def scan_email():
         res["note"] = f"gmail result unparseable: {e}"
         return res
     rows = data if isinstance(data, list) else data.get("results", data.get("threads", []))
+    if not rows:
+        # Parsed fine, zero hits. That is inbox zero, and it must never read the
+        # same as a call that failed — an agent cannot act on an ambiguous empty.
+        res["empty"] = True
+        res["note"] = "inbox is empty (gog gmail search returned no results)"
+        return res
     self_addr = ACCT.lower()
     for r in rows or []:
         labels = r.get("labels") or r.get("labelIds") or []

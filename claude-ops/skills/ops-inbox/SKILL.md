@@ -146,7 +146,7 @@ Every run, in order:
    Before drafting to any person, load `relations` for their brief and open
    commitments.
 1. Resolve the WhatsApp account (`ops-wa-accounts` — never hardcode a port).
-2. Freshness: `~/bin/wa-inbox-fresh.sh` (blocking, bounded). Then `bin/ops-inbox-scan`.
+2. Freshness: `~/bin/wa-inbox-fresh.sh` (blocking, bounded). Then `bin/ops-inbox-scan --all-accounts`. Never an unread listing: unread is a display state and is empty for every thread already opened on a phone.
 3. **All-context sweep** (Rule 9 + `references/details.md` "ALL CONTEXT SOURCES"): query every configured calendar, mailbox, and messaging channel before any schedule claim or NEEDS_REPLY draft. Google Calendar alone is not enough — Notion show/calendar databases count when Notion is configured. A miss on one store is not absence.
 4. `bin/ops-inbox-archive-set` report-only. Present KEEP vs ARCHIVE; `--apply` only after explicit OK.
 5. Deep-read KEEP / NEEDS_REPLY. Fan out if volume (`references/fan-out.md`).
@@ -171,27 +171,38 @@ heaviest channels — WhatsApp (direct read of the whatsmeow sqlite store) and E
 JSON. No subagents, no MCP, near-zero tokens.
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --pretty            # both channels
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --all-accounts --pretty   # EVERY enabled number
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --whatsapp-only     # WA only
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --days 14           # wider window
-# target a specific WhatsApp account (both flags, or neither):
+# target one specific WhatsApp account instead:
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" \
   --wa-store ~/.local/share/whatsapp-mcp/whatsapp-bridge-<label>/store/messages.db \
   --bridge-port <port>
 ```
 
-With no flags the scan resolves the single agent-enabled account itself and **exits 3 rather than
-guess** when that is ambiguous. Its JSON carries a `whatsapp_account` block (`phone`, `bridge_port`,
-`store`, `resolved_by`) — that is the account every downstream archive and reply must use, and
-`ops-inbox-archive-set` reads it so the two can never drift onto different numbers.
+**`--all-accounts` is the default choice when more than one number is agent-enabled.**
+It scans each one, labels every row with its account and bridge port, and still emits the
+flat `whatsapp` buckets older consumers read. Without it the scan exits 3 rather than pick
+a number, and a caller that "handles" that by scanning one account silently reports half
+an inbox.
 
-**THE WORKING SET IS "NOT ARCHIVED", NEVER "UNREAD".** Read/unread says only
-whether a human glanced at a screen; on a phone every thread reads as seen
-within minutes, so an unread filter reports an empty inbox while real asks sit
-there. WhatsApp's working set is `archived=0`, email's is `in:inbox`. Anything
-still in that set is unhandled by definition and stays in scope until it is
-answered, or archived, or both. No recency window hides it either: a question
-from three weeks ago is still a question.
+**NEVER substitute an unread listing for a scan.** `unread` is a DISPLAY state: an owner
+who reads on a phone leaves every real thread at zero unread, so an unread-only sweep
+reports inbox zero over a mailbox full of unanswered asks. The working set is what has not
+been DEALT WITH (`handled=0`, falling back to `archived=0`), never what has not been seen.
+
+**Empty buckets are only trustworthy when the scan says it succeeded.** Check the flags
+before believing a zero:
+
+| field | meaning | what you do |
+|---|---|---|
+| `email.empty: true` | search ran, zero hits | real inbox zero |
+| `email.reachable: false` | the call failed | fix it, never report zero |
+| `whatsapp.blocked: true` | no store, local or pulled | fix ssh/policy, never report zero |
+
+On a client box (bridge on another host) the scan pulls the remote store itself over the
+policy `ssh` + `remote_store` entries, using `VACUUM INTO` for a consistent snapshot. It
+only reports `blocked` when that genuinely fails.
 
 **CROSS-ACCOUNT: a reply on one number counts for the other.** One person often
 exists in both stores under different jids. A reply sent from account A lands
