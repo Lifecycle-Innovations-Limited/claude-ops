@@ -688,11 +688,12 @@ cmd_join() {
     esac
   done
 
-  command -v gog >/dev/null 2>&1 || {
-    emit_err "join requires gog CLI (calendar lookup)"; exit 1; }
+  # shellcheck source=../lib/gog-account.sh
+  . "$(cd "$(dirname "$0")/.." && pwd)/lib/gog-account.sh"
+  ops_gog_ready || { emit_err "join requires gog calendar access: $OPS_GOG_NOTE"; exit 1; }
 
   local raw
-  raw="$(gog calendar events --all --today -j --sort start --no-input 2>/dev/null)"
+  raw="$(gog calendar events -a "$OPS_GOG_ACCOUNT" --all --today -j --sort start --no-input 2>/dev/null)"
   [[ -z "$raw" ]] && { emit_err "gog returned no calendar data"; exit 1; }
 
   # Build a parallel TSV of (idx, start_epoch, end_epoch) using the portable

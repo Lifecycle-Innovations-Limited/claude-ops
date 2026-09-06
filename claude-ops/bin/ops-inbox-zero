@@ -138,12 +138,18 @@ log "scan OK → $SCAN_OUT ($(wc -c <"$SCAN_OUT" | tr -d ' ') bytes)"
 GMAIL_OUT="/tmp/gmail-inbox.json"
 if [ "$DO_EMAIL" = 1 ]; then
   log "step 3/9 — gog gmail search in:inbox"
-  if ! gog gmail search "in:inbox" --max 40 -j --results-only --no-input > "$GMAIL_OUT" 2>"$GMAIL_OUT.err"; then
-    log "gmail search failed (likely keyring/auth) — see $GMAIL_OUT.err"
+  # shellcheck source=../lib/gog-account.sh
+  . "$(cd "$(dirname "$0")/.." && pwd)/lib/gog-account.sh"
+  if ! ops_gog_ready; then
+    log "gmail unavailable — $OPS_GOG_NOTE"
+    log "agent must reauth via email-domain-ops → references/gog-oauth-cdp-reauth.md"
+    DO_EMAIL=0
+  elif ! gog gmail search -a "$OPS_GOG_ACCOUNT" "in:inbox" --max 40 -j --results-only --no-input > "$GMAIL_OUT" 2>"$GMAIL_OUT.err"; then
+    log "gmail search failed for $OPS_GOG_ACCOUNT — see $GMAIL_OUT.err"
     log "agent must reauth via email-domain-ops → references/gog-oauth-cdp-reauth.md"
     DO_EMAIL=0
   else
-    log "gmail scan OK → $GMAIL_OUT ($(wc -c <"$GMAIL_OUT" | tr -d ' ') bytes)"
+    log "gmail scan OK ($OPS_GOG_ACCOUNT) → $GMAIL_OUT ($(wc -c <"$GMAIL_OUT" | tr -d ' ') bytes)"
   fi
 fi
 

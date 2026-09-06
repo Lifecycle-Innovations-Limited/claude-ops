@@ -26,11 +26,17 @@ command -v gog >/dev/null 2>&1     || { echo "ops-inbox-live-watch: gog not foun
 command -v python3 >/dev/null 2>&1 || { echo "ops-inbox-live-watch: python3 not found on PATH" >&2; exit 2; }
 
 GMAIL_ACCOUNT="${GMAIL_ACCOUNT:-${GOG_ACCOUNT:-}}"
-if [ -z "$GMAIL_ACCOUNT" ]; then
-  GMAIL_ACCOUNT="$(gog whoami 2>/dev/null | head -1 | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+' || true)"
+# gog rejects every call without an explicit --account once more than one token
+# is stored, and again when the keyring is locked. lib/gog-account.sh resolves
+# both and reports the real reason instead of a silent empty snapshot.
+# shellcheck source=../lib/gog-account.sh
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/gog-account.sh"
+if ! ops_gog_ready; then
+  echo "ops-inbox-live-watch: $OPS_GOG_NOTE" >&2
+  exit 2
 fi
-ACCT_ARGS=()
-[ -n "$GMAIL_ACCOUNT" ] && ACCT_ARGS=(-a "$GMAIL_ACCOUNT")
+GMAIL_ACCOUNT="$OPS_GOG_ACCOUNT"
+ACCT_ARGS=(-a "$GMAIL_ACCOUNT")
 
 SEEN="$(mktemp "${TMPDIR:-/tmp}/.ops-inbox-seen-ids.XXXXXX")"
 trap 'rm -f "$SEEN" "${SEEN}.err"' EXIT
