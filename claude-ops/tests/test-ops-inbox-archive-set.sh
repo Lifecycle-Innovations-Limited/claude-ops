@@ -38,8 +38,13 @@ grep -q 'EMAIL_QUERY="in:inbox"' "$CODE" \
   || fail "email working set must default to the whole inbox"
 grep -q 'newer_than' "$CODE" \
   && fail "email query must not be sliced by a recency window"
-grep -q 'WHERE {done_pred} OR last_message_time' "$CODE" \
+grep -q 'WHERE {done_pred} OR' "$CODE" \
   || fail "whatsapp working set must be a done-flag predicate, not a recency slice"
+# The corruption net must stay CONDITIONAL on the other person having spoken
+# last. A bare recency OR outranks the archive flag and reopens chats that were
+# archived on purpose (2026-09-06).
+grep -q 'is_from_me = 0' "$CODE" \
+  || fail "corruption net must require an inbound-last chat, not bare recency"
 grep -q 'done_pred = "archived=0"' "$CODE" \
   || fail "whatsapp must fall back to archived=0 when there is no handled column"
 grep -q 'done_pred = "handled=0"' "$CODE" \

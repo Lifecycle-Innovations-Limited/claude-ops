@@ -706,9 +706,23 @@ def scan_whatsapp():
     except sqlite3.Error:
         n_open_now = 1
     if n_open_now:
+        # Corruption net, narrowed. It used to be a bare
+        # `OR last_message_time >= now - DAYS`, which outranked the archive flag
+        # for ANY recent chat, so a thread archived while already settled came
+        # straight back. A mass-corrupted flag always leaves the other person's
+        # message last (we never got to answer), so require that: recent,
+        # archived, and ending on THEIR line. A chat we closed out ourselves is
+        # left alone, and the post-sweep reopen below handles the case where
+        # they answer afterwards.
         chats = list(con.execute(
-            "SELECT jid, name, last_message_time FROM chats "
-            f"WHERE {done_pred} OR last_message_time >= datetime('now', ?) "
+            "SELECT jid, name, last_message_time FROM chats c "
+            f"WHERE {done_pred} OR ("
+            "  c.last_message_time >= datetime('now', ?) "
+            "  AND EXISTS (SELECT 1 FROM messages m WHERE m.chat_jid = c.jid "
+            "              AND m.is_from_me = 0 "
+            "              AND m.timestamp = (SELECT MAX(x.timestamp) "
+            "                                 FROM messages x "
+            "                                 WHERE x.chat_jid = c.jid))) "
             "ORDER BY last_message_time DESC",
             (f"-{DAYS} days",)
         ))
@@ -721,6 +735,85 @@ def scan_whatsapp():
             "SELECT jid, name, last_message_time FROM chats "
             f"WHERE {done_pred} ORDER BY last_message_time DESC"
         ))
+
+    # REPLIES AFTER THE SWEEP. Archiving a thread says "dealt with as of now",
+    # not "dealt with forever". When the other person answers afterwards the
+    # chat is unhandled again, but WhatsApp leaves the archive flag exactly
+    # where it was, so a working set of archived=0 alone never sees the reply --
+    # inbox zero reported over a stack of live questions (observed 2026-09-06:
+    # five people replied within four hours of the sweep, all invisible).
+    #
+    # The evidence must be NARROW or this becomes a second working set. A first
+    # attempt reopened on "inbound newer than our last outbound" alone and
+    # dragged back 316 chats going to 2025, because a thread we never answered
+    # satisfies that trivially. Two conditions, both required:
+    #   1. a sweep watermark for that chat (written by ops-inbox-archive-set),
+    #      and an inbound strictly newer than it; or, for chats archived before
+    #      watermarks existed, an outbound of OURS with an inbound after it,
+    #   2. and the inbound falls inside the --days window, so history stays shut.
+    reopened = 0
+    seen_jids = {c["jid"] for c in chats}
+    marks = {}
+    if MSGDB:
+        wm_path = os.path.join(os.path.dirname(MSGDB), "ops-sweep-watermarks.json")
+        try:
+            with open(wm_path) as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict):
+                marks = {k: str(v) for k, v in loaded.items()}
+        except (OSError, ValueError):
+            marks = {}
+    try:
+        rows = con.execute(
+            "SELECT c.jid AS jid, c.name AS name, "
+            "       c.last_message_time AS last_message_time, "
+            "       (SELECT MAX(i.timestamp) FROM messages i "
+            "          WHERE i.chat_jid = c.jid AND i.is_from_me = 0) AS last_in, "
+            "       (SELECT MAX(o.timestamp) FROM messages o "
+            "          WHERE o.chat_jid = c.jid AND o.is_from_me = 1) AS last_out "
+            "FROM chats c WHERE c.archived = 1 "
+            "  AND c.last_message_time >= datetime('now', ?) "
+            "ORDER BY c.last_message_time DESC",
+            (f"-{DAYS} days",),
+        ).fetchall()
+    except sqlite3.Error as exc:                     # noqa: BLE001 - note, never crash
+        rows = []
+        notes.append(f"whatsapp: post-archive reply check failed ({exc})")
+    for r in rows:
+        jid = r["jid"]
+        if jid.endswith("@broadcast") or jid.endswith("@newsletter"):
+            continue
+        last_in = r["last_in"]
+        mark = marks.get(jid)
+        keep = False
+        if last_in:
+            if mark:
+                keep = last_in > mark
+            else:
+                # No watermark: only a thread we actually engaged in can be
+                # judged, otherwise every old unanswered chat qualifies.
+                keep = bool(r["last_out"]) and last_in > r["last_out"]
+        if jid in seen_jids:
+            # It arrived via the corruption net. The watermark still rules: a
+            # chat archived AFTER their last word is dealt with, however recent.
+            if mark and not keep:
+                chats = [c for c in chats if c["jid"] != jid]
+                seen_jids.discard(jid)
+            elif keep:
+                # Same situation the reopen exists for, different door in.
+                # Count it so the note matches what the run actually surfaced.
+                reopened += 1
+            continue
+        if not keep:
+            continue
+        chats.append(r)
+        seen_jids.add(jid)
+        reopened += 1
+    if reopened:
+        notes.append(
+            "whatsapp: %d archived chat(s) reopened — they replied after the "
+            "sweep, so the archive no longer means dealt-with" % reopened
+        )
 
     # Build merged DM groups keyed by canonical jid.
     groups = {}   # canonical_jid -> {member_jids:set, name, latest_ts}
