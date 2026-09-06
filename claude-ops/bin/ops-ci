@@ -91,14 +91,22 @@ scan_all_graphql() {
   done < <(printf '%s' "$repos_json" | jq -c '.[]')
   query+="}"
 
-  # Fire the single GraphQL call
+  # Fire the single GraphQL call.
+  # NOTE: `gh api graphql` exits non-zero on a PARTIAL failure while still
+  # printing a complete, usable payload — one unreadable repo in a 30-repo
+  # aliased query returns {"data":{...},"errors":[NOT_FOUND]} AND exit 1. A
+  # `|| echo '{}'` fallback therefore appends a second JSON document to a good
+  # payload, and every downstream `jq` emits one value per document ("14\n0"),
+  # which blows up the numeric test below. Only fall back when there is no
+  # output at all.
   local gql_result
-  gql_result=$(gh api graphql -f query="$query" 2>/dev/null || echo '{}')
+  gql_result=$(gh api graphql -f query="$query" 2>/dev/null) || true
+  [ -z "$gql_result" ] && gql_result='{}'
 
   # Extract data (errors from NOT_FOUND/private repos are tolerated — those keys
   # will simply have null values which the jq below skips gracefully)
   local gql_data
-  gql_data=$(printf '%s' "$gql_result" | jq '.data // {}')
+  gql_data=$(printf '%s' "$gql_result" | jq -s '.[0].data // {}')
 
   # For each repo alias, collect FAILURE suites → write per-repo JSON file
   while IFS= read -r entry; do
@@ -140,7 +148,9 @@ scan_all_graphql() {
     ' 2>/dev/null || echo '[]')
 
     local fcount
-    fcount=$(printf '%s' "$failures" | jq 'length' 2>/dev/null || echo 0)
+    # jq -s so a multi-document input can never yield a multi-line count.
+    fcount=$(printf '%s' "$failures" | jq -s '.[0] // [] | length' 2>/dev/null || echo 0)
+    [[ "$fcount" =~ ^[0-9]+$ ]] || fcount=0
     if [ "$fcount" -gt 0 ]; then
       printf '{"repo":"%s","failures":%s}' "$repo_slug" "$failures" \
         > "$TMPDIR_OPS/${safe_name}.json"
