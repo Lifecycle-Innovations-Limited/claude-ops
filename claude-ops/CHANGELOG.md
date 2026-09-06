@@ -141,6 +141,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.10.7] - 2026-09-06
+
+### Changed
+Inbox sweep now treats an archived chat as dealt with. The recency floor was overriding the archive flag for anything touched in the last 7 days, so a swept account still reported handled threads as unanswered and inbox zero could not be reached. The corruption net now arms only on stores that still have open chats.
+
+
 ## [3.10.6] - 2026-09-06
 
 ### Changed
