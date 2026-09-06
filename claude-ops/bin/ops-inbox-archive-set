@@ -454,18 +454,29 @@ def main():
         # Rows that carry their own bridge_port do not need a global default;
         # only the untagged remainder is genuinely unroutable.
         untagged = [r for r in wa_archive if not r.get("bridge_port")]
-        if untagged:
+        if not untagged:
+            port_source = "per-row account tag (merged multi-account scan)"
+        elif args.dry_run:
+            # A dry run contacts no bridge, so an unresolved port cannot send an
+            # archive to the wrong number. Blocking it there made the preview
+            # machine-dependent: on a box with two agent-enabled accounts the
+            # resolver refuses to pick one, and the dry run reported 0 planned
+            # archives -- a preview that silently disagreed with the real run.
+            errors.append(
+                "WhatsApp bridge port unresolved for %d chat(s): dry run counts "
+                "the planned archives, but a live --apply will refuse until you "
+                "pass --default-bridge-port." % len(untagged))
+        else:
             errors.append(
                 "WhatsApp archive skipped for %d chat(s): could not resolve which "
                 "account they belong to. Pass --default-bridge-port, or set "
                 "agent_enabled in the ops-wa-accounts policy file." % len(untagged))
-        else:
-            port_source = "per-row account tag (merged multi-account scan)"
     result["whatsapp_bridge_port"] = main_port
     result["whatsapp_bridge_port_source"] = port_source
 
     if args.apply:
-        if main_port is None and not any(r.get("bridge_port") for r in wa_archive):
+        if (main_port is None and not args.dry_run
+                and not any(r.get("bridge_port") for r in wa_archive)):
             ok, fail = 0, 0
         else:
             ok, fail = archive_whatsapp(wa_archive, main_port, args.dry_run)

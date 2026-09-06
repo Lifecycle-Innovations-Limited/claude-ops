@@ -39,6 +39,10 @@
 #   --wa-store DB                    WhatsApp messages.db to scan
 #   --bridge-port N                  bridge REST port for that store
 #   --all-accounts                   scan EVERY agent-enabled account, not one
+#   --peer-store DB                  another account's store, read ONLY to see
+#                                    whether a person was already answered there
+#                                    (repeatable; auto-discovered by default)
+#   --no-peer-stores                 disable that auto-discovery
 #   --pretty                         pretty-print JSON
 #
 # WHICH WHATSAPP ACCOUNT: more than one bridge can run here, one per number, and
@@ -59,6 +63,8 @@ EMAIL_MAX=400
 WA_STORE_OVERRIDE=""
 BRIDGE_PORT_OVERRIDE=""
 ALL_ACCOUNTS=0
+PEER_STORES=""
+AUTO_PEERS=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -71,6 +77,8 @@ while [ $# -gt 0 ]; do
     --wa-store)      WA_STORE_OVERRIDE="${2:-}"; shift ;;
     --bridge-port)   BRIDGE_PORT_OVERRIDE="${2:-}"; shift ;;
     --all-accounts)  ALL_ACCOUNTS=1 ;;
+    --peer-store)    PEER_STORES="${PEER_STORES}${PEER_STORES:+:}${2:-}"; shift ;;
+    --no-peer-stores) AUTO_PEERS=0 ;;
     --pretty)        PRETTY=1 ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -279,6 +287,37 @@ export OIS_GMAIL_ACCOUNT="$GMAIL_ACCOUNT" OIS_PRETTY="$PRETTY"
 export OIS_WA_PHONE="$WA_ACCOUNT_PHONE" OIS_WA_PORT="$BRIDGE_PORT"
 export OIS_WA_ACCOUNT_SOURCE="$WA_ACCOUNT_SOURCE"
 
+# ---------------------------------------------------- peer account stores ----
+# One person, two numbers, two stores. A reply sent from account A lands ONLY in
+# A's messages.db, so B's copy of that same conversation still ends in an
+# inbound message and the scan calls it NEEDS_REPLY -- an already-answered
+# thread, offered up for a second, duplicate reply. (2026-09-06: a contact was
+# answered on the NL number two days earlier; the US store had no idea.)
+# Peer stores are read-only evidence of "already answered", never a scan target.
+if [ "$DO_WA" = 1 ] && [ "$AUTO_PEERS" = 1 ] && [ -z "$PEER_STORES" ]; then
+  _resolver="$(dirname "$0")/ops-wa-accounts"
+  if [ -x "$_resolver" ]; then
+    PEER_STORES="$("$_resolver" 2>/dev/null | python3 -c '
+import json, os, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+mine = os.path.realpath(os.environ.get("OIS_WA_MSGDB", ""))
+out = []
+for a in data.get("accounts", []):
+    st = a.get("store")
+    if not st:
+        continue
+    st = os.path.realpath(st)
+    if st != mine and os.path.exists(st):
+        out.append(st)
+print(":".join(out))
+' 2>/dev/null || true)"
+  fi
+fi
+export OIS_PEER_STORES="$PEER_STORES"
+
 # The bridge dir that owns the store we are actually scanning — not a fixed
 # path, or link_contacts.py would be run out of the wrong account's install.
 BRIDGE_DIR="$(dirname "$WA_STORE")"
@@ -396,6 +435,7 @@ GMAIL_F   = os.environ.get("OIS_GMAIL_JSON_FILE", "")
 GMAIL_ERR = os.environ.get("OIS_GMAIL_ERR", "")
 GMAIL_OK  = os.environ.get("OIS_GMAIL_OK") == "1"
 SENDLOG_F = os.environ.get("OIS_SENDLOG_FILE", "")
+PEER_STORES = [p for p in os.environ.get("OIS_PEER_STORES", "").split(":") if p]
 
 now = datetime.now(timezone.utc)
 notes = []
@@ -472,6 +512,56 @@ def ro(path):
     # immutable=1 skips the -wal file and would hide the freshest, uncheckpointed
     # messages. mode=ro respects WAL + locking and never mutates.
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+
+def load_peer_outbound():
+    """person-key -> newest epoch WE sent them from ANY other account.
+
+    Keys are both the raw jid and its bare local part (the digits before @), so
+    a peer's `12345@lid` matches this account's `12345@s.whatsapp.net`: the
+    lid<->phone map is per-store, and the same person is routinely filed under a
+    different jid suffix on the other number. Matching on the digits is what
+    makes the cross-account check actually fire.
+    """
+    sent = {}
+    for path in PEER_STORES:
+        if not os.path.exists(path):
+            continue
+        try:
+            con = ro(path)
+            rows = con.execute(
+                "SELECT chat_jid, MAX(timestamp) FROM messages "
+                "WHERE is_from_me=1 GROUP BY chat_jid"
+            ).fetchall()
+            con.close()
+        except sqlite3.Error as exc:                  # noqa: BLE001 - note, never crash
+            notes.append(f"whatsapp: peer store unreadable ({path}): {exc}")
+            continue
+        for jid, ts in rows:
+            ep = ts_epoch(ts)
+            if ep is None or not jid:
+                continue
+            for key in (jid, re.sub(r"@.*$", "", jid)):
+                if key and (key not in sent or ep > sent[key]):
+                    sent[key] = ep
+    return sent
+
+
+PEER_OUTBOUND = load_peer_outbound()
+
+
+def peer_answered_after(jids, inbound_ep):
+    """Newest cross-account send to any of these jids after inbound_ep."""
+    if inbound_ep is None or not PEER_OUTBOUND:
+        return None
+    best = None
+    for j in jids:
+        for key in (j, re.sub(r"@.*$", "", j)):
+            ep = PEER_OUTBOUND.get(key)
+            if ep is not None and ep > inbound_ep + 30 and (best is None or ep > best):
+                best = ep
+    return best
+
 
 def scan_whatsapp():
     out = {"needs_reply": [], "waiting": [], "groups": [], "fyi": []}
@@ -563,18 +653,43 @@ def scan_whatsapp():
         pass
     if has_handled:
         done_pred = "(handled=0 AND archived=0)"
-        # A store where EVERY chat is archived=1 is the corruption case above;
-        # there `handled` alone is the only trustworthy signal.
+        # "Every chat is archived" has two very different causes:
+        #   * flag corruption — the store mass-set archived=1 while threads were
+        #     still live and unanswered (observed 2026-06-09).
+        #   * a completed inbox-zero run — every chat archived ON PURPOSE.
+        # The old code assumed the first and fell back to `handled=0`. That is
+        # only a working set if something actually WRITES `handled`. Nothing in
+        # this toolchain does, so on a genuinely-empty inbox the fallback
+        # reopened the entire history: 1803 of 1806 archived chats came back as
+        # unanswered asks, and inbox zero became unreachable by construction.
+        # A column nobody maintains cannot arbitrate anything, so use it only
+        # when it is demonstrably in use.
         try:
             n_open = con.execute("SELECT count(*) FROM chats WHERE archived=0").fetchone()[0]
         except sqlite3.Error:
             n_open = 1
         if not n_open:
-            done_pred = "handled=0"
-            notes.append(
-                "whatsapp: every chat is flagged archived=1 (known corruption); "
-                "using handled=0 as the working set instead"
-            )
+            try:
+                n_handled = con.execute(
+                    "SELECT count(*) FROM chats WHERE handled=1").fetchone()[0]
+                n_total = con.execute("SELECT count(*) FROM chats").fetchone()[0]
+            except sqlite3.Error:
+                n_handled, n_total = 0, 0
+            # In use = it tracks the archiving it is being asked to stand in for.
+            # A handful of rows out of thousands is a leftover, not a signal.
+            if n_total and n_handled * 2 >= n_total:
+                done_pred = "handled=0"
+                notes.append(
+                    "whatsapp: every chat is flagged archived=1 (known corruption); "
+                    "using handled=0 as the working set instead"
+                )
+            else:
+                notes.append(
+                    "whatsapp: every chat is archived and `handled` is not "
+                    "maintained (%d of %d rows), so the archive is taken at face "
+                    "value: inbox zero, not flag corruption"
+                    % (n_handled, n_total)
+                )
     else:
         done_pred = "archived=0"
     chats = list(con.execute(
@@ -670,7 +785,16 @@ def scan_whatsapp():
                 item["reconciled"] = "answered via send-log (reply sent, not yet in store)"
                 out["waiting"].append(item)
             else:
-                out["needs_reply"].append(item)
+                # Cross-account: same person, other number, answer already sent
+                # there. Without this the second account re-offers a handled
+                # thread and a duplicate reply goes out.
+                peer_ep = peer_answered_after(members, inbound_ep)
+                if peer_ep is not None:
+                    item["last_from_me"] = True
+                    item["reconciled"] = "answered from another WhatsApp account"
+                    out["waiting"].append(item)
+                else:
+                    out["needs_reply"].append(item)
 
     # Group chats — surface recent ones for the skill to scan for @mentions /
     # direct questions. Provisional status from last-message direction only.
@@ -832,6 +956,7 @@ def scan_email():
 result = {
     "generated_at": now.isoformat(),
     "window_days": DAYS,
+    "peer_stores_read": PEER_STORES,
     "notes": notes,
 }
 if DO_WA:

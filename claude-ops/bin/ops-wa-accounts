@@ -106,6 +106,73 @@ def _sourced_env_files(text):
     return out
 
 
+def _live_ports_by_dir():
+    """Map bridge directory -> port actually LISTENing, read from the OS.
+
+    A launcher script is not the only way a bridge starts. When a bridge is run
+    directly (systemd, a wrapper, a supervisor, by hand) there is no
+    run-bridge.sh to scan, and _scan() falls back to DEFAULT_BRIDGE_PORT. Every
+    account then reports the same port, so callers that trust it hit ONE bridge
+    for both numbers -- reading, archiving and replying on the wrong account.
+    That is the exact failure this whole file exists to prevent, so the port has
+    to come from the same place the phone does: live ground truth.
+
+    /proc/<pid>/cwd is the bridge's own working directory (whatsmeow stores
+    relative to it), which keys the mapping without guessing a binary name.
+    Linux-only by construction; on any other platform this returns {} and the
+    launcher/policy path stays authoritative.
+    """
+    out = {}
+    proc = "/proc"
+    if not os.path.isdir(proc):
+        return out
+    # inode -> port for every listening TCP socket (v4 + v6)
+    port_by_inode = {}
+    for tcp in ("net/tcp", "net/tcp6"):
+        try:
+            with open(os.path.join(proc, tcp)) as fh:
+                next(fh, None)
+                for line in fh:
+                    f = line.split()
+                    if len(f) < 10 or f[3] != "0A":       # 0A = TCP_LISTEN
+                        continue
+                    try:
+                        port_by_inode[f[9]] = int(f[1].rsplit(":", 1)[1], 16)
+                    except (ValueError, IndexError):
+                        continue
+        except OSError:
+            continue
+    if not port_by_inode:
+        return out
+    for pid in os.listdir(proc):
+        if not pid.isdigit():
+            continue
+        try:
+            cwd = os.path.realpath(os.path.join(proc, pid, "cwd"))
+        except OSError:
+            continue
+        fd_dir = os.path.join(proc, pid, "fd")
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(os.path.join(fd_dir, fd))
+            except OSError:
+                continue
+            if not target.startswith("socket:["):
+                continue
+            inode = target[8:-1]
+            port = port_by_inode.get(inode)
+            if port is None:
+                continue
+            # lowest listening port wins, deterministic across restarts
+            if cwd not in out or port < out[cwd]:
+                out[cwd] = port
+    return out
+
+
 def _paired_jid(store_dir):
     """The number actually paired in the store — ground truth, unlike config."""
     db = os.path.join(store_dir, "whatsapp.db")
@@ -203,6 +270,7 @@ def discover():
         notes.append(policy_note)
 
     found = []
+    live_ports = _live_ports_by_dir()
     for d in sorted(glob.glob(BRIDGE_GLOB)):
         if not os.path.isdir(d):
             continue
@@ -239,6 +307,16 @@ def discover():
         except ValueError:
             port = DEFAULT_BRIDGE_PORT
 
+        # A LISTENing socket beats a config guess. Without this every bridge
+        # started outside run-bridge.sh reports DEFAULT_BRIDGE_PORT, and two
+        # accounts collapse onto one port.
+        live_port = live_ports.get(os.path.realpath(d))
+        if live_port:
+            port = live_port
+            port_source = "live socket"
+        else:
+            port_source = "launcher/default"
+
         phone_paired = _paired_jid(store)
         phone = phone_paired or phone_cfg
 
@@ -257,6 +335,7 @@ def discover():
             "dir": d,
             "store": msgdb,
             "port": port,
+            "port_source": port_source,
             "api": "http://127.0.0.1:%d" % port,
             "phone": phone,
             "phone_configured": phone_cfg,
