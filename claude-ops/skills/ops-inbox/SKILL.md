@@ -191,6 +191,17 @@ who reads on a phone leaves every real thread at zero unread, so an unread-only 
 reports inbox zero over a mailbox full of unanswered asks. The working set is what has not
 been DEALT WITH (`handled=0`, falling back to `archived=0`), never what has not been seen.
 
+**ON SAM'S BOX THE WHATSAPP ZERO IS ALWAYS A LIE — measured 2026-09-06.** Every chat in
+both stores is archived and `handled` is maintained on 3 of 1808 rows, so the scan prints
+`whatsapp: every chat is archived and handled is not maintained ... inbox zero, not flag
+corruption`, disarms its own recency net, and reports `needs_reply: 0` for personal_nl AND
+personal_us. That run reported inbox zero while six people were genuinely waiting on a
+reply. Whenever a note contains "recency net disarmed" or "taken at face value", the zero
+carries no information: derive needs_reply yourself — a thread needs a reply when its
+NEWEST message has `is_from_me = 0`, regardless of the archive flag. Do this with the
+WhatsApp plugin tools (`whatsapp_unread`, `whatsapp_find`, `whatsapp_thread`), not with a
+hand-written sqlite read.
+
 **Empty buckets are only trustworthy when the scan says it succeeded.** Check the flags
 before believing a zero:
 
