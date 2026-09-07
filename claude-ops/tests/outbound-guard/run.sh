@@ -29,7 +29,8 @@ for suite in \
   "$HERE/test-shared-guard.sh" \
   "$HERE/test-hook-matrix.py" \
   "$HERE/test-false-positives.py" \
-  "$HERE/test-broken-alias.py"; do
+  "$HERE/test-broken-alias.py" \
+  "$HERE/test-installed-copy-sync.sh"; do
 
   name="$(basename "$suite")"
   if [ ! -f "$suite" ]; then
