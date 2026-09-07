@@ -68,23 +68,36 @@ AUTO_PEERS=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --whatsapp-only) DO_EMAIL=0 ;;
-    --email-only)    DO_WA=0 ;;
-    --days)          DAYS="${2:-7}"; shift ;;
-    --email-query)   EMAIL_QUERY="${2:-in:inbox}"; shift ;;
-    --email-max)     EMAIL_MAX="${2:-400}"; shift ;;
-    --gmail-account) GMAIL_ACCOUNT="${2:-}"; shift ;;
-    --wa-store)      WA_STORE_OVERRIDE="${2:-}"; shift ;;
-    --bridge-port)   BRIDGE_PORT_OVERRIDE="${2:-}"; shift ;;
-    --all-accounts)  ALL_ACCOUNTS=1 ;;
-    --peer-store)    PEER_STORES="${PEER_STORES}${PEER_STORES:+:}${2:-}"; shift ;;
-    --no-peer-stores) AUTO_PEERS=0 ;;
-    --pretty)        PRETTY=1 ;;
+    --whatsapp-only) DO_EMAIL=0; shift ;;
+    --email-only)    DO_WA=0; shift ;;
+    --days)
+      [ $# -ge 2 ] || { echo "ops-inbox-scan: --days requires a value" >&2; exit 2; }
+      DAYS="$2"; shift 2 ;;
+    --email-query)
+      [ $# -ge 2 ] || { echo "ops-inbox-scan: --email-query requires a value" >&2; exit 2; }
+      EMAIL_QUERY="$2"; shift 2 ;;
+    --email-max)
+      [ $# -ge 2 ] || { echo "ops-inbox-scan: --email-max requires a value" >&2; exit 2; }
+      EMAIL_MAX="$2"; shift 2 ;;
+    --gmail-account)
+      [ $# -ge 2 ] || { echo "ops-inbox-scan: --gmail-account requires a value" >&2; exit 2; }
+      GMAIL_ACCOUNT="$2"; shift 2 ;;
+    --wa-store)
+      [ $# -ge 2 ] || { echo "ops-inbox-scan: --wa-store requires a value" >&2; exit 2; }
+      WA_STORE_OVERRIDE="$2"; shift 2 ;;
+    --bridge-port)
+      [ $# -ge 2 ] || { echo "ops-inbox-scan: --bridge-port requires a value" >&2; exit 2; }
+      BRIDGE_PORT_OVERRIDE="$2"; shift 2 ;;
+    --all-accounts)  ALL_ACCOUNTS=1; shift ;;
+    --peer-store)
+      [ $# -ge 2 ] || { echo "ops-inbox-scan: --peer-store requires a value" >&2; exit 2; }
+      PEER_STORES="${PEER_STORES}${PEER_STORES:+:}$2"; shift 2 ;;
+    --no-peer-stores) AUTO_PEERS=0; shift ;;
+    --pretty)        PRETTY=1; shift ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "ops-inbox-scan: unknown arg: $1" >&2; exit 2 ;;
   esac
-  shift
 done
 
 # ------------------------------------------------- every agent-enabled acct ----

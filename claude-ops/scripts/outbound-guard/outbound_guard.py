@@ -16,9 +16,12 @@ content. When a second guard sees a fingerprint already recorded within
 SPENT_WINDOW_SEC, that is the same message, already paid for. It passes and nothing is
 deducted. One message costs exactly one unit no matter how many layers it crosses.
 
-The Node twin lives at ../outbound-guard.mjs (and, when installed, at
-~/.claude/mcp-proxy/outbound-guard.mjs). It reads and writes this same file with the
-same rules, and the test suite asserts both sides agree on the fingerprint.
+The Node twin lives at ../outbound-guard.mjs. `sync-installed-copy.sh` mirrors it,
+verbatim and on every session start, to ~/.claude/mcp-proxy/outbound-guard.mjs so the
+MCP proxy always runs the current schema instead of a copy frozen at whatever this
+file looked like when someone last installed it by hand. Both copies read and write
+this same file with the same rules, and the test suite asserts both sides agree on
+the fingerprint.
 """
 from __future__ import annotations
 
