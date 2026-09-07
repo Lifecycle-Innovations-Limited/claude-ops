@@ -45,6 +45,15 @@ if [ -f "$PLUGIN_ROOT/package.json" ] && command -v node &>/dev/null; then
   fi
 fi
 
+# ─── Keep the installed outbound-guard Node twin current ───────────
+# outbound_guard.py documents an installed copy at ~/.claude/mcp-proxy/outbound-guard.mjs
+# that shares its state file and rules. Without a refresh step that copy silently drifts
+# onto an old schema every time outbound-guard.mjs changes in the repo. Re-run on every
+# session start; the sync script is an idempotent overwrite so this is always safe.
+if [ -f "$PLUGIN_ROOT/scripts/outbound-guard/sync-installed-copy.sh" ]; then
+  bash "$PLUGIN_ROOT/scripts/outbound-guard/sync-installed-copy.sh" >/dev/null 2>&1 || true
+fi
+
 # ─── Report only problems ───────────────────────────────────────────
 if [ ${#INSTALLED[@]} -gt 0 ]; then
   echo "  ops: auto-installed ${INSTALLED[*]}"
