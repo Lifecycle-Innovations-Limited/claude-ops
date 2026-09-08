@@ -141,6 +141,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.10.8] - 2026-09-08
+
+### Changed
+Begrens de Stop-hook ops-post-session-cleanup met timeout 5. Van de veertien hooks die de plugin registreert was dit de enige die blokkeerde zonder grens, waardoor een hangende cleanup het einde van elke sessie kon ophouden. Gemeten duur 146ms.
+
+
 ## [3.10.7] - 2026-09-06
 
 ### Changed
