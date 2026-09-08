@@ -2830,8 +2830,13 @@ run_health_check() {
   # --- GA4 SA key validity ---
   local ga4_prop; ga4_prop="$(chan_cred "$proj" ga4 property_id)"
   if [ -n "$ga4_prop" ]; then
-    local ga4_tok
-    ga4_tok="$(gcloud auth application-default print-access-token 2>/dev/null || true)"
+    # Probe with the SAME credential the data path uses (ga4_auth_token, which
+    # prefers the project's provisioned SA key). Probing raw ADC here reported
+    # every project unhealthy while GA4 pulls were in fact working — a false
+    # alarm that hid the real per-project failures underneath it.
+    local ga4_tok ga4_sa_ref
+    ga4_sa_ref="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].ga4.sa_key_file_ref // empty' "$PREFS" 2>/dev/null)")"
+    ga4_tok="$(GA4_SERVICE_ACCOUNT_KEY_FILE="$ga4_sa_ref" ga4_auth_token 2>/dev/null || true)"
     if [ -n "$ga4_tok" ]; then
       local ga4_resp
       ga4_resp="$(curl -gsS --max-time 10 -X POST \
@@ -2856,8 +2861,9 @@ run_health_check() {
   # --- GSC site authorization ---
   local gsc_site; gsc_site="$(chan_cred "$proj" gsc site_url)"
   if [ -n "$gsc_site" ]; then
-    local gsc_tok
-    gsc_tok="$(gcloud auth application-default print-access-token 2>/dev/null || true)"
+    local gsc_tok gsc_sa_ref
+    gsc_sa_ref="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].ga4.sa_key_file_ref // empty' "$PREFS" 2>/dev/null)")"
+    gsc_tok="$(GA4_SERVICE_ACCOUNT_KEY_FILE="$gsc_sa_ref" ga4_auth_token 2>/dev/null || true)"
     if [ -n "$gsc_tok" ]; then
       local gsc_resp
       gsc_resp="$(curl -gsS --max-time 10 \

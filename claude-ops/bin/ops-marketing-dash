@@ -136,7 +136,14 @@ fi
 # channels.marketing.ga4.sa_json; export it so ga4_auth_token (ga4-data-api.sh)
 # picks it up. Expand a leading ~ to $HOME.
 if [ -z "${GA4_SERVICE_ACCOUNT_KEY_FILE:-}" ] && [ -f "$PREFS" ]; then
-  _ga4_sa="$(jq -r '.channels.marketing.ga4.sa_json // empty' "$PREFS" 2>/dev/null)"
+  # Project tier first: marketing.projects.<key>.ga4.sa_key_file_ref is what
+  # ops-marketing-provision actually writes (and what the autopilot reads).
+  # The owner-level channels.marketing.ga4.sa_json below is the legacy name and
+  # is absent on provisioned installs — reading only that made every GA4 pull
+  # fall through to gcloud ADC, and return null the moment ADC expired.
+  _ga4_sa="$(get_cred 'ga4.sa_key_file_ref' GA4_SERVICE_ACCOUNT_KEY_FILE ga4_sa_key_file 2>/dev/null || true)"
+  [ -z "$_ga4_sa" ] && _ga4_sa="$(jq -r '.channels.marketing.ga4.sa_json // empty' "$PREFS" 2>/dev/null)"
+  _ga4_sa="${_ga4_sa#file:}"
   [ -n "$_ga4_sa" ] && GA4_SERVICE_ACCOUNT_KEY_FILE="${_ga4_sa/#\~/$HOME}"
   export GA4_SERVICE_ACCOUNT_KEY_FILE
 fi
@@ -383,7 +390,10 @@ gather_gsc() {
     return
   fi
 
-  GSC_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+  # ga4_auth_token, not raw ADC: the service-account key is the credential that
+  # is actually provisioned and it now carries webmasters.readonly. ADC remains
+  # the last-resort fallback inside that helper.
+  GSC_TOKEN=$(ga4_auth_token 2>/dev/null || echo "")
   if [ -z "$GSC_TOKEN" ]; then
     echo "null"
     return
