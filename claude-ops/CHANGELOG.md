@@ -1,5 +1,35 @@
 ## Unreleased
 
+- fix(fires): `/ops:fires` reported Sentry as unavailable on every run. The
+  `allowed-tools` frontmatter named `mcp__sentry__*`, but the plugin registers
+  the tools as `mcp__plugin_sentry_sentry__*`, so the tool never existed under
+  the name the skill asked for and the skill dutifully said "unavailable".
+  Sentry is now pre-gathered via `bin/ops-sentry` (REST), the same way infra, CI
+  and external health already are, so it no longer depends on the model
+  remembering to call a tool. The tool names are corrected in `ops-fires`,
+  `ops-triage`, `ops-orchestrate`, `build-fix` and `deploy-fix` for the paths
+  that still use MCP (stack traces, Seer). A non-null `error` from the probe now
+  reads as a gap in coverage, never as "production is clean". The script never
+  exits non-zero and never prints anything but valid JSON — the skill inlines
+  its output, and one stray error line would corrupt the prompt. It also honours
+  the org's region host: Sentry is region-sharded and the wrong region returns
+  an empty list rather than an error.
+
+  Found the hard way: a fires run showed 22 CI failures (19 of them stale cache,
+  already green) and zero Sentry issues, while `ServiceUnavailableException` on
+  Bedrock `Converse` with `reached max retries: 0` had been affecting 4 users
+  for thirteen hours. The only fire with real user impact was the one missing
+  from the board.
+
+- fix(projects): `ops-projects` rendered `None` for any field whose JSON value
+  was an explicit `null`. `.get(key, default)` returns the `null`, not the
+  default; now `or`.
+
+- fix(daemon): leave a deliberate daemon wrapper in the plugin data dir alone
+  instead of rewriting the plist back to `$PLUGIN_ROOT`. The data-dir plist
+  guard wrote the wrapper path straight back, and each write booted the daemon
+  out before it finished its first monitor pass.
+
 - fix(hooks): UserPromptSubmit inbox autosync no longer interpolates `$INPUT`.
   Grok treats `$VAR` in a hook command as a required env var and skips the
   hook when it is unset. The script already reads the event JSON from stdin.
