@@ -310,8 +310,29 @@ cmd_ensure_current() {
   if [[ "$plist_script" == "$current_script" ]]; then
     exit 0
   fi
+  # A wrapper living in the plugin DATA dir is a deliberate local override, not
+  # stale drift. It resolves the newest plugin version itself at every start, so
+  # rewriting the plist back to $PLUGIN_ROOT gains nothing — and costs a restart
+  # loop: the data-dir plist guard watches this file and writes the wrapper path
+  # straight back, each write booting the daemon out before it finishes its first
+  # monitor pass. Leave an intentional wrapper alone.
+  if [[ -n "$plist_script" ]] && _is_data_dir_wrapper "$plist_script"; then
+    log "plist points at data-dir wrapper ($plist_script) — leaving it in place"
+    exit 0
+  fi
   log "plist points at stale version ($plist_script); upgrading to $PLUGIN_ROOT"
   cmd_upgrade
+}
+
+# True when PATH is an executable ops daemon wrapper inside the plugin data dir.
+# Both conditions matter: the prefix proves it is ours, and the exec bit proves
+# it can actually run — a stale path under the data dir must still be repaired.
+_is_data_dir_wrapper() {
+  local candidate="$1"
+  local data_root="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+  [[ "$candidate" == "$data_root"/* ]] || return 1
+  [[ -x "$candidate" ]] || return 1
+  return 0
 }
 
 cmd_uninstall() {
