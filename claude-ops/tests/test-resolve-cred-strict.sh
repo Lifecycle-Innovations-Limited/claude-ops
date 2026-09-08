@@ -116,6 +116,43 @@ fi
 
 export PATH="$_orig_path"
 
+# ── Case 8: file: ref strips the prefix ──────────────────────────────────────
+# Regression: resolve_cred had no file:* case, so a ga4.sa_key_file_ref of
+# "file:/path/key.json" resolved to that literal string. The prefix survived
+# into GA4_SERVICE_ACCOUNT_KEY_FILE, [ -f "$f" ] was false, the SA mint was
+# skipped, and every GA4/GSC caller fell through to gcloud ADC — reading as
+# "no data" the moment ADC expired.
+val=""; rc=0
+val="$(_strict "file:/tmp/some-key.json" 2>/dev/null)" || rc=$?
+if [ "$rc" = "0" ] && [ "$val" = "/tmp/some-key.json" ]; then
+  ok "file: ref → rc=0, prefix stripped"
+else
+  err "file: ref → rc=0, prefix stripped" 0 "$rc" "$val"
+fi
+
+# ── Case 9: file: ref expands a leading ~ ────────────────────────────────────
+val=""; rc=0
+val="$(_strict "file:~/k.json" 2>/dev/null)" || rc=$?
+if [ "$rc" = "0" ] && [ "$val" = "$HOME/k.json" ]; then
+  ok "file: ref → leading ~ expanded"
+else
+  err "file: ref → leading ~ expanded" 0 "$rc" "$val"
+fi
+
+# ── Case 10: the minted SA scope must cover Search Console ───────────────────
+# GSC callers share ga4_auth_token's token. analytics.readonly alone yields
+# HTTP 403 insufficient scopes on every GSC request.
+_api_lib="$(cd "$(dirname "$0")/.." && pwd)/scripts/lib/ga4-data-api.sh"
+unset _GA4_DATA_API_LOADED
+# shellcheck disable=SC1090
+. "$_api_lib"
+case "${GA4_SA_SCOPES:-}" in
+  *analytics.readonly*webmasters.readonly*|*webmasters.readonly*analytics.readonly*)
+    ok "GA4_SA_SCOPES covers analytics + webmasters" ;;
+  *)
+    err "GA4_SA_SCOPES covers analytics + webmasters" "both scopes" "${GA4_SA_SCOPES:-<unset>}" ;;
+esac
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]

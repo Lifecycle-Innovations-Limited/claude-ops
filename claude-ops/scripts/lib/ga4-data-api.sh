@@ -14,6 +14,18 @@
 [ -n "${_GA4_DATA_API_LOADED:-}" ] && return 0
 _GA4_DATA_API_LOADED=1
 
+# Scopes minted onto the service-account JWT.
+#
+# webmasters.readonly is NOT optional padding: callers share this one token
+# between the GA4 Data API and the Search Console API (see the GSC paths in
+# ops-marketing-dash and ops-marketing-autopilot). A token minted with only
+# analytics.readonly authenticates fine and then fails every GSC call with
+# HTTP 403 "Request had insufficient authentication scopes" — which the
+# callers degrade to a null envelope, so SEO data silently reads as absent
+# rather than broken. Requesting an unGRANTED scope is harmless; omitting a
+# needed one is not.
+GA4_SA_SCOPES="${GA4_SA_SCOPES:-https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/webmasters.readonly}"
+
 # ga4_auth_token [sa_key_file]
 # Resolution order:
 #   1) explicit arg
@@ -30,8 +42,8 @@ ga4_auth_token() {
     now=$(date +%s)
     exp=$((now + 3600))
     header=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
-    payload=$(printf '{"iss":"%s","scope":"https://www.googleapis.com/auth/analytics.readonly","aud":"https://oauth2.googleapis.com/token","exp":%d,"iat":%d}' \
-      "$(jq -r '.client_email' "$sa_key_file")" "$exp" "$now" \
+    payload=$(printf '{"iss":"%s","scope":"%s","aud":"https://oauth2.googleapis.com/token","exp":%d,"iat":%d}' \
+      "$(jq -r '.client_email' "$sa_key_file")" "$GA4_SA_SCOPES" "$exp" "$now" \
       | base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
     sig=$(printf '%s.%s' "$header" "$payload" \
       | openssl dgst -sha256 -sign <(jq -r '.private_key' "$sa_key_file") 2>/dev/null \
