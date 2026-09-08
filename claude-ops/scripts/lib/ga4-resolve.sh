@@ -36,6 +36,14 @@ resolve_cred() {
       local var="${ref#env:}"
       printf '%s' "${!var:-}"
       ;;
+    file:*)
+      # file:/abs/path — a path-valued ref, used by ga4.sa_key_file_ref. Without
+      # this case the "file:" prefix survived into GA4_SERVICE_ACCOUNT_KEY_FILE,
+      # so the key file never existed, every SA mint was skipped, and callers
+      # fell through to gcloud ADC. Expand a leading ~ as well.
+      local _p="${ref#file:}"
+      printf '%s' "${_p/#\~/$HOME}"
+      ;;
     doppler:*)
       local path="${ref#doppler:}"
       local proj="${path%%/*}"
