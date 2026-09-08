@@ -18,8 +18,8 @@ allowed-tools:
   - WebFetch
   - WebSearch
   - LSP
-  - mcp__sentry__search_issues
-  - mcp__sentry__get_issue_details
+  - mcp__plugin_sentry_sentry__search_issues
+  - mcp__plugin_sentry_sentry__get_sentry_resource
   - mcp__linear__list_issues
   - mcp__linear__update_issue
   - mcp__linear__get_issue
