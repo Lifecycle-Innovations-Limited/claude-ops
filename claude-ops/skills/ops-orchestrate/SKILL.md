@@ -27,7 +27,7 @@ allowed-tools:
   - CronCreate
   - CronList
   - LSP
-  - mcp__sentry__search_issues
+  - mcp__plugin_sentry_sentry__search_issues
   - mcp__linear__list_issues
   - mcp__linear__update_issue
   - mcp__linear__create_issue
@@ -178,7 +178,7 @@ gh run list --repo <repo> --workflow "<workflow>" --limit 5 --json conclusion,he
 
 Run these in parallel with the audit agents:
 
-- **Sentry**: `mcp__sentry__search_issues` or `sentry-cli issues list` — P0/P1 unresolved errors
+- **Sentry**: `mcp__plugin_sentry_sentry__search_issues` or `sentry-cli issues list` — P0/P1 unresolved errors
 - **Linear**: `mcp__linear__list_issues` for current sprint — in-progress and unstarted
 - **GitHub Issues**: `gh issue list --state open` per repo
 - **Conversation context**: Scan current conversation for todos, requests, and incomplete work the user mentioned
