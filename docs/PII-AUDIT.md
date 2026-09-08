@@ -37,7 +37,7 @@ Raw grep counts (many are already example placeholders like `a[at]x[.]com`,
 
 | Category | Raw hits | Real (est.) | Notes |
 |---|---|---|---|
-| `Healify` company name | 149 | ~load-bearing | Integration target across Slack scoping, dashboards, skills. Genericizing to a config-driven company key is a real refactor — do not blind-scrub. |
+| The operator's primary company name | 149 | ~load-bearing | Integration target across Slack scoping, dashboards, skills. Genericizing to a config-driven company key is a real refactor — do not blind-scrub. |
 | Emails | 155 | ~4 real | The public maintainer contact ×5, a product support alias ×3, one vendor contact ×1; rest are examples. |
 | WhatsApp JIDs | 79 | ~0 real left | Overwhelmingly format examples. |
 | Issue keys | 15 | ~11 | Internal tracker keys in traceability comments in credit-rotation code + CHANGELOG. Low-harm, numerous. |
@@ -93,3 +93,48 @@ committed earlier remain readable in this repo's public git history, and the
 maintainer identity is present in the author/committer trailers of most commits.
 Neither is addressed by editing files. Treat any address or hostname that ever
 appeared here as public.
+
+## Round 4 (2026-09-08) — the gates were not running
+
+Round 3 said the identity denylist "must be configured per machine ... or it
+verifies nothing". That was true and it stayed unconfigured everywhere it
+mattered. Three findings, each verified by running the thing rather than reading
+it:
+
+1. **`pii-gate` in CI passed while checking zero identity terms.** The job runs
+   `tests/test-no-secrets.sh` on every PR, but no denylist exists on a CI runner,
+   so `identity_denylist_check` took its "none configured" branch and counted it
+   as PASS. Proven locally by running the suite with the denylist hidden: the
+   summary read `27 passed, 0 failed`, identical to a run that really did check
+   25 terms. Fixed: that branch now reports SKIP, the summary names the skip
+   count, and `OPS_PII_DENYLIST_REQUIRED=1` turns it into a failure.
+2. **`.githooks/pre-commit` was dead code.** Present and executable, but git only
+   runs hooks from `core.hooksPath` or `.git/hooks`, and nothing set either — in
+   the primary checkout or in any worktree. Every commit for the life of this repo
+   bypassed it. Fixed: `bin/ops-install-git-hooks` wires it and warns when no
+   denylist is configured. Verified by staging a line containing a real denylist
+   term: the commit was refused and no commit object was created.
+3. **`main` has no branch protection at all**, so `pii-gate` was advisory even
+   when it did run. Not fixed here — that is a repository-settings change for the
+   owner, not a code change.
+
+**This document was still leaking.** Round 3 removed the quoted literals but left
+the operator's primary company name in the follow-up table, in the row explaining
+that it is load-bearing. It is now described by class, like every other entry.
+
+**Working-tree state at this round:** 3 denylist matches across 930 tracked files.
+One is a detector pattern inside a test (legitimate — the test must name what it
+searches for). One was this document. One is a private hostname in a test comment.
+Zero real secrets: every `sk_live_`/`ghp_`/`AKIA`/`xox*` hit is a detector pattern
+or documentation, none with a credential-shaped tail. No tracked prefs-shaped
+files. One hardcoded `/Users/<name>` path, and it is the literal word `username`
+in a Rule 0 example. All phone numbers are reserved-range placeholders.
+
+**History, stated plainly again.** 14 of 25 denylist terms appear somewhere in the
+173-commit history, across 34 distinct paths. Round 3's conclusion stands and is
+now stronger: this repo is public, has 21 forks and 187 stars, and forks were
+created both before and after every scrub. A history rewrite would not reach the
+forks, would break every open PR and clone, and cannot un-publish what was already
+served. Treat every value that ever appeared here as public. Rotate anything
+sensitive instead of rewriting; rewriting is theatre once a fork exists.
+

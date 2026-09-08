@@ -5,10 +5,14 @@ set -euo pipefail
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 pass=0
+skipped=0
 fail=0
 
 ok()   { echo "  PASS: $1"; pass=$((pass+1)); }
 err()  { echo "  FAIL: $1 — $2"; fail=$((fail+1)); }
+# A check that could not run is neither PASS nor FAIL. Counting it as PASS is how
+# a gate silently stops gating; SKIP keeps the summary honest.
+skip() { echo "  SKIP: $1"; skipped=$((skipped+1)); }
 
 echo "Scanning for secrets and personal data in: $PLUGIN_ROOT"
 echo ""
@@ -257,7 +261,16 @@ identity_denylist_check() {
   fi
   terms=$(echo "$terms" | grep -vE '^\s*$' | sort -u || true)
   if [[ -z "$terms" ]]; then
-    ok "operator identity denylist (none configured — set \$OPS_PII_DENYLIST or .pii-denylist to enable)"
+    # A check that verifies nothing must not report PASS. In CI there is no
+    # operator denylist to load, so this branch is the normal CI path: report it
+    # as SKIP so nobody reads "27 passed" as "identity was checked". Set
+    # OPS_PII_DENYLIST_REQUIRED=1 (or run with a denylist) to make it a failure.
+    if [[ "${OPS_PII_DENYLIST_REQUIRED:-0}" == "1" ]]; then
+      err "operator identity denylist not configured" \
+        "OPS_PII_DENYLIST_REQUIRED=1 but no denylist found"
+      return
+    fi
+    skip "operator identity denylist NOT CHECKED (no denylist configured — set \$OPS_PII_DENYLIST or .pii-denylist)"
     return
   fi
   local alt
@@ -281,7 +294,11 @@ identity_denylist_check
 
 echo ""
 echo "---"
-echo "Results: $pass passed, $fail failed"
+if [[ "${skipped:-0}" -gt 0 ]]; then
+  echo "Results: $pass passed, $fail failed, $skipped skipped (a SKIP verified nothing)"
+else
+  echo "Results: $pass passed, $fail failed"
+fi
 echo ""
 
 if (( fail > 0 )); then
