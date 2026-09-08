@@ -40,6 +40,51 @@ build_exclude_args() {
 
 EXCLUDE_ARGS=$(build_exclude_args)
 
+# The list of tracked files to sweep, one path per line in a temp file.
+#
+# Why this exists: the sweeps below used `grep -r --include=*.ext`, which silently
+# skipped every tracked file whose extension was not on the list — 320 of 1044
+# files (30%), including all 122 extensionless `bin/*` executables, all 88 `.py`,
+# and every .tsx/.service/.timer/.plist. Proved by injecting a home path into
+# `bin/ops-doctor`: the suite reported 27 passed. The same string in a .md failed
+# immediately. Driving the sweep from `git ls-files` means a new file type is
+# covered the day it is added, with no list to maintain.
+#
+# The list lives in a FILE, not a variable: bash discards NUL bytes inside
+# command substitution (with only a warning), so a NUL-separated list collapses
+# into one concatenated path and grep silently matches nothing — a fix that looks
+# like it works and gates nothing. Paths here contain no newlines, so line-based
+# is safe and verifiable.
+TRACKED_FILE="$(mktemp -t ops-no-secrets-tracked.XXXXXX)"
+trap 'rm -f "$TRACKED_FILE"' EXIT
+USE_TRACKED=0
+build_tracked_list() {
+  local root_git filter rel
+  root_git="$(git -C "$PLUGIN_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -z "$root_git" ]] && return 1
+  filter="$(printf '%s\n' "${EXCLUDE_DIRS[@]}" | paste -sd '|' -)"
+  (cd "$root_git" && git ls-files) \
+    | grep -vE "(^|/)($filter)/" \
+    | while IFS= read -r rel; do
+        case "$root_git/$rel" in
+          "$PLUGIN_ROOT"/*) printf '%s\n' "$root_git/$rel" ;;
+        esac
+      done > "$TRACKED_FILE"
+  [[ -s "$TRACKED_FILE" ]]
+}
+if build_tracked_list; then
+  USE_TRACKED=1
+else
+  skip "tracked-file sweep unavailable (not a git checkout)"
+fi
+
+# grep over every tracked file, regardless of extension.
+grep_tracked() {
+  [[ "$USE_TRACKED" == "1" ]] || return 0
+  # xargs -a keeps the file list out of the argv of this shell.
+  tr '\n' '\0' < "$TRACKED_FILE" | xargs -0 grep -IE "$@" 2>/dev/null || true
+}
+
 # Helper: scan for a pattern, return matches (excluding placeholder/example patterns)
 scan_pattern() {
   local label="$1"
@@ -48,12 +93,7 @@ scan_pattern() {
 
   local results
   # shellcheck disable=SC2086
-  results=$(grep -rE "$pattern" $EXCLUDE_ARGS \
-    --include="*.sh" --include="*.md" --include="*.json" \
-    --include="*.toml" --include="*.ts" --include="*.js" \
-    --include="*.mjs" --include="*.yaml" --include="*.yml" \
-    --include="*.env" --include="*.txt" \
-    "$PLUGIN_ROOT" 2>/dev/null || true)
+  results=$(grep_tracked "$pattern")
 
   # Filter out example/placeholder lines
   results=$(echo "$results" | grep -vE "(example|placeholder|your[-_]|<[A-Z_]+>|\[YOUR_|TODO|REPLACE|fake|dummy|test-token|sk_test_EXAMPLE)" || true)
@@ -291,6 +331,46 @@ identity_denylist_check() {
   fi
 }
 identity_denylist_check
+
+# --- Operator identity in tracked FILENAMES ---
+# A content grep can never see this: a brand or personal name in a path leaks the
+# same fact as one in a line. Found in the wild — a tracked asset filename carried
+# the operator's company name while every content check reported PASS.
+identity_filename_check() {
+  local file="" terms=""
+  for cand in "${OPS_PII_DENYLIST_FILE:-}" "$PLUGIN_ROOT/.pii-denylist" \
+              "$PLUGIN_ROOT/../.pii-denylist" "$HOME/.config/claude-ops/pii-denylist.txt"; do
+    [[ -n "$cand" && -f "$cand" ]] && { file="$cand"; break; }
+  done
+  [[ -n "$file" ]] && terms="$(grep -vE '^[[:space:]]*(#|$)' "$file" 2>/dev/null || true)"
+  if [[ -n "${OPS_PII_DENYLIST:-}" ]]; then
+    terms+=$'\n'"$(echo "$OPS_PII_DENYLIST" | tr ',[:space:]' '\n\n')"
+  fi
+  terms=$(echo "$terms" | grep -vE '^[[:space:]]*$' | sort -u || true)
+  if [[ -z "$terms" ]]; then
+    skip "operator identity in filenames NOT CHECKED (no denylist configured)"
+    return
+  fi
+  if [[ "$USE_TRACKED" != "1" ]]; then
+    skip "operator identity in filenames NOT CHECKED (no tracked-file list)"
+    return
+  fi
+  # Match REPO-RELATIVE paths only. The absolute path contains the checkout
+  # location — which on a developer machine includes their own username, a live
+  # denylist term — so scanning absolute paths flags every file in the repo.
+  # That is a property of where the clone sits, not of what is committed.
+  local hits
+  hits=$(sed "s|^$PLUGIN_ROOT/||" "$TRACKED_FILE" \
+    | grep -iF -f <(echo "$terms") 2>/dev/null || true)
+  if [[ -n "$hits" ]]; then
+    local count; count=$(echo "$hits" | wc -l | tr -d ' ')
+    err "operator identity term(s) in tracked filename(s)" "$count path(s)"
+    echo "$hits" | head -5 | sed 's/^/    /'
+  else
+    ok "no operator identity terms in tracked filenames"
+  fi
+}
+identity_filename_check
 
 echo ""
 echo "---"

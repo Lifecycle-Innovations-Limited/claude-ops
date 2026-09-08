@@ -17,6 +17,24 @@ email addresses, chat IDs / JIDs, Slack channel IDs, or personal issue keys.
 - **`${CLAUDE_PLUGIN_DATA_DIR}/contact-registry.json`** — resolved contact identities.
 - **`~/.mcp-secrets.env` / Doppler** — secrets. Never in the repo.
 
+## Third-party identifiers (stricter than owner data)
+
+An id belonging to another organisation — a client's Linear team key, workspace or
+company UUID, issue ids, an account number — is not the owner's to publish. Those
+are read from the environment and have no committed default:
+
+| Variable | Holds |
+|---|---|
+| `LINEAR_TEAM_MAP_JSON` | `{"KEY": {"company": "<uuid>", "team": "<uuid>"}}` for every client team |
+| `LINEAR_CLIENT_TEAM_KEY` | the client's Linear team key (defaults to `TEAM`) |
+| `LINEAR_CLIENT_TEAM_ID`, `PAPERCLIP_CLIENT_COMPANY_ID` | the primary client's ids |
+| `OPS_TZ` | the operator's timezone; unset means the host's own zone |
+
+Client-specific issue-id tables (`FORCE_UNLINK`, `MULTI_CANON`,
+`STANDING_OWN_LINEAR`) load from an out-of-repo `hea_thrash_canons` module. The
+in-repo fallbacks are empty on purpose — empty means "no overrides", which is
+correct for anyone who is not that client.
+
 ## Rules for repo content
 
 - Use generic placeholders in skills/docs/examples: `<owner>`, `<company>`, `<contact>`,

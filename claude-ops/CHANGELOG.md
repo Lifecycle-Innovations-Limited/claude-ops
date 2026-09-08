@@ -1687,7 +1687,7 @@ $ OPS_PRINT_URLS=1 bin/ops-voice phone "+1234567890"
 
 - **Multi-brand competitor intel** (#285) — competitor probe sources `scripts/lib/competitor/context.sh` and iterates `.brands[]`. One line per brand with 7d high-alert count, last-run date, top alert snippet (truncated 140 chars).
 - **All-project marketing dashboard** (#284) — renders one row per configured project (9 projects), sorted worst-health-first. Each row: project, health score, blended ROAS, top channel. Mobile collapses to single summary line.
-- **Linear multi-workspace + all-teams scan** (#287) — iterates `LINEAR_API_KEY`, `MY-PROJECT_LINEAR_API_KEY`, `EXAMPLE-PROJECT_LINEAR_API_KEY`. Enumerates all teams per workspace, de-dupes across keys, prefixes urgent rows with team key (`[HEA] HEA-4246`).
+- **Linear multi-workspace + all-teams scan** (#287) — iterates `LINEAR_API_KEY`, `MY-PROJECT_LINEAR_API_KEY`, `EXAMPLE-PROJECT_LINEAR_API_KEY`. Enumerates all teams per workspace, de-dupes across keys, prefixes urgent rows with team key (`[TEAM] TEAM-4246`).
 - **Calendar all-calendar aggregation** (#286, #290) — `gog calendar events --all --today --sort start -j` surfaces events across every calendar. New `render_section_calendar` always renders — events list, "0 events today", or "not configured" + hint.
 - **Standalone FinOps block** (#290) — split from Revenue & Costs into its own `🔥 FINOPS` section: burn 7d / burn 30d / runway / services tracked / top 3 anomalies. Pulls `/api/ops/anomalies`.
 - **Portfolio includes Shopify-only projects** (#288) — extracts `.ecom.projects` from preferences, renders `── shopify ──` subsection. Each row: project, kind, masked store URL, status (🟢/🟡/⚪). Header: `41 projects total — 38 git + 3 shopify, 14 GSD active`.

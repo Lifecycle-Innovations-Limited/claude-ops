@@ -69,6 +69,19 @@ build when a prefs-shaped file is tracked in the git index (`.gitignore` does no
 help once a file is already tracked, and `git add -f` bypasses it), and when a
 write target resolves into the repo tree. Run it before every commit.
 
+**Someone else's identifier is stricter than your own.** Everything above is the
+operator's data, and an operator may choose to publish his own name. He cannot
+make that choice for a client. A third party's organisation UUID, workspace or
+team key, issue ids, account number, or internal project name must never be
+committed, not even as a "harmless" default or a fallback constant — and no
+denylist will catch them, because a denylist holds *your* terms, not theirs.
+
+Read them from the environment with no committed default, and let absent mean
+empty rather than mean a real value. Watch for the half-finished shape in
+particular: one identifier read from `os.environ` sitting three lines above five
+siblings that are hardcoded is not a special case, it is an unfinished migration.
+That exact pattern shipped ten client UUIDs to this public repo.
+
 **Enable the operator identity denylist.** The scanner cannot hardcode your own
 names, brands, or hostnames — that list would itself be the leak. Put one term
 per line in `$HOME/.config/claude-ops/pii-denylist.txt` (or `.pii-denylist`,

@@ -138,3 +138,64 @@ forks, would break every open PR and clone, and cannot un-publish what was alrea
 served. Treat every value that ever appeared here as public. Rotate anything
 sensitive instead of rewriting; rewriting is theatre once a fork exists.
 
+
+## Round 5 (2026-09-09) — third-party identifiers, and what the agent got wrong
+
+Round 4 closed the gates. This round used them, and the first thing they found was
+not the operator's own data but **other organisations' identifiers**, which is the
+worse category: the operator can decide to publish his own name, and cannot decide
+that for a client.
+
+**Fixed.**
+
+1. **Client organisation UUIDs in a Linear bridge.** `TEAM_TO_COMPANY` and
+   `COMPANY_TO_TEAM` in `scripts/hermes-linear/linear_paperclip_delegate_bridge.py`
+   held ten UUIDs belonging to six client organisations. One of the six was already
+   read from the environment three lines above the hardcoded five, so the pattern
+   existed and had simply not been finished. All six now come from
+   `LINEAR_TEAM_MAP_JSON`; an absent map is valid and yields an empty mapping.
+2. **A client's Linear team key**, hardcoded 43 times across six files including a
+   filename. It is now `CLIENT_TEAM_KEY` from `LINEAR_CLIENT_TEAM_KEY`, defaulting
+   to the neutral `TEAM`. `hea_linear_fix_all.py` is renamed `linear_fix_all.py`
+   and its `HEA_LINEAR_FIX_ALL_*` environment variables to `LINEAR_FIX_ALL_*`.
+3. **A client's real Linear issue ids** as fallback "thrash canon" dictionaries in
+   two files. The canons already loaded from an out-of-repo `hea_thrash_canons`
+   module; the fallbacks are now empty, which is the correct meaning for anyone who
+   does not have that module.
+4. **The operator's timezone**, hardcoded in ten places. The two functional sites
+   read `OPS_TZ` and fall back to the host zone; the rest are documentation and now
+   describe the host zone rather than one city.
+5. **A brand name in a tracked filename** — an unreferenced logo under
+   `assets/`, renamed to `ops-pixel-logo.svg`. Its contents were clean. The
+   old name is not repeated here: the denylist would flag this document too,
+   and correctly so.
+
+**Two agent findings that were false, and the checks that falsified them.**
+
+- *"Private MCP hostnames in `ops-mcp-reauth.py`, `ops-mcp-watchdog.py`,
+  `ops-cron-pocket-watcher.py`."* No such hostname is in the tree. The only
+  `.ts.net` string anywhere is `example.ts.net`, in two test files.
+- *"A tailnet CGNAT IP in `local-failover/config.example.json`."* The value is
+  `100.64.0.10` — the first host of the CGNAT block, the conventional example
+  address, and the same value the sanitizer's own tests use as a placeholder.
+
+Both were reported against **history**, where the terms do appear, and read as
+working-tree findings. All 25 configured denylist terms now return zero hits in the
+tree, which is why the agent's own numbers (49 hits, 228 hits) could not be
+reproduced against it.
+
+**Deliberately not changed: `paperclip`.** The deprecated task system's name appears
+272 times, and `docs/public-template-contract.md` says to replace it with
+`legacy task system`. It stays, because 45 of those occurrences are **wire format**
+— `[Paperclip <id>]` title prefixes and `paperclip-export:` / `paperclip-comment:`
+comment footers that this code writes into Linear and later parses back out. Renaming
+the string in the reader without rewriting every marker already sitting in a live
+Linear workspace would make the bridge silently stop recognising its own pairs, and
+"silently stops pairing" is the exact failure these files carry the most defensive
+code against. The name is a product name, not personal data, and no
+`PAPERCLIP_*` variable is set in any environment file on this machine. Renaming it
+is a protocol migration, and it needs its own change with a compatibility window
+that reads both spellings — not a search-and-replace in a PII pass.
+
+**Unchanged from Round 4:** history is not rewritten, and `main` still has no branch
+protection. Both remain owner decisions.

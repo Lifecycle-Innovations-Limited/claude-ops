@@ -22,6 +22,7 @@ from typing import Any, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from alignment_lib import (  # noqa: E402
     CLIENT_COMPANY_ID,
+    CLIENT_TEAM_KEY,
     PC_TO_LINEAR_STATE,
     add_comment,
     canonical_paperclip_title,
@@ -164,7 +165,7 @@ def comment_linear(issue_id: str, body: str) -> dict:
 def outbound_candidates_sql(limit: int = 40) -> list[dict]:
     """Only explicit linear: / mirror:linear markers.
 
-    Never match bare Paperclip parent titles like ``[HEA-1136] child work`` —
+    Never match bare Paperclip parent titles like ``[TEAM-1136] child work`` —
     Paperclip and Linear share team prefixes but are different ID spaces.
     Also include issues whose comments carry ``linear:`` (microcompany pattern).
     """
@@ -249,7 +250,7 @@ def run_outbound(state: dict, dry_run: bool, limit: int) -> list[str]:
     # Cache Linear team workflow states per team key (HEA vs MES vs DUTCH …)
     states_by_team: dict[str, list[dict]] = {}
     # Always warm HEA as default
-    states_by_team["HEA"] = team_states(CLIENT_TEAM_ID)
+    states_by_team[CLIENT_TEAM_KEY] = team_states(CLIENT_TEAM_ID)
     for row in rows:
         ident = row.get("identifier")
         code, issue = get_issue(ident)
@@ -257,11 +258,11 @@ def run_outbound(state: dict, dry_run: bool, limit: int) -> list[str]:
             continue
         comments = get_comments(ident)
         # Do NOT use collect_issue_meta for linear: — it harvests mirrored
-        # Linear comments (``linear:HEA-4949`` footers on standing HEA-62) and
+        # Linear comments (``linear:TEAM-4949`` footers on standing TEAM-62) and
         # falsely pairs the routine's in_progress status onto product issues.
         meta: dict = {}
         # Description/title first — comment ``linear:`` on mirrored Linear
-        # comments (standing sweep HEA-62 ↔ product HEA-4949) is NOT a pair.
+        # comments (standing sweep TEAM-62 ↔ product TEAM-4949) is NOT a pair.
         desc_blob = "\n".join([issue.get("description") or "", issue.get("title") or ""])
         auth_comment_bodies = []
         for c in comments:
@@ -310,7 +311,7 @@ def run_outbound(state: dict, dry_run: bool, limit: int) -> list[str]:
         if not lin:
             events.append(f"outbound {ident}: Linear {lin_id} not found")
             continue
-        team_key = (lin_id.split("-")[0] or "HEA").upper()
+        team_key = (lin_id.split("-")[0] or CLIENT_TEAM_KEY).upper()
         if team_key not in states_by_team:
             # Resolve team id via the Linear issue payload when possible
             team_id = None
@@ -324,8 +325,8 @@ def run_outbound(state: dict, dry_run: bool, limit: int) -> list[str]:
             team_obj = (((td.get("data") or {}).get("issue") or {}).get("team")) or {}
             team_id = team_obj.get("id")
             team_key = (team_obj.get("key") or team_key).upper()
-            states_by_team[team_key] = team_states(team_id) if team_id else states_by_team.get("HEA", [])
-        states = states_by_team.get(team_key) or states_by_team.get("HEA") or []
+            states_by_team[team_key] = team_states(team_id) if team_id else states_by_team.get(CLIENT_TEAM_KEY, [])
+        states = states_by_team.get(team_key) or states_by_team.get(CLIENT_TEAM_KEY) or []
         state_id = pick_state_id(states, pc_status)
         cur_state = ((lin.get("state") or {}).get("name") or "")
         cur_type = ((lin.get("state") or {}).get("type") or "").lower()
