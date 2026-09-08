@@ -116,14 +116,14 @@ for p in projects:
         idle.append(p)
 
 def fmt_proj(p, indent="  "):
-    name = p.get("name","?")
-    phase = p.get("phase","—")
-    status = p.get("status","—")
-    branch = p.get("branch","—")
-    dirty = p.get("uncommitted",0)
+    name = p.get("name") or "?"
+    phase = p.get("phase") or "—"
+    status = p.get("status") or "—"
+    branch = p.get("branch") or "—"
+    dirty = p.get("uncommitted") or 0
     source = p.get("source","")
-    blockers = p.get("blockers","0")
-    next_action = p.get("next_action","")[:40] or "—"
+    blockers = p.get("blockers") or "0"
+    next_action = (p.get("next_action") or "")[:40] or "—"
     short_status = status[:30] if status else "—"
     return f"{indent}{name:<22} {phase:<8} {short_status:<32} {branch:<12} {dirty} dirty  {next_action}"
 

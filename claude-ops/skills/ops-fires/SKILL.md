@@ -17,8 +17,9 @@ allowed-tools:
   - Monitor
   - WebFetch
   - WebSearch
-  - mcp__sentry__search_issues
-  - mcp__sentry__get_issue_details
+  - mcp__plugin_sentry_sentry__search_issues
+  - mcp__plugin_sentry_sentry__get_sentry_resource
+  - mcp__plugin_sentry_sentry__find_organizations
 effort: medium
 maxTurns: 30
 ---
@@ -41,7 +42,8 @@ Before executing, load available context:
    - First: check `$AWS_ACCESS_KEY_ID` / `$AWS_PROFILE` env vars
    - Then: `doppler secrets get AWS_ACCESS_KEY_ID --plain` (if `doppler` configured in prefs)
    - Then: use `password_manager_config.query_cmd` from preferences
-   - Sentry token: `$SENTRY_AUTH_TOKEN` → Doppler `SENTRY_AUTH_TOKEN` → vault
+   - Sentry token: `$SENTRY_AUTH_TOKEN` → `$SENTRY_TOKEN` → Doppler `claude-ops/prd/SENTRY_AUTH_TOKEN`. Resolved by `bin/ops-sentry`; no action needed here.
+   - Sentry org and region: `preferences.json` `.partner_registry.sentry.{org,region_url}`. Sentry is region-sharded — issues are served by the org's own region host (e.g. `https://us.sentry.io`), not `sentry.io`, and querying the wrong region returns an empty list rather than an error. Omit `org` and the script discovers the first org the token can see.
 
 3. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` for `secrets_manager` config to know which vault to query.
 
@@ -67,7 +69,9 @@ Before executing, load available context:
 | Command                                                                                                                          | Usage                             | Output     |
 | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ---------- |
 | `sentry-cli issues list --project <slug> --status unresolved`                                                                    | Unresolved issues                 | Issue list |
-| `curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://sentry.io/api/0/projects/<org>/<proj>/issues/?query=is:unresolved"` | API fallback when MCP unavailable | JSON array |
+| `bin/ops-sentry [org]` | Pre-gather path (already inlined below) | JSON `{org,issues,error}` |
+| `OPS_SENTRY_PERIOD=7d OPS_SENTRY_LIMIT=25 bin/ops-sentry` | Widen the window or cap | JSON |
+| `curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://us.sentry.io/api/0/organizations/<org>/issues/?query=is:unresolved"` | Manual probe (note: region host, org-scoped) | JSON array |
 
 ---
 
@@ -111,6 +115,17 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh anomalies high 2>/dev/null || ech
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-ci 2>/dev/null || echo '[]'
 ```
 
+## Sentry — unresolved issues (last 24h)
+
+Pre-gathered so Sentry is never skipped. Sorted by event frequency. An
+`error` field that is not null means the probe itself failed (missing or
+expired token, unreachable API) — report that as a gap, and do NOT read an
+empty `issues` list as "no errors in production".
+
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-sentry 2>/dev/null || echo '{"org":null,"issues":[],"error":"sentry probe failed"}'
+```
+
 ## External projects health
 
 ```!
@@ -132,7 +147,7 @@ fi
 Analyze the pre-gathered data — including external projects. Then run parallel checks:
 
 1. **ECS health** — parse infra data for unhealthy services, stopped tasks, failed deployments.
-2. **Sentry** — if Sentry MCP is connected, query recent unresolved errors. Otherwise note it's unavailable.
+2. **Sentry** — parse the pre-gathered Sentry data above; it is always present, so never report Sentry as unchecked. Classify by blast radius: an issue affecting many users or growing fast is HIGH, a warning-level issue with a handful of events is LOW. Only reach for `mcp__plugin_sentry_sentry__get_sentry_resource` (stack trace, breadcrumbs) or `analyze_issue_with_seer` when you are about to dispatch a fix agent for that issue. If the probe returned a non-null `error`, say Sentry could not be read and why — an empty list is not proof production is clean.
 3. **CI** — parse CI data for failing pipelines, broken main/dev branches.
 4. **GitHub Actions** — `gh run list --limit 20 --json status,conclusion,name,headBranch,createdAt 2>/dev/null`
 5. **External projects** — parse ops-external data. Flag `auth_expired` as HIGH (credential rotation needed), `unreachable`/`degraded` as MEDIUM, `not_configured` as LOW.
@@ -175,8 +190,9 @@ ECS HEALTH
 CI STATUS
 [repo] [branch] [workflow] [status] [last run]
 
-SENTRY (top errors, 24h)
-[error] [count] [first seen] [project]
+SENTRY (unresolved, 24h — by event count)
+[short_id] [title truncated] [events]ev [users]u [project] [last seen]
+[If the probe returned an error, print that instead of an empty section]
 
 EXTERNAL PROJECTS
 [alias] [source] [status] [details — e.g. auth_expired, unreachable]
