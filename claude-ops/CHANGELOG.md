@@ -141,6 +141,18 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.10.9] - 2026-09-08
+
+### Fixed
+
+- **Background daemon no longer restart-loops.** The health-check hook and the LaunchAgent watchdog were both rewriting the daemon's launchd plist with different paths, boot-cycling the job every ~10 seconds so it never completed a monitor pass — services sat at "scheduled" forever while the health file kept looking fresh. An intentional executable daemon wrapper under the plugin data dir is now respected instead of being overwritten as drift; genuinely stale, non-executable, or dangling paths are still repaired.
+- **GA4 and Search Console data no longer read as "no data".** `file:`-prefixed credential references were never resolved, so the provisioned service-account key was skipped and every call silently fell back to expiring user credentials. The prefix is now handled, and the marketing dashboard reads the per-project key the provisioner actually writes rather than a legacy owner-level field.
+- **Search Console calls no longer fail with a scopes error.** The service-account token is minted with `webmasters.readonly` alongside `analytics.readonly`, since both APIs share it. Previously every SEO figure degraded to an empty result instead of surfacing the 403.
+- **Marketing health checks report the truth.** The `ga4_sa_key` and `gsc_auth` probes now use the same credential as the data path, so they stop flagging every project as broken while pulls are working — a false alarm that masked real per-project failures.
+
+residual-check: none
+
+
 ## [3.10.8] - 2026-09-08
 
 ### Changed
