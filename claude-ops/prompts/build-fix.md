@@ -11,7 +11,7 @@ You are headless inside Claude Code with full claude-ops tooling:
 | Mobile / Expo / RN / iOS Fastlane  | spawn the `Mobile App Specialist` subagent                                  |
 | TypeScript / type errors           | spawn the `typescript-reviewer` subagent                                    |
 | Cross-repo contract breakage       | spawn the `fullstack-mobile-architect` subagent                             |
-| Sentry context for runtime crashes | `mcp__sentry__search_events`                                                |
+| Sentry context for runtime crashes | `mcp__plugin_sentry_sentry__search_events`                                                |
 | Apple Developer / TestFlight state | `python3 scripts/asc-manage-builds.py` (in your mobile repo)                |
 | Doppler secret resolution          | `doppler secrets get <KEY> --project <your-project> --config <env> --plain` |
 | Library version drift              | `npx expo install --check`, `npm ls <pkg>`, Context7 MCP for docs           |

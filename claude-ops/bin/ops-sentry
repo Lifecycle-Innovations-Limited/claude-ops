@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# ops-sentry — Unresolved Sentry issues for the FIRES dashboard → JSON
+#
+# Why this exists: /ops:fires used to declare the Sentry MCP in allowed-tools
+# and hope the model would call it. It never did reliably — the tool name in
+# the frontmatter (mcp__sentry__*) does not match the name the plugin actually
+# registers (mcp__plugin_sentry_sentry__*), so the tool was never available and
+# every run reported Sentry as "unavailable". Pre-gathering it via the REST API
+# puts Sentry on the same footing as infra, CI and external projects: the data
+# is simply in the prompt, with nothing left to remember.
+#
+# Emits {"org":..., "issues":[...], "error":...}. NEVER exits non-zero and
+# never emits anything but valid JSON — the skill inlines this and a bare
+# error string would corrupt the prompt.
+#
+# Token:  env SENTRY_AUTH_TOKEN → env SENTRY_TOKEN → doppler claude-ops/prd
+# Org:    $1 → preferences.json .partner_registry.sentry.org → auto-discover
+# Region: preferences.json .partner_registry.sentry.region_url → us.sentry.io
+#         (Sentry is region-sharded; the org's regionUrl is authoritative and
+#          a wrong region returns an empty list rather than an error.)
+
+set -uo pipefail   # deliberately no -e: a failed probe must degrade, not abort
+
+API_VERSION="0"
+PERIOD="${OPS_SENTRY_PERIOD:-24h}"
+LIMIT="${OPS_SENTRY_LIMIT:-10}"
+CURL_TIMEOUT="${OPS_SENTRY_TIMEOUT:-12}"
+DEFAULT_REGION="https://us.sentry.io"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh" 2>/dev/null || true
+PREFS="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+
+# Bail out with valid JSON and exit 0, always.
+emit_error() {
+  jq -nc --arg e "$1" '{org:null, issues:[], error:$e}'
+  exit 0
+}
+
+command -v jq >/dev/null 2>&1 || { printf '{"org":null,"issues":[],"error":"jq not installed"}\n'; exit 0; }
+command -v curl >/dev/null 2>&1 || emit_error "curl not installed"
+
+pref() {
+  [ -f "$PREFS" ] || return 0
+  jq -r "$1 // empty" "$PREFS" 2>/dev/null || true
+}
+
+# ---- token -----------------------------------------------------------------
+TOKEN="${SENTRY_AUTH_TOKEN:-${SENTRY_TOKEN:-}}"
+if [ -z "$TOKEN" ] && command -v doppler >/dev/null 2>&1; then
+  TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --project claude-ops --config prd --plain 2>/dev/null || true)
+fi
+[ -z "$TOKEN" ] && emit_error "no Sentry token (env SENTRY_AUTH_TOKEN / SENTRY_TOKEN / doppler claude-ops/prd)"
+
+REGION_URL="$(pref '.partner_registry.sentry.region_url')"
+[ -z "$REGION_URL" ] && REGION_URL="$DEFAULT_REGION"
+REGION_URL="${REGION_URL%/}"
+
+api() {
+  curl -sS --max-time "$CURL_TIMEOUT" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H "Accept: application/json" \
+    "$@" 2>/dev/null
+}
+
+# ---- org -------------------------------------------------------------------
+ORG="${1:-}"
+[ -z "$ORG" ] && ORG="$(pref '.partner_registry.sentry.org')"
+if [ -z "$ORG" ]; then
+  # Org listing is not region-sharded; the control silo answers for every org.
+  ORG_RAW=$(api "https://sentry.io/api/${API_VERSION}/organizations/")
+  if printf '%s' "$ORG_RAW" | jq -e 'type=="array"' >/dev/null 2>&1; then
+    ORG=$(printf '%s' "$ORG_RAW" | jq -r '.[0].slug // empty' 2>/dev/null || true)
+  else
+    # An object here means the token was rejected. Say so, rather than blaming
+    # the org — a bad token and a missing org need different fixes.
+    AUTH_DETAIL=$(printf '%s' "$ORG_RAW" | jq -r '.detail // .error // empty' 2>/dev/null || true)
+    [ -n "$AUTH_DETAIL" ] && emit_error "Sentry auth failed: ${AUTH_DETAIL}"
+  fi
+fi
+[ -z "$ORG" ] && emit_error "could not resolve a Sentry org (set .partner_registry.sentry.org in preferences.json)"
+
+# ---- issues ----------------------------------------------------------------
+# statsPeriod bounds the window; query filters to still-open issues.
+RAW=$(api -G "${REGION_URL}/api/${API_VERSION}/organizations/${ORG}/issues/" \
+  --data-urlencode "query=is:unresolved" \
+  --data-urlencode "statsPeriod=${PERIOD}" \
+  --data-urlencode "limit=${LIMIT}" \
+  --data-urlencode "sort=freq")
+
+[ -z "$RAW" ] && emit_error "Sentry API returned no response for org ${ORG} (region ${REGION_URL})"
+
+# An error body is a JSON object; a good body is an array. Distinguish, so an
+# expired token reads as "expired token" and not as "zero issues".
+if ! printf '%s' "$RAW" | jq -e 'type=="array"' >/dev/null 2>&1; then
+  DETAIL=$(printf '%s' "$RAW" | jq -r '.detail // .error // "unrecognised response"' 2>/dev/null || echo "unparseable response")
+  jq -nc --arg o "$ORG" --arg e "Sentry API error: $DETAIL" '{org:$o, issues:[], error:$e}'
+  exit 0
+fi
+
+printf '%s' "$RAW" | jq -c --arg o "$ORG" --arg p "$PERIOD" '{
+  org: $o,
+  period: $p,
+  issues: [ .[] | {
+    short_id:   .shortId,
+    title:      .title,
+    culprit:    .culprit,
+    project:    (.project.slug // null),
+    level:      .level,
+    events:     (.count      // "0"),
+    users:      (.userCount  // 0),
+    first_seen: .firstSeen,
+    last_seen:  .lastSeen,
+    url:        .permalink
+  } ],
+  error: null
+}' 2>/dev/null || emit_error "failed to parse Sentry issue list"

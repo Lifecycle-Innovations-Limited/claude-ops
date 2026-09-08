@@ -10,7 +10,7 @@ You are running headless inside a Claude Code session with full claude-ops tooli
 | -------------------------------------------- | ------------------------------------------------------------ |
 | Fetch failed CI logs                         | `gh run view {{RUN_ID}} --repo {{REPO}} --log-failed`        |
 | Inspect ECS / AWS state                      | `/ops:ops-fires`, `/ops:ops-monitor`, raw `aws` CLI          |
-| Sentry context for related errors            | `/ops:ops-triage` or `mcp__sentry__search_events`            |
+| Sentry context for related errors            | `/ops:ops-triage` or `mcp__plugin_sentry_sentry__search_events`            |
 | Find prior fixes for similar failures        | `gh search prs --repo {{REPO}} 'fix(deploy)' --state merged` |
 | My-Project mobile crashes / iOS build issues | spawn the `Mobile App Specialist` subagent                   |
 | My-Project backend / NestJS issues           | spawn the `Health Data Expert` subagent                      |
