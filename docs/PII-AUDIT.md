@@ -199,3 +199,86 @@ that reads both spellings — not a search-and-replace in a PII pass.
 
 **Unchanged from Round 4:** history is not rewritten, and `main` still has no branch
 protection. Both remain owner decisions.
+
+## Round 6 (2026-09-09) — the gate now fails closed
+
+Round 5 scrubbed a client's identifiers by hand. That fixes one tree, once. This
+round changes what the build refuses, so the same class of leak cannot come back
+quietly.
+
+**The structural gap.** Every identity check here was denylist-driven, and a
+denylist can only ever hold the operator's *own* terms — a hardcoded list of
+anyone else's would itself be the leak. So it structurally cannot hold a client's
+workspace UUIDs, their team key, or their issue ids: nobody can enumerate a third
+party's identifiers in advance. That is why ten client UUIDs, a team key in about
+twenty-five places plus a filename, and a set of real issue ids sat in a public
+repo while the scanner reported PASS. The scanner was not broken. It was
+answering a different question.
+
+**The inversion.** For identifier-shaped literals the default is now refusal.
+Every UUID and every `<KEY>-<number>` in the tree fails unless it appears in
+`tests/known-public-constants.txt` with a stated reason, and an IANA timezone in
+code or config fails outright. Pasting a client identifier now costs a line in a
+reviewable file, argued for in a diff — which is the only kind of protection that
+does not depend on somebody remembering.
+
+Three properties make it hold. The checks need no configuration, so they run on
+the CI path where every denylist check SKIPs. They sweep every tracked file
+*including* `tests/`, which `EXCLUDE_DIRS` drops — the scanner's own directory
+was the one place a client id could sit unseen. And they cannot report SKIP: a
+check that could not run is counted as a failure, because counting it as a pass
+is how a gate silently stops gating.
+
+**The negative control.** `tests/test-pii-gate-fires.sh` plants the exact shapes
+that leaked in a throwaway repo and asserts each gate refuses them, with a
+clean-tree control so a scanner that failed on everything could not pass either.
+A gate nobody has watched fail is not a gate. Its first run proved the point by
+finding four defects in the checks written minutes earlier:
+
+- `grep -o` prints the filename only when given more than one file. With a single
+  tracked file the prefix vanished and every filter anchored on `:` silently
+  stopped filtering — the allowlist admitted nothing and refused nothing.
+- The issue-key regex capped the prefix at six characters, so `<CLIENT>TEAM-<n>`
+  matched nothing at all. The anchoring that was supposed to stop a long key
+  riding in on a short allowlisted one was never reached.
+- Both checks skipped rather than failed when the file list came back empty.
+- `PLUGIN_ROOT` was resolved with `pwd`, but `git rev-parse --show-toplevel`
+  returns a physical path. Under a symlinked checkout the two never matched, the
+  sweep ran over an empty list, and the suite passed.
+
+Every one of those would have read as PASS forever.
+
+**Found by the new checks, missed by the hand scrub:** `Europe/Amsterdam` in two
+daemon cron notes and one script header, now stated in UTC.
+
+**The hook was loud and inert.** Committing the work above tripped three
+`BLOCKED` lines in the pre-commit hook — and the commit landed anyway. The hook
+applied an amnesty to its own failure flag *after* all checks had run: if the
+only email hits were example domains, it reset the flag to 0 and took every
+other failure with it. So a UUID and an issue key were both detected, both
+announced, and both waved through.
+
+That is a worse shape than silence. Output that reads like enforcement is why
+nobody looked. The fix is structural in the same way as the inversion above: the
+example-domain filter now applies inside the email check, at the point of the
+check, and nothing resets the flag afterwards. A late amnesty can only ever be
+broader than the check it was written for.
+
+`tests/test-pre-commit-hook-blocks.sh` closes it for good. Eight cases run a
+real `git commit` against an installed copy of the hook and assert the **exit
+status**, not the output — the exit status being the only part of a hook that
+stops anything. Case 1 is a clean commit, so a hook that refused everything
+cannot pass. Case 5 keeps the amnesty's legitimate purpose (an `@example.com`
+address alone is fine). Case 6 is this regression itself. Cases 7 and 8 pin the
+exemption to four exact paths — the scanner, its allowlist, and the two negative
+controls — rather than to the `tests/` directory, so the scanner's own folder
+stays scanned.
+
+The lesson generalises past this hook: a gate must be tested through the
+interface that enforces it. `test-pii-gate-fires.sh` proved the scanner refuses
+the leaked shapes and said nothing whatsoever about the hook, because the hook
+is a separate program with its own copy of the patterns and its own exit path.
+
+**Unchanged:** history is not rewritten, `main` still has no branch protection,
+and `paperclip` still awaits its own protocol migration. All three remain owner
+decisions.

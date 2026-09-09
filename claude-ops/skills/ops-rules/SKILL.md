@@ -88,6 +88,39 @@ per line in `$HOME/.config/claude-ops/pii-denylist.txt` (or `.pii-denylist`,
 gitignored) and the scanner will fail the build if any of them reach the repo.
 Until you configure it, that check passes while verifying nothing.
 
+**A denylist cannot protect somebody else's data.** It holds your own terms, so
+it structurally cannot hold a client's workspace UUIDs, their team key, or their
+issue ids — nobody knows those in advance. That gap is not theoretical: ten of
+one client's Linear UUIDs, their team key in about twenty-five places plus a
+filename, and a set of their real issue ids sat in this public repo while the
+scanner reported PASS.
+
+So for identifier-shaped literals the rule is inverted. Every UUID and every
+`<KEY>-<number>` in the tree **fails** unless it appears in
+`tests/known-public-constants.txt` with a stated reason, and an IANA timezone in
+code or config fails outright — express schedules in UTC and read the display
+zone from `$OPS_TZ`. Pasting a client identifier now means arguing for it in a
+diff, in front of a reviewer.
+
+These three checks need no configuration, sweep every tracked file including
+`tests/`, and cannot report SKIP: a check that could not run is counted as a
+failure, because counting it as a pass is how a gate silently stops gating.
+`tests/test-pii-gate-fires.sh` plants the exact values that leaked and asserts
+each gate refuses them, so none of this is prose. Third-party identifiers belong
+in the environment — see `docs/LOCAL-PREFS.md`.
+
+**Test a gate through the thing that enforces it.** The first commit of these
+checks printed three `BLOCKED` lines in the pre-commit hook and landed anyway:
+the hook cleared its own failure flag after all checks had run, whenever the
+only email hits were example domains. Detected, announced, waved through. Output
+that reads like enforcement is worse than silence, because it is why nobody
+looks. Two rules follow. Never narrow or clear a failure flag after the fact —
+filter at the point of the check, or the amnesty ends up broader than the check
+it was written for. And assert the **exit status** through the real interface:
+`tests/test-pre-commit-hook-blocks.sh` drives eight real `git commit` calls,
+because a passing scanner says nothing about a hook that carries its own copy of
+the patterns and its own exit path.
+
 ## Rule 1 — Max 4 options per AskUserQuestion
 
 The `AskUserQuestion` tool enforces a hard schema limit of `<=4` items in the `options` array. Passing more than 4 options causes an `InputValidationError` and the skill crashes.
