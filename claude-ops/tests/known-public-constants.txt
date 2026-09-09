@@ -1,0 +1,91 @@
+# Public third-party constants this repo is allowed to hardcode.
+#
+# WHY THIS FILE EXISTS
+#
+# An identifier denylist can only ever hold the OPERATOR's own terms. It
+# structurally cannot hold a third party's identifiers — a client's workspace
+# UUIDs, their team keys, their issue ids — because nobody knows them in
+# advance. So `test-no-secrets.sh` inverts the rule for identifier-shaped
+# literals: every UUID and every issue-tracker-shaped key in the tree FAILS
+# unless it is listed here with a reason.
+#
+# That is the point. Adding an entry is a deliberate, reviewable line in a diff
+# that says "this identifier is public and belongs to a vendor". Pasting a
+# client's UUID cannot be done quietly any more; it has to be argued for here
+# first, in front of a reviewer.
+#
+# WHAT MAY GO IN
+#
+# Only identifiers that are published by their owner and identify a VENDOR, not
+# a customer: an OAuth client_id from a vendor's own CLI, an operating-system
+# GUID from vendor documentation, a spec-defined constant. One entry per line,
+# each preceded by a comment naming the vendor and where the value is published.
+#
+# WHAT MAY NOT
+#
+# Anything that identifies a person, an organisation you work with, or a
+# workspace: Linear/Jira/Asana team ids and keys, issue ids, org ids, account
+# ids, tenant ids, project ids, calendar ids, channel ids. Those belong in the
+# environment — see docs/LOCAL-PREFS.md. If you are tempted to add one here to
+# make the build pass, the build is right and the code is wrong.
+#
+# FORMAT
+#
+#   uuid:<value>       a full UUID literal that may appear anywhere in the tree
+#   issue-prefix:<KEY> an uppercase prefix that may appear as <KEY>-<number>
+
+# --- Anthropic: public OAuth client_id shipped in the Claude CLI ---
+uuid:9d1c250a-e61b-44d9-88ed-5944d1962f5e
+
+# --- xAI: public OAuth client_id shipped in the Grok CLI ---
+uuid:b1a00492-073a-47ea-816f-4c329264a828
+
+# --- Microsoft: documented powercfg power-scheme GUIDs (High Performance,
+#     USB settings subgroup, USB selective-suspend setting). Published in
+#     Microsoft's own power-settings reference; identical on every Windows
+#     install, so they identify a setting, not a machine. ---
+uuid:8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+uuid:2a737441-1930-4402-8d77-b2bebba308a3
+uuid:48e6b7a6-50f5-4782-a5d4-53bb8f07e226
+
+# --- Neutral placeholders used by this repo's own docs and examples. "TEAM" is
+#     the default value of $LINEAR_CLIENT_TEAM_KEY and is nobody's real key. ---
+issue-prefix:TEAM
+issue-prefix:PROJ
+issue-prefix:ABC
+issue-prefix:XYZ
+
+# --- This repo's own severity and infrastructure labels, which happen to share
+#     the <LETTERS>-<number> shape. ---
+issue-prefix:SEV
+issue-prefix:INFR
+issue-prefix:NF
+
+# --- Not identifiers at all: character encodings, standards, cipher and hash
+#     names, licence identifiers, HTTP status prose, and model names. They match
+#     the issue-key shape by coincidence. ---
+issue-prefix:UTF
+issue-prefix:ISO
+issue-prefix:SHA
+issue-prefix:AES
+issue-prefix:RSA
+issue-prefix:BSD
+issue-prefix:GPL
+issue-prefix:MIT
+issue-prefix:LGPL
+issue-prefix:APACHE
+issue-prefix:CVE
+issue-prefix:RFC
+issue-prefix:HTTP
+issue-prefix:SONNET
+issue-prefix:OPUS
+issue-prefix:HAIKU
+issue-prefix:GPT
+issue-prefix:CLAUDE
+
+# --- Fragments of regular-expression character classes ([A-Z0-9], [a-f0-9]),
+#     which a plain grep cannot distinguish from a key. ---
+issue-prefix:Z0
+issue-prefix:F0
+issue-prefix:A0
+issue-prefix:E0

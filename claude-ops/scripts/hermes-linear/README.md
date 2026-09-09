@@ -35,7 +35,7 @@ Guards (minimal):
    - If Linear state type is completed/canceled/duplicate (or name Duplicate/Canceled/Production/Done),
      do not push open PC status onto it.
 
-3. **`hea_linear_fix_all.py`** (follow-up 2026-07-26)
+3. **`linear_fix_all.py`** (follow-up 2026-07-26)
    - Does not mint open Linear clones when the linked mirror is Duplicate/Canceled/Production.
    - `find_existing_export` reuses terminal `[Paperclip HEA-n]` hits when no live sibling exists.
 
@@ -44,13 +44,13 @@ Guards (minimal):
 ```bash
 cp claude-ops/scripts/hermes-linear/linear_paperclip_delegate_bridge.py ~/.hermes/scripts/
 cp claude-ops/scripts/hermes-linear/paperclip_linear_mirror.py ~/.hermes/scripts/
-cp claude-ops/scripts/hermes-linear/hea_linear_fix_all.py ~/.hermes/scripts/
+cp claude-ops/scripts/hermes-linear/linear_fix_all.py ~/.hermes/scripts/
 python3 -m py_compile ~/.hermes/scripts/linear_paperclip_delegate_bridge.py
 python3 -m py_compile ~/.hermes/scripts/paperclip_linear_mirror.py
-python3 -m py_compile ~/.hermes/scripts/hea_linear_fix_all.py
+python3 -m py_compile ~/.hermes/scripts/linear_fix_all.py
 # dry-run once
 python3 ~/.hermes/scripts/linear_paperclip_delegate_bridge.py --dry-run --max-create 5
-python3 ~/.hermes/scripts/hea_linear_fix_all.py --dry-run --verbose
+python3 ~/.hermes/scripts/linear_fix_all.py --dry-run --verbose
 ```
 
 Does not cancel intentional distinct mirrors with different semantics.

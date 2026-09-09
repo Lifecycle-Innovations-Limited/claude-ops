@@ -5,13 +5,30 @@ set -euo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
 NC='\033[0m'
 FAILED=0
 
 echo "Running pre-commit security checks..."
 
-# Only check added/modified lines in the staged diff (not removals)
-DIFF_ADDED=$(git diff --cached -U0 | grep '^+' | grep -v '^+++' || true)
+# Only check added/modified lines in the staged diff (not removals).
+#
+# Four files are exempt, and only four, by exact path: the scanner, its
+# allowlist, and the two negative-control suites. Each has to be able to quote
+# the shapes it forbids — a negative control's entire job is to plant a
+# forbidden value and prove the gate refuses it. Any other file, including any
+# other test, is scanned. The exemption is per path, never per directory:
+# tests/ as a whole was already the one place a client id could sit unseen.
+EXEMPT_RE='^claude-ops/tests/(test-no-secrets\.sh|known-public-constants\.txt|test-pii-gate-fires\.sh|test-pre-commit-hook-blocks\.sh)$'
+DIFF_ADDED=""
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  if [[ "$f" =~ $EXEMPT_RE ]]; then
+    continue
+  fi
+  hunk=$(git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++' || true)
+  [[ -n "$hunk" ]] && DIFF_ADDED="$DIFF_ADDED$hunk"$'\n'
+done < <(git diff --cached --name-only)
 
 if [[ -z "$DIFF_ADDED" ]]; then
   exit 0
@@ -43,15 +60,67 @@ check "Base64 JWT-like tokens"      'eyJ[a-zA-Z0-9_-]{50,}'
 
 # === Personal email patterns ===
 check "Personal email (webmail)"    '[a-zA-Z0-9._%+-]+@(gmail|yahoo|hotmail|outlook|icloud|proton|hey)\.(com|net|org)'
-check "Non-example work emails"     '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|io|ai|dev|co|ltd|limited)'
+# Filtered at the point of the check, never afterwards. An amnesty applied to
+# $FAILED after the fact clears every OTHER check that already failed, which is
+# how a gate stops gating without anyone noticing.
+work_mail=$(echo "$DIFF_ADDED" \
+  | grep -iE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|io|ai|dev|co|ltd|limited)' \
+  | grep -ivE '@(example|test|localhost|noreply|anthropic)\.' || true)
+if [[ -n "$work_mail" ]]; then
+  echo -e "${RED}BLOCKED: Non-example work emails${NC}"
+  echo "$work_mail" | head -3
+  FAILED=1
+fi
 
 # Allow @example.com, @test.com, @localhost — filter those out
-if [[ $FAILED -eq 1 ]]; then
-  # Re-check: if ALL email hits are example/test domains, clear the flag
-  real_emails=$(echo "$DIFF_ADDED" | grep -iE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|io|ai|dev|co|ltd|limited)' | grep -ivE '@(example|test|localhost|noreply|anthropic)\.' || true)
-  if [[ -z "$real_emails" ]]; then
-    FAILED=0
-  fi
+# === Third-party identifiers (fast staged-diff pass) ===
+#
+# The full scanner below catches these too, but it sweeps the whole tree and
+# reports the first five hits anywhere. This block names the line you just
+# staged, which is the difference between a fixable message and a hunt.
+#
+# The rule is inverted on purpose: an identifier-shaped literal is refused
+# unless it is listed in claude-ops/tests/known-public-constants.txt. A denylist
+# can only hold the operator's OWN terms, so it structurally cannot protect a
+# client's workspace ids — the gap that put ten of them in this public repo.
+CONSTANTS="claude-ops/tests/known-public-constants.txt"
+
+uuid_added=$(echo "$DIFF_ADDED" | grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' \
+  | grep -viE '^(0{8}-0{4}|1{8}-1{4})-' | sort -u || true)
+if [[ -n "$uuid_added" && -f "$CONSTANTS" ]]; then
+  uuid_added=$(echo "$uuid_added" | grep -vixFf <(grep -E '^uuid:' "$CONSTANTS" | sed 's/^uuid://') || true)
+fi
+if [[ -n "$uuid_added" ]]; then
+  echo -e "${RED}BLOCKED: undocumented UUID literal in staged lines${NC}"
+  echo "$uuid_added" | head -3
+  echo "  A third party's id belongs in the environment (docs/LOCAL-PREFS.md)."
+  echo "  A public vendor constant belongs in $CONSTANTS, with a reason."
+  FAILED=1
+fi
+
+# Case-sensitive on purpose: lowercase words are prose, not issue keys.
+key_added=$(echo "$DIFF_ADDED" | grep -oE '\b[A-Z][A-Z0-9]{1,9}-[0-9]{1,6}\b' | sort -u || true)
+if [[ -n "$key_added" && -f "$CONSTANTS" ]]; then
+  key_alt=$(grep -E '^issue-prefix:' "$CONSTANTS" | sed 's/^issue-prefix://' \
+    | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd '|' -)
+  [[ -n "$key_alt" ]] && key_added=$(echo "$key_added" | grep -vE "^($key_alt)-[0-9]{1,6}$" || true)
+fi
+if [[ -n "$key_added" ]]; then
+  echo -e "${RED}BLOCKED: third-party issue-tracker key in staged lines${NC}"
+  echo "$key_added" | head -3
+  echo "  Use TEAM-<n> and read the real key from \$LINEAR_CLIENT_TEAM_KEY."
+  FAILED=1
+fi
+
+# Prose may name a zone as an example; code and config may not.
+tz_added=$(echo "$DIFF_ADDED" \
+  | grep -E '\b(Africa|America|Asia|Atlantic|Australia|Europe|Indian|Pacific)/[A-Za-z_]+' \
+  | grep -vE '(OPS_TZ|TZ:-|TIMEZONE|timeZone|Etc/UTC|Europe/Asia)' | head -3 || true)
+if [[ -n "$tz_added" ]]; then
+  echo -e "${YELLOW}WARNING: IANA timezone in staged lines${NC}"
+  echo "$tz_added" | head -3
+  echo "  Fine in prose as an example. In code or config, express schedules in"
+  echo "  UTC and read the display zone from \$OPS_TZ. The full scanner decides."
 fi
 
 # === Hardcoded paths ===

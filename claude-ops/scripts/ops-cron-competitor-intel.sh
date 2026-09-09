@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ops-cron-competitor-intel.sh v2.3 — Weekly Monday 10:00 Europe/Amsterdam
+# ops-cron-competitor-intel.sh v2.3 — Weekly Monday 10:00 UTC
 # strategic synthesis cron.
 #
 # Pipeline (per brand seed):

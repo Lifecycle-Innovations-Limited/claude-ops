@@ -7,7 +7,7 @@
 4) Optional: export open product missing link after remap
 
 Autonomous cron mode (default for no-agent ticks):
-  HEA_LINEAR_FIX_ALL_AUTO=1 or --auto
+  LINEAR_FIX_ALL_AUTO=1 or --auto
   - caps remaps/status per run
   - silent stdout when healthy (no material action)
   - rate-limit safe (never treats 429 as missing)
@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from alignment_lib import (  # noqa: E402
+    CLIENT_TEAM_KEY,
     PC_TO_LINEAR_STATE,
     add_comment,
     load_env,
@@ -63,20 +64,18 @@ def has_positive_lin_link(desc: str | None, lin: str) -> bool:
     if re.search(rf"(?m)^\s*linear:\s*{re.escape(lin)}\s*$", d, re.I):
         return True
     return False
-STATE_PATH = Path.home() / ".hermes" / "state" / "hea_linear_fix_all.json"
+STATE_PATH = Path.home() / ".hermes" / "state" / "linear_fix_all.json"
 
 # Shared thrash canons (single source)
 try:
     from hea_thrash_canons import FORCE_UNLINK, MULTI_CANON, STANDING_OWN_LINEAR  # type: ignore
 except Exception:  # noqa: BLE001
-    MULTI_CANON = {
-        "HEA-4949": "HEA-1172",
-        "HEA-5091": "HEA-1198",
-        "HEA-4840": "HEA-1157",
-        "HEA-5042": "HEA-1171",
-    }
-    FORCE_UNLINK = {"HEA-62": "HEA-4949"}
-    STANDING_OWN_LINEAR = {"HEA-62": "HEA-5460"}
+    # No fallback canons ship with this repo: these are one client's real
+    # Linear issue ids. Supply them in an out-of-repo ``hea_thrash_canons``
+    # module. Empty means "no canon overrides", which is correct here.
+    MULTI_CANON = {}
+    FORCE_UNLINK = {}
+    STANDING_OWN_LINEAR = {}
 
 MATERIAL_PREFIXES = (
     "unlink ",
@@ -344,7 +343,7 @@ def find_existing_export(pc: str, *, include_terminal: bool = True) -> str | Non
 
     def _num(n: dict) -> int:
         try:
-            return int((n.get("identifier") or "HEA-0").split("-")[-1])
+            return int((n.get("identifier") or f"{CLIENT_TEAM_KEY}-0").split("-")[-1])
         except Exception:
             return 0
 
@@ -372,12 +371,12 @@ def main() -> int:
     ap.add_argument(
         "--auto",
         action="store_true",
-        default=(os.environ.get("HEA_LINEAR_FIX_ALL_AUTO", "0").strip() in ("1", "true", "yes")),
+        default=(os.environ.get("LINEAR_FIX_ALL_AUTO", "0").strip() in ("1", "true", "yes")),
         help="Autonomous cron mode: silent when healthy; respect caps",
     )
     ap.add_argument("--verbose", action="store_true")
-    ap.add_argument("--max-remap", type=int, default=int(os.environ.get("HEA_LINEAR_FIX_ALL_MAX_REMAP", "8") or 8))
-    ap.add_argument("--max-status", type=int, default=int(os.environ.get("HEA_LINEAR_FIX_ALL_MAX_STATUS", "15") or 15))
+    ap.add_argument("--max-remap", type=int, default=int(os.environ.get("LINEAR_FIX_ALL_MAX_REMAP", "8") or 8))
+    ap.add_argument("--max-status", type=int, default=int(os.environ.get("LINEAR_FIX_ALL_MAX_STATUS", "15") or 15))
     args = ap.parse_args()
     dry = args.dry_run
     auto = bool(args.auto) and not args.verbose
@@ -386,7 +385,7 @@ def main() -> int:
     remapped = 0
     fixed_status = 0
     if not auto:
-        print(f"## hea_linear_fix_all dry_run={dry}")
+        print(f"## linear_fix_all dry_run={dry}")
 
     states = team_states()
     if not states.get("On Hold") or not states.get("Todo"):
@@ -715,13 +714,13 @@ SELECT json_agg(row_to_json(t)) FROM (
             "status_fixed": fixed_status,
         },
     }
-    write_state(STATE_PATH if not dry else Path.home() / ".hermes/state/hea_linear_fix_all_dryrun.json", out)
+    write_state(STATE_PATH if not dry else Path.home() / ".hermes/state/linear_fix_all_dryrun.json", out)
 
     # Autonomous: silent when no material action (incl. rate-limit defer)
     if auto and not dry and not material:
         return 0
 
-    print(f"## hea_linear_fix_all dry_run={dry} auto={auto} rate_limited={rate_limited}")
+    print(f"## linear_fix_all dry_run={dry} auto={auto} rate_limited={rate_limited}")
     print(f"## remapped={remapped} status_fixed={fixed_status} material={len(material)}")
     for e in (material if auto else events):
         print(f"- {e}")

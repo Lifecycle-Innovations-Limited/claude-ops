@@ -250,7 +250,7 @@
     },
     "linear_team": {
       "title": "Linear Team Key",
-      "description": "Default Linear team key e.g. 'HEA' (optional)",
+      "description": "Default Linear team key e.g. 'TEAM' (optional)",
       "type": "string",
       "sensitive": false,
       "default": ""

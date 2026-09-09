@@ -52,7 +52,7 @@ MUST_PASS = [
                        "tool_input": {"chat_jid": "x@lid"}}),
     ("whatsapp archive", {"tool_name": "mcp__whatsapp-nl__archive_chat",
                           "tool_input": {"chat_jid": "x@lid", "archive": True}}),
-    # Staging bytes on the bridge host is not a send. The bridges run on ai-hub, so
+    # Staging bytes on the bridge host is not a send. The bridges run on a remote bridge host, so
     # a file anywhere else must be uploaded before it can be attached; gating that
     # would cost an approval token before the real send even happens, and one token
     # is one send. Pinned because the tool name sits one word away from send_file.

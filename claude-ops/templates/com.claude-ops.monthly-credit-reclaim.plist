@@ -2,7 +2,7 @@
 <!--
   Monthly Anthropic credit reclaim cron.
 
-  Schedule: day 1 of each month, 09:00 local time (Europe/Amsterdam for the owner).
+  Schedule: day 1 of each month, 09:00 in the host's local time zone.
   Equivalent cron: 0 9 1 * *
 
   The installer (scripts/install-monthly-credit-reclaim.sh) substitutes

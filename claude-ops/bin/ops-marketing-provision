@@ -324,8 +324,8 @@ cmd_provision_ga4() {
           \"parent\": \"accounts/$account_id\",
           \"displayName\": \"$display_name\",
           \"industryCategory\": \"$industry\",
-          \"timeZone\": \"Europe/Amsterdam\",
-          \"currencyCode\": \"USD\"
+          \"timeZone\": \"${OPS_TZ:-Etc/UTC}\",
+          \"currencyCode\": \"${OPS_CURRENCY:-USD}\"
         }")"
       property_id="$(printf '%s' "$create_resp" | jq -r '.name | split("/")[1]' 2>/dev/null)"
       log "Created GA4 property: $property_id"

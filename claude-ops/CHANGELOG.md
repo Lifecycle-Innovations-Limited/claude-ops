@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- fix(security): a third party's identifiers can no longer reach this public
+  repo. Every identity check was denylist-driven, and a denylist can only hold
+  the operator's OWN terms — it structurally cannot hold a client's workspace
+  UUIDs, their team key, or their issue ids, because nobody knows those in
+  advance. Ten client Linear UUIDs, their team key in ~25 places plus a
+  filename, and their real issue ids sat here while the scanner reported PASS.
+
+  The rule is now inverted for identifier-shaped literals. `test-no-secrets.sh`
+  fails every UUID and every `<KEY>-<number>` unless it is listed in the new
+  `tests/known-public-constants.txt` with a stated reason, and fails an IANA
+  timezone in code or config outright. The three checks need no configuration,
+  sweep every tracked file including `tests/` (which `EXCLUDE_DIRS` drops, so
+  the scanner's own directory was the one unscanned place), and cannot SKIP:
+  a check that could not run counts as a failure. `.githooks/pre-commit` runs
+  the same patterns over the staged diff so the blocked line is named.
+
+  `tests/test-pii-gate-fires.sh` is the negative control — it plants the exact
+  shapes that leaked and asserts each gate refuses them, plus a clean-tree
+  control so a scanner that fails on everything cannot pass. It found four real
+  defects on its first run: `grep -o` omits the filename when given a single
+  file, which silently disabled every `:`-anchored filter; the issue-key regex
+  stopped at six characters, so `<CLIENT>TEAM-<n>` was never seen; and both
+  affected checks skipped instead of failing when the file list was empty.
+
+  Also fixed: `PLUGIN_ROOT` now resolves with `pwd -P`. `git rev-parse
+  --show-toplevel` returns a physical path, so under a symlinked checkout the
+  comparison matched nothing and the sweep passed over an empty file list.
+
+  Residual `Europe/Amsterdam` in two daemon cron notes and one script header —
+  found by the new check, missed by a manual scrub — are now stated in UTC.
+
+- fix(hooks): the pre-commit hook printed `BLOCKED` and committed anyway. It
+  applied an amnesty to `$FAILED` *after* every check had run: if the only email
+  hits were example domains it reset the flag to 0, clearing every other check
+  that had already failed with it. The first commit of the gate above tripped
+  three BLOCKED lines and landed regardless — loud and inert at once, which is
+  worse than silent, because the output reads like enforcement.
+
+  The example-domain filter now applies inside the email check, where it belongs,
+  and the post-hoc reset is gone. The hook also honours the same path-exact
+  exemption as the scanner, so the negative-control suites can hold the shapes
+  they forbid without `--no-verify`.
+
+  `tests/test-pre-commit-hook-blocks.sh` is the negative control for the hook
+  itself: eight cases driven through a real `git commit`, asserting the exit
+  status rather than the output, because the exit status is the only part of a
+  hook that stops anything. Case 6 is this regression — a forbidden identifier
+  in the same commit as a harmless `@example.com` address must still be refused.
+
 - fix(hooks): UserPromptSubmit inbox autosync no longer interpolates `$INPUT`.
   Grok treats `$VAR` in a hook command as a required env var and skips the
   hook when it is unset. The script already reads the event JSON from stdin.
@@ -1706,7 +1755,7 @@ $ OPS_PRINT_URLS=1 bin/ops-voice phone "+1234567890"
 
 - **Multi-brand competitor intel** (#285) — competitor probe sources `scripts/lib/competitor/context.sh` and iterates `.brands[]`. One line per brand with 7d high-alert count, last-run date, top alert snippet (truncated 140 chars).
 - **All-project marketing dashboard** (#284) — renders one row per configured project (9 projects), sorted worst-health-first. Each row: project, health score, blended ROAS, top channel. Mobile collapses to single summary line.
-- **Linear multi-workspace + all-teams scan** (#287) — iterates `LINEAR_API_KEY`, `MY-PROJECT_LINEAR_API_KEY`, `EXAMPLE-PROJECT_LINEAR_API_KEY`. Enumerates all teams per workspace, de-dupes across keys, prefixes urgent rows with team key (`[HEA] HEA-4246`).
+- **Linear multi-workspace + all-teams scan** (#287) — iterates `LINEAR_API_KEY`, `MY-PROJECT_LINEAR_API_KEY`, `EXAMPLE-PROJECT_LINEAR_API_KEY`. Enumerates all teams per workspace, de-dupes across keys, prefixes urgent rows with team key (`[TEAM] TEAM-4246`).
 - **Calendar all-calendar aggregation** (#286, #290) — `gog calendar events --all --today --sort start -j` surfaces events across every calendar. New `render_section_calendar` always renders — events list, "0 events today", or "not configured" + hint.
 - **Standalone FinOps block** (#290) — split from Revenue & Costs into its own `🔥 FINOPS` section: burn 7d / burn 30d / runway / services tracked / top 3 anomalies. Pulls `/api/ops/anomalies`.
 - **Portfolio includes Shopify-only projects** (#288) — extracts `.ecom.projects` from preferences, renders `── shopify ──` subsection. Each row: project, kind, masked store URL, status (🟢/🟡/⚪). Header: `41 projects total — 38 git + 3 shopify, 14 GSD active`.
