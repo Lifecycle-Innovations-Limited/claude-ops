@@ -1,34 +1,6 @@
+# Changelog
+
 ## Unreleased
-
-- fix(fires): `/ops:fires` reported Sentry as unavailable on every run. The
-  `allowed-tools` frontmatter named `mcp__sentry__*`, but the plugin registers
-  the tools as `mcp__plugin_sentry_sentry__*`, so the tool never existed under
-  the name the skill asked for and the skill dutifully said "unavailable".
-  Sentry is now pre-gathered via `bin/ops-sentry` (REST), the same way infra, CI
-  and external health already are, so it no longer depends on the model
-  remembering to call a tool. The tool names are corrected in `ops-fires`,
-  `ops-triage`, `ops-orchestrate`, `build-fix` and `deploy-fix` for the paths
-  that still use MCP (stack traces, Seer). A non-null `error` from the probe now
-  reads as a gap in coverage, never as "production is clean". The script never
-  exits non-zero and never prints anything but valid JSON — the skill inlines
-  its output, and one stray error line would corrupt the prompt. It also honours
-  the org's region host: Sentry is region-sharded and the wrong region returns
-  an empty list rather than an error.
-
-  Found the hard way: a fires run showed 22 CI failures (19 of them stale cache,
-  already green) and zero Sentry issues, while `ServiceUnavailableException` on
-  Bedrock `Converse` with `reached max retries: 0` had been affecting 4 users
-  for thirteen hours. The only fire with real user impact was the one missing
-  from the board.
-
-- fix(projects): `ops-projects` rendered `None` for any field whose JSON value
-  was an explicit `null`. `.get(key, default)` returns the `null`, not the
-  default; now `or`.
-
-- fix(daemon): leave a deliberate daemon wrapper in the plugin data dir alone
-  instead of rewriting the plist back to `$PLUGIN_ROOT`. The data-dir plist
-  guard wrote the wrapper path straight back, and each write booted the daemon
-  out before it finished its first monitor pass.
 
 - fix(hooks): UserPromptSubmit inbox autosync no longer interpolates `$INPUT`.
   Grok treats `$VAR` in a hook command as a required env var and skips the
@@ -135,13 +107,7 @@
 - ops-accounts-gateway skeleton (:3005 health/auth/grok hop; CLI gateway subcommand)
 - feat(crs-priority-daemon): dual-mode `backend=crs|local` file seat-state without CRS Docker
 
-# Changelog
-
-## Unreleased
-
 - ops-accounts: dual-write + OPS_ACCOUNTS_BACKEND auto/crs/local; grok-cli-auth-proxy; local no-op reconcilers; gateway design doc
-
-## Unreleased
 
 ### Changed
 
@@ -176,6 +142,8 @@
 ### Fixed
 
 - **Background daemon no longer restart-loops.** The SessionStart `ensure-current` hook and the plist-guard LaunchAgent were both rewriting the daemon's launchd plist with different paths, boot-cycling the job every ~10 seconds so it never completed a monitor pass — services sat at "scheduled" forever while the health file kept looking fresh. An intentional executable daemon wrapper under the plugin data dir is now respected instead of being overwritten as drift; genuinely stale, non-executable, or dangling paths are still repaired.
+- **`/ops:fires` no longer reports Sentry as unavailable on every run.** The `allowed-tools` frontmatter named `mcp__sentry__*` while the plugin registers `mcp__plugin_sentry_sentry__*`, so the tool never existed under the name the skill asked for. Sentry is now pre-gathered over REST by `bin/ops-sentry`, the same way infra, CI and external health already are, and a non-null `error` from that probe reads as a gap in coverage rather than as "production is clean". Found the hard way: a fires run showed zero Sentry issues while a Bedrock `ServiceUnavailableException` had been hitting four users for thirteen hours.
+- **`ops-projects` no longer renders `None`.** `.get(key, default)` returns an explicit JSON `null` instead of the default; the fields now fall back with `or`.
 - **GA4 and Search Console data no longer read as "no data".** `file:`-prefixed credential references were never resolved, so the provisioned service-account key was skipped and every call silently fell back to expiring user credentials. The prefix is now handled, and the marketing dashboard reads the per-project key the provisioner actually writes rather than a legacy owner-level field.
 - **Search Console calls no longer fail with a scopes error.** The service-account token is minted with `webmasters.readonly` alongside `analytics.readonly`, since both APIs share it. Previously every SEO figure degraded to an empty result instead of surfacing the 403.
 - **Marketing health checks report the truth.** The `ga4_sa_key` and `gsc_auth` probes now use the same credential as the data path, so they stop flagging every project as broken while pulls are working — a false alarm that masked real per-project failures.
