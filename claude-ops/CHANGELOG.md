@@ -186,6 +186,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.10.12] - 2026-09-09
+
+### Changed
+- fix(orchestrate,next): read the synced registry schema, not the example one (#952)
+
+
 ## [3.10.11] - 2026-09-09
 
 ### Fixed
