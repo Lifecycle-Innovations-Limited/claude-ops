@@ -186,6 +186,19 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.10.11] - 2026-09-09
+
+### Testing
+
+- test(hooks): `tests/test-hooks.sh` fails any hook that is neither
+  `async: true` nor bounded by a `timeout`. v3.10.8 put a bound on the Stop hook
+  `ops-post-session-cleanup`, but nothing stopped the next hook from landing
+  without one — in `hooks.json` a hook that blocks looks exactly like a hook that
+  does not, and an unbounded blocking hook holds the event open until its command
+  returns. Async hooks are exempt on purpose: they never hold the event, so a
+  timeout there would invent a problem. Proved in both directions against the
+  pre-fix `hooks.json` (1 failed) and the current tree (25 passed).
+
 ## [3.10.10] - 2026-09-09
 
 ### Fixed
