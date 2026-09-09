@@ -137,6 +137,14 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.10.10] - 2026-09-09
+
+### Changed
+### Fixed
+
+- **The MCP watchdog no longer tells you to re-authenticate servers that work fine.** It probed every HTTP MCP with an `initialize` POST and read a 401 as "no refresh token, the owner must re-consent". A 401 only means that when the probe actually *presented* a credential; with nothing to send it says only that the prober knocked with empty hands. Claude Code holds OAuth tokens for natively-authenticated HTTP MCPs in memory — not in `~/.mcp-auth`, not in the keychain's `mcpOAuth` entries, not in the config's static headers — so those servers answer every session normally and probe 401 forever. Measured here: `claude-design` and `openrouter` both sat at `needs_bootstrap` while `list_projects` returned 13 projects and `ping` returned `pong`. The cost was not just a wrong line in a report — every tick dispatched the headless fix agent (10 runs logged) and attempted a Playwright OAuth flow that cannot succeed, because the consent page renders no button for an unauthenticated profile. The blind case is now its own state, `no_probe_credential`, and it is excluded from fix-agent dispatch, auto-reauth, the degradation diff and WhatsApp notify, the `ops-doctor` degraded>1h warning, and `/ops:mcp` advice. A `healthy` → `no_probe_credential` transition is still logged, so a token that really did disappear leaves a trace instead of vanishing into a state the watchdog ignores. Guard: `tests/test-mcp-watchdog-probe-credential.sh` covers all four 401 paths plus the consumer guards — 11 passed against this change, 7 of them failing against the previous version.
+
+
 ## [3.10.9] - 2026-09-08
 
 ### Fixed
