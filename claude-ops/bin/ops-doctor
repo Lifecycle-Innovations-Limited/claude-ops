@@ -524,6 +524,9 @@ try:
     bad = []
     for name, info in s.items():
         if info.get('state') == 'healthy': continue
+        # no_probe_credential means the watchdog had no token to present, not
+        # that the server is down — sessions use it fine. Never warn on it.
+        if info.get('state') == 'no_probe_credential': continue
         probed = info.get('probed_at', '')
         if not probed: continue
         from datetime import datetime

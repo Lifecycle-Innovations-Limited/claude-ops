@@ -87,7 +87,7 @@ DAEMONS
   keepalive    [ok|warn|never_run]    last tick [Xs ago]
 
 SERVERS ([N] configured)
-  [name]       [healthy|token_expired|needs_bootstrap|unreachable|server_error]
+  [name]       [healthy|token_expired|needs_bootstrap|no_probe_credential|unreachable|server_error]
                url=[masked — scheme+host only]   last_probed=[Xs ago]
 
 SUMMARY
@@ -106,7 +106,7 @@ servers: 4 healthy, 1 needs_bootstrap (giga)
 cron: registered
 ```
 
-After dashboard: if any server is `needs_bootstrap`, surface a one-line hint: "Run `/ops:mcp reauth <name>` to restore OAuth." No `AskUserQuestion` unless something requires a binary choice.
+After dashboard: if any server is `needs_bootstrap`, surface a one-line hint: "Run `/ops:mcp reauth <name>` to restore OAuth." Never say that about `no_probe_credential` — that state means the watchdog held no token to present, not that the server is broken. Claude Code keeps OAuth tokens for natively-authenticated HTTP MCPs in memory, so such a server answers every session normally. Report it as `probe blind (works in-session)` and recommend nothing. No `AskUserQuestion` unless something requires a binary choice.
 
 ---
 
@@ -134,7 +134,7 @@ Format per server:
 [name]
   type:     [http|stdio]
   url/cmd:  [masked url or command path]
-  state:    [healthy|token_expired|needs_bootstrap|unreachable|not_probed]
+  state:    [healthy|token_expired|needs_bootstrap|no_probe_credential|unreachable|not_probed]
   probed:   [ISO timestamp or "never"]
   detail:   [detail field if not healthy]
 ```
@@ -169,7 +169,7 @@ Print the exit code and last 5 lines of `run.log` on completion.
 
 ## Route — `reauth [server]`
 
-Invokes `ops-mcp-reauth.py` (Playwright headless OAuth flow) for the named server. If no server is named, list `needs_bootstrap` servers and `AskUserQuestion` which to reauth.
+Invokes `ops-mcp-reauth.py` (Playwright headless OAuth flow) for the named server. If no server is named, list `needs_bootstrap` servers and `AskUserQuestion` which to reauth. Never offer a `no_probe_credential` server here; verify it by calling one of its tools instead.
 
 ```bash
 REAUTH="${CLAUDE_PLUGIN_ROOT}/scripts/ops-mcp-reauth.py"
