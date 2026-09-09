@@ -2,14 +2,6 @@
 
 ## Unreleased
 
-- test(hooks): `tests/test-hooks.sh` now fails any hook that is neither
-  `async: true` nor bounded by a `timeout`. v3.10.8 put a bound on the Stop
-  hook `ops-post-session-cleanup`, but nothing stopped the next hook from
-  landing without one — in `hooks.json` a hook that blocks looks exactly like
-  a hook that does not. Async hooks are exempt on purpose: they never hold the
-  event, so a timeout there would invent a problem. Proved in both directions
-  against the pre-fix `hooks.json` (1 failed) and the current tree (25 passed).
-
 - fix(hooks): UserPromptSubmit inbox autosync no longer interpolates `$INPUT`.
   Grok treats `$VAR` in a hook command as a required env var and skips the
   hook when it is unset. The script already reads the event JSON from stdin.
@@ -144,6 +136,27 @@
 - **ops-desk (new skill):** `/ops:ops-desk` desk sweep — fans out read-only context agents (batched, Workflow tool) over the owner's open decisions/drafts/payments/sign-offs and returns a ranked, ready-to-approve action queue worked down under the per-draft outbound gate. Complements `/ops:ops-inbox`.
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
+
+## [3.10.10] - 2026-09-09
+
+### Fixed
+
+- fix(mcp-watchdog): a 401 with no credential to present is not
+  `needs_bootstrap`. The probe reported a server as needing a bootstrap when it
+  had never been given anything to authenticate with, so the repair loop kept
+  chasing a state the server could not leave. It now separates "rejected" from
+  "never asked" (#945).
+
+### Testing
+
+- test(hooks): `tests/test-hooks.sh` fails any hook that is neither
+  `async: true` nor bounded by a `timeout`. v3.10.8 put a bound on the Stop hook
+  `ops-post-session-cleanup`, but nothing stopped the next hook from landing
+  without one — in `hooks.json` a hook that blocks looks exactly like a hook that
+  does not, and an unbounded blocking hook holds the event open until its command
+  returns. Async hooks are exempt on purpose: they never hold the event, so a
+  timeout there would invent a problem. Proved in both directions against the
+  pre-fix `hooks.json` (1 failed) and the current tree (25 passed).
 
 ## [3.10.9] - 2026-09-08
 
