@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- test(hooks): `tests/test-hooks.sh` now fails any hook that is neither
+  `async: true` nor bounded by a `timeout`. v3.10.8 put a bound on the Stop
+  hook `ops-post-session-cleanup`, but nothing stopped the next hook from
+  landing without one — in `hooks.json` a hook that blocks looks exactly like
+  a hook that does not. Async hooks are exempt on purpose: they never hold the
+  event, so a timeout there would invent a problem. Proved in both directions
+  against the pre-fix `hooks.json` (1 failed) and the current tree (25 passed).
+
 - fix(hooks): UserPromptSubmit inbox autosync no longer interpolates `$INPUT`.
   Grok treats `$VAR` in a hook command as a required env var and skips the
   hook when it is unset. The script already reads the event JSON from stdin.

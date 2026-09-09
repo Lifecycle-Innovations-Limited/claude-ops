@@ -153,6 +153,31 @@ else
   fi
 fi
 
+# 8. Every blocking hook must carry a timeout.
+# A hook without "timeout" and without "async": true holds the event until the
+# command returns. On Stop that is the end of every session; on UserPromptSubmit
+# it is every prompt. An async hook needs no timeout — it never blocks — so it is
+# exempt on purpose rather than by oversight.
+echo ""
+echo "Checking blocking hooks for a timeout..."
+if command -v jq &>/dev/null; then
+  unbounded=$(jq -r '
+    .hooks | to_entries[] as $ev
+    | $ev.value[]? | .hooks[]?
+    | select((.async // false) != true)
+    | select(has("timeout") | not)
+    | "\($ev.key): \(.command)"
+  ' "$HOOKS_FILE" 2>/dev/null || true)
+  if [[ -n "$unbounded" ]]; then
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      err "blocking hook has no timeout (it can hold the event open): $line"
+    done <<< "$unbounded"
+  else
+    ok "every blocking hook has a timeout"
+  fi
+fi
+
 echo ""
 echo "---"
 echo "Results: $pass passed, $fail failed"
