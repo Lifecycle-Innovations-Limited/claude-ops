@@ -37,7 +37,7 @@ The "before-bed brief." Counterpart to `/ops:go` (morning).
 
 ## Schedule
 
-Suggested cron: `30 21 * * 1-5` Europe/Amsterdam (9:30pm weekdays)
+Suggested cron: `30 21 * * 1-5` in your own time zone (9:30pm weekdays)
 Or run manually with `/ops:tonight`
 
 ## Ledger writes

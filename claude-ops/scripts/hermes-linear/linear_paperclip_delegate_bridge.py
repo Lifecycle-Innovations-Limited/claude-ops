@@ -27,7 +27,7 @@ Directions
 
 Paperclip remains agent-execution SSOT. Linear is product UI + official AI delegate.
 
-Never invent Linear IDs from bare Paperclip parent titles like `[HEA-1136]`.
+Never invent Linear IDs from bare parent titles like `[TEAM-1136]`.
 """
 from __future__ import annotations
 
@@ -46,6 +46,7 @@ from typing import Any, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from alignment_lib import (  # noqa: E402
     CLIENT_COMPANY_ID,
+    CLIENT_TEAM_KEY,
     PC_TO_LINEAR_STATE,
     add_comment,
     api_call,
@@ -71,29 +72,56 @@ CLIENT_TEAM_ID = os.environ.get("LINEAR_CLIENT_TEAM_ID", "")
 CLIENT_INBOUND_ASSIGNEE_AGENT_ID = os.environ.get("LINEAR_CLIENT_INBOUND_ASSIGNEE_AGENT_ID", "")
 CLIENT_INBOUND_ASSIGNEE_NAME = os.environ.get("LINEAR_CLIENT_INBOUND_ASSIGNEE_NAME", "Agent Router")
 
-TEAM_TO_COMPANY = {
-    "HEA": CLIENT_COMPANY_ID,
-    "MES": "71380d2a-b29e-48fc-8f10-49a8df8b2e46",
-    "DUTCH": "c4e2ebdd-351c-4bf0-9d96-4c22147ad85d",
-    "INB": "6ef96e49-0728-4170-bd2f-13c6b8bdce25",
-    "MAITR": "315900cc-2f0c-49d5-8c46-0a6b9e8612ff",
-    "FIBER": "968b5198-9e73-418a-b375-edd024426f63",
-}
+# Team ↔ company mapping.
+#
+# These are OTHER ORGANIZATIONS' identifiers. They must never be committed to a
+# public repo: one client was already read from the environment here while five
+# siblings sat hardcoded three lines below it, so the pattern existed and was
+# simply not finished.
+#
+# Supply the extra teams as JSON in LINEAR_TEAM_MAP_JSON:
+#
+#   {"KEY": {"company": "<company-uuid>", "team": "<linear-team-uuid>"}, ...}
+#
+# The env-gated client team is merged in automatically when configured. An empty
+# or absent map is valid: the bridge then handles only the configured client.
+def _load_team_map() -> dict:
+    raw = os.environ.get("LINEAR_TEAM_MAP_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise SystemExit(f"LINEAR_TEAM_MAP_JSON is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise SystemExit("LINEAR_TEAM_MAP_JSON must be a JSON object keyed by team key")
+    out = {}
+    for key, val in parsed.items():
+        if not isinstance(val, dict) or "company" not in val:
+            raise SystemExit(
+                f"LINEAR_TEAM_MAP_JSON['{key}'] must be an object with a 'company' field"
+            )
+        out[str(key)] = {"company": str(val["company"]), "team": str(val.get("team", ""))}
+    return out
+
+
+_TEAM_MAP = _load_team_map()
+
+TEAM_TO_COMPANY = {key: cfg["company"] for key, cfg in _TEAM_MAP.items()}
+if CLIENT_TEAM_KEY and CLIENT_COMPANY_ID:
+    TEAM_TO_COMPANY[CLIENT_TEAM_KEY] = CLIENT_COMPANY_ID
 
 # Optional company → inbound router agent for the configured client team.
 INBOUND_ROUTER_AGENT = {
     CLIENT_COMPANY_ID: CLIENT_INBOUND_ASSIGNEE_AGENT_ID,
 }
 
-# Paperclip company → Linear team
+# company → (team key, team id)
 COMPANY_TO_TEAM = {
-    CLIENT_COMPANY_ID: ("HEA", CLIENT_TEAM_ID),
-    "71380d2a-b29e-48fc-8f10-49a8df8b2e46": ("MES", "4e5dd03a-1015-4506-b6d0-b408b02ed7c2"),
-    "c4e2ebdd-351c-4bf0-9d96-4c22147ad85d": ("DUTCH", "dd6deb04-63ac-43ae-b90b-6a59cc22d8fd"),
-    "6ef96e49-0728-4170-bd2f-13c6b8bdce25": ("INB", "58cd5b2c-fb32-4c65-9558-db0346094883"),
-    "315900cc-2f0c-49d5-8c46-0a6b9e8612ff": ("MAITR", "ce8db850-b7ac-4909-adcb-6fddb0342f72"),
-    "968b5198-9e73-418a-b375-edd024426f63": ("FIBER", "44d87f3a-60cb-4760-a5ba-ccf1e43bfca7"),
+    cfg["company"]: (key, cfg["team"]) for key, cfg in _TEAM_MAP.items()
 }
+if CLIENT_COMPANY_ID:
+    COMPANY_TO_TEAM[CLIENT_COMPANY_ID] = (CLIENT_TEAM_KEY, CLIENT_TEAM_ID)
 
 PRIO_TO_PC = {0: "low", 1: "critical", 2: "high", 3: "medium", 4: "low"}
 PC_TO_PRIO = {"critical": 1, "high": 2, "medium": 3, "low": 4, "none": 0}
@@ -212,8 +240,8 @@ def extract_linear_id(blob: str) -> Optional[str]:
 def is_authoritative_linear_link_comment(body: str) -> bool:
     """True only for deliberate SSOT link writebacks, not cross-refs.
 
-    Standing routines (e.g. HEA-62) accumulate mirrored Linear comments that
-    end with ``linear:HEA-4949``. Treating those as pair markers makes the
+    Standing routines (e.g. TEAM-62) accumulate mirrored Linear comments that
+    end with ``linear:TEAM-4949``. Treating those as pair markers makes the
     bridge push the routine's ``in_progress`` status onto the product issue
     and thrash Production ↔ In Progress every 15m.
 
@@ -921,7 +949,7 @@ def find_open_linear_sibling(
                 st = ((n.get("state") or {}).get("type") or "").lower()
                 openish = 0 if st not in ("completed", "canceled", "duplicate") else 1
                 try:
-                    num = int((n.get("identifier") or "HEA-0").split("-")[-1])
+                    num = int((n.get("identifier") or f"{CLIENT_TEAM_KEY}-0").split("-")[-1])
                 except Exception:
                     num = 0
                 return (openish, -num)
@@ -1110,14 +1138,12 @@ def resolve_pair_linear_id(row: dict) -> Optional[str]:
     try:
         from hea_thrash_canons import FORCE_UNLINK, MULTI_CANON, STANDING_OWN_LINEAR  # type: ignore
     except Exception:  # noqa: BLE001
-        FORCE_UNLINK = {"HEA-62": "HEA-4949"}
-        MULTI_CANON = {
-            "HEA-4949": "HEA-1172",
-            "HEA-5091": "HEA-1198",
-            "HEA-4840": "HEA-1157",
-            "HEA-5042": "HEA-1171",
-        }
-        STANDING_OWN_LINEAR = {"HEA-62": "HEA-5460"}
+        # No fallback canons ship with this repo: these are one client's real
+        # Linear issue ids. Supply them in an out-of-repo ``hea_thrash_canons``
+        # module. Empty means "no canon overrides", which is correct here.
+        FORCE_UNLINK = {}
+        MULTI_CANON = {}
+        STANDING_OWN_LINEAR = {}
 
     if re.search(r"linear:\s*UNLINKED\b", desc, re.I) or re.search(
         r"\[UNLINKED from linear:", desc, re.I
@@ -1225,7 +1251,7 @@ def sync_pair(
     # If human deliberately removed AgentCore on a *non-linked* issue we never see it.
     # On linked HEA pairs we re-attach so Paperclip remains the AI delegate surface.
     if not agentcore_owner:
-        if team_key != "HEA":
+        if team_key != CLIENT_TEAM_KEY:
             events.append(f"sync delegate skip {lin_ident}: app not on team {team_key}")
         elif dry_run:
             events.append(f"DRY sync delegate {lin_ident}: set Paperclip/AgentCore")
@@ -1242,7 +1268,7 @@ def sync_pair(
 
     # Title + priority + labels: PC → Linear only while AgentCore is AI owner (HEA).
     # Labels use hea_label_map.py: add mapped PC labels; never strip Linear-only labels.
-    if agentcore_owner and team_key == "HEA" and not refuse_status:
+    if agentcore_owner and team_key == CLIENT_TEAM_KEY and not refuse_status:
         meta_input: dict[str, Any] = {}
         pc_title = (row.get("title") or "").strip()
         lin_title = (lin.get("title") or "").strip()
@@ -1276,9 +1302,9 @@ def sync_pair(
                     events.append(f"sync meta {pc}->{lin_ident}: {','.join(bits)}")
         else:
             events.append(f"sync meta {pc}->{lin_ident}: already aligned ({label_note})")
-    elif team_key == "HEA" and not agentcore_owner:
+    elif team_key == CLIENT_TEAM_KEY and not agentcore_owner:
         events.append(f"sync meta {pc}->{lin_ident}: skip (AgentCore not delegate)")
-    elif team_key == "HEA" and refuse_status:
+    elif team_key == CLIENT_TEAM_KEY and refuse_status:
         events.append(f"sync meta {pc}->{lin_ident}: skip (terminal Linear)")
 
     # Status sync Paperclip → Linear
@@ -1417,7 +1443,7 @@ def sync_comments_lin_to_pc(
             continue
         # Idempotency marker only — do NOT append ``linear:{lin_ident}``.
         # That marker on mirrored comments was re-parsed as a pair link on
-        # standing routines (HEA-62) and reopened completed Linear issues.
+        # standing routines (TEAM-62) and reopened completed Linear issues.
         payload = (
             f"**Linear comment** (`{lin_ident}`)\n\n{body[:3500]}\n\n"
             f"linear-comment:{cid}"

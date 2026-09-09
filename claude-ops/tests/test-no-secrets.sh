@@ -2,13 +2,20 @@
 # test-no-secrets.sh — Scans all files for leaked secrets/tokens/personal data
 set -euo pipefail
 
-PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# pwd -P, not pwd: `git rev-parse --show-toplevel` returns a physical path, and
+# comparing it against a logical one silently matches nothing under a symlinked
+# checkout — the sweep then reports PASS over an empty file list.
+PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 
 pass=0
+skipped=0
 fail=0
 
 ok()   { echo "  PASS: $1"; pass=$((pass+1)); }
 err()  { echo "  FAIL: $1 — $2"; fail=$((fail+1)); }
+# A check that could not run is neither PASS nor FAIL. Counting it as PASS is how
+# a gate silently stops gating; SKIP keeps the summary honest.
+skip() { echo "  SKIP: $1"; skipped=$((skipped+1)); }
 
 echo "Scanning for secrets and personal data in: $PLUGIN_ROOT"
 echo ""
@@ -36,6 +43,82 @@ build_exclude_args() {
 
 EXCLUDE_ARGS=$(build_exclude_args)
 
+# The list of tracked files to sweep, one path per line in a temp file.
+#
+# Why this exists: the sweeps below used `grep -r --include=*.ext`, which silently
+# skipped every tracked file whose extension was not on the list — 320 of 1044
+# files (30%), including all 122 extensionless `bin/*` executables, all 88 `.py`,
+# and every .tsx/.service/.timer/.plist. Proved by injecting a home path into
+# `bin/ops-doctor`: the suite reported 27 passed. The same string in a .md failed
+# immediately. Driving the sweep from `git ls-files` means a new file type is
+# covered the day it is added, with no list to maintain.
+#
+# The list lives in a FILE, not a variable: bash discards NUL bytes inside
+# command substitution (with only a warning), so a NUL-separated list collapses
+# into one concatenated path and grep silently matches nothing — a fix that looks
+# like it works and gates nothing. Paths here contain no newlines, so line-based
+# is safe and verifiable.
+TRACKED_FILE="$(mktemp -t ops-no-secrets-tracked.XXXXXX)"
+USE_TRACKED=0
+build_tracked_list() {
+  local root_git filter rel
+  root_git="$(git -C "$PLUGIN_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -z "$root_git" ]] && return 1
+  filter="$(printf '%s\n' "${EXCLUDE_DIRS[@]}" | paste -sd '|' -)"
+  (cd "$root_git" && git ls-files) \
+    | grep -vE "(^|/)($filter)/" \
+    | while IFS= read -r rel; do
+        case "$root_git/$rel" in
+          "$PLUGIN_ROOT"/*) printf '%s\n' "$root_git/$rel" ;;
+        esac
+      done > "$TRACKED_FILE"
+  [[ -s "$TRACKED_FILE" ]]
+}
+if build_tracked_list; then
+  USE_TRACKED=1
+else
+  skip "tracked-file sweep unavailable (not a git checkout)"
+fi
+
+# The three structural checks below sweep a WIDER list than the rest of this
+# file: they include `tests/`, which EXCLUDE_DIRS drops. A client UUID pasted
+# into a test fixture is a leak like any other, and the scanner's own directory
+# being the one unscanned place is exactly the kind of hole this file exists to
+# close. Only the four files that must be able to quote the shapes they forbid
+# are exempt, by exact path: this script, its allowlist, and the two
+# negative-control suites whose whole job is to plant a forbidden value and
+# prove the gate refuses it. Per path, never per directory.
+TRACKED_ALL_FILE="$(mktemp -t ops-no-secrets-all.XXXXXX)"
+trap 'rm -f "$TRACKED_FILE" "$TRACKED_ALL_FILE"' EXIT
+build_tracked_all_list() {
+  local root_git rel
+  root_git="$(git -C "$PLUGIN_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -z "$root_git" ]] && return 1
+  (cd "$root_git" && git ls-files) \
+    | grep -vE '(^|/)(node_modules|\.git|\.claude|\.worktrees)/' \
+    | grep -vE '(^|/)tests/(test-no-secrets\.sh|known-public-constants\.txt|test-pii-gate-fires\.sh|test-pre-commit-hook-blocks\.sh)$' \
+    | while IFS= read -r rel; do
+        case "$root_git/$rel" in
+          "$PLUGIN_ROOT"/*) printf '%s\n' "$root_git/$rel" ;;
+        esac
+      done > "$TRACKED_ALL_FILE"
+  [[ -s "$TRACKED_ALL_FILE" ]]
+}
+build_tracked_all_list || : > "$TRACKED_ALL_FILE"
+
+# grep over every tracked file INCLUDING tests/, regardless of extension.
+grep_tracked_all() {
+  [[ -s "$TRACKED_ALL_FILE" ]] || return 0
+  tr '\n' '\0' < "$TRACKED_ALL_FILE" | xargs -0 grep -IE "$@" 2>/dev/null || true
+}
+
+# grep over every tracked file, regardless of extension.
+grep_tracked() {
+  [[ "$USE_TRACKED" == "1" ]] || return 0
+  # xargs -a keeps the file list out of the argv of this shell.
+  tr '\n' '\0' < "$TRACKED_FILE" | xargs -0 grep -IE "$@" 2>/dev/null || true
+}
+
 # Helper: scan for a pattern, return matches (excluding placeholder/example patterns)
 scan_pattern() {
   local label="$1"
@@ -44,12 +127,7 @@ scan_pattern() {
 
   local results
   # shellcheck disable=SC2086
-  results=$(grep -rE "$pattern" $EXCLUDE_ARGS \
-    --include="*.sh" --include="*.md" --include="*.json" \
-    --include="*.toml" --include="*.ts" --include="*.js" \
-    --include="*.mjs" --include="*.yaml" --include="*.yml" \
-    --include="*.env" --include="*.txt" \
-    "$PLUGIN_ROOT" 2>/dev/null || true)
+  results=$(grep_tracked "$pattern")
 
   # Filter out example/placeholder lines
   results=$(echo "$results" | grep -vE "(example|placeholder|your[-_]|<[A-Z_]+>|\[YOUR_|TODO|REPLACE|fake|dummy|test-token|sk_test_EXAMPLE)" || true)
@@ -194,6 +272,128 @@ scan_tests_literal "Stripe sk_live_" 'sk_live_[a-zA-Z0-9]{24,}'
 scan_tests_literal "GitHub ghp_" 'ghp_[a-zA-Z0-9]{36,}'
 scan_tests_literal "Slack xoxb-" 'xoxb-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{20,}'
 
+# === Third-party identifiers (2026-09-09) ===
+#
+# Every identity check below this point until now was denylist-driven, and a
+# denylist can only hold the OPERATOR's own terms. That is not a tuning gap, it
+# is structural: nobody can enumerate a client's workspace UUIDs, team keys, or
+# issue ids in advance, so no denylist will ever contain them. The consequence
+# was ten of one client's Linear UUIDs, their team key in ~25 places plus a
+# filename, and a set of their real issue ids sitting in a public repo while the
+# scanner reported PASS.
+#
+# So these three checks invert the rule. They need no operator configuration and
+# they never SKIP: an identifier-shaped literal FAILS unless it is listed in
+# tests/known-public-constants.txt with a stated reason. Adding a client's id
+# then requires arguing for it in a diff, which is the behaviour we want.
+
+CONSTANTS_FILE="$PLUGIN_ROOT/tests/known-public-constants.txt"
+allowed_constants() {
+  # $1 = prefix ("uuid" or "issue-prefix"); prints one allowed value per line.
+  [[ -f "$CONSTANTS_FILE" ]] || return 0
+  grep -E "^$1:" "$CONSTANTS_FILE" 2>/dev/null | sed "s/^$1://" | grep -vE '^\s*$' || true
+}
+
+# --- UUID literals must be published vendor constants ---
+# A UUID in source is either a public constant or somebody's private identifier,
+# and the two are indistinguishable by shape. Default to refusing it.
+third_party_uuid_check() {
+  # Deliberately NOT gated on USE_TRACKED: the narrow list drops tests/, so a
+  # tree whose only files live there would skip this check entirely. And a skip
+  # here is an error, not a neutral outcome — there is no legitimate run of this
+  # suite without a git file list, so refusing to run means refusing to gate.
+  if [[ ! -s "$TRACKED_ALL_FILE" ]]; then
+    err "UUID literal check could not run" \
+      "no git file list — this check cannot be skipped; run the suite inside the checkout"
+    return
+  fi
+  local allow hits
+  allow=$(allowed_constants uuid)
+  # A UUID whose first two groups are all zeroes is a hand-written fixture, not
+  # anybody's identifier — that shape cannot be produced by a UUID generator.
+  # This covers the plain nil UUID and counters like
+  # 00000000-0000-4000-8000-000000000001 that test files use for ordering.
+  hits=$(grep_tracked_all -oH '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' \
+    | grep -viE ':(0{8}-0{4}|1{8}-1{4})-' || true)
+  # Drop the documented constants. -F -x on the captured value only, so a real
+  # id that merely CONTAINS an allowed one still fails.
+  if [[ -n "$allow" && -n "$hits" ]]; then
+    hits=$(echo "$hits" | awk -F: -v OFS=: '{v=$NF; print v"\t"$0}' \
+      | grep -vFf <(echo "$allow") | cut -f2- || true)
+  fi
+  hits=$(echo "$hits" | grep -v '^$' || true)
+  if [[ -n "$hits" ]]; then
+    local count; count=$(echo "$hits" | wc -l | tr -d ' ')
+    err "undocumented UUID literal(s)" \
+      "$count match(es) — a third party's id belongs in the environment (docs/LOCAL-PREFS.md); a public vendor constant belongs in tests/known-public-constants.txt with a reason"
+    echo "$hits" | head -5 | sed 's/^/    /'
+  else
+    ok "no undocumented UUID literals ($(echo "$allow" | grep -c . || true) documented)"
+  fi
+}
+third_party_uuid_check
+
+# --- Issue-tracker keys must use a neutral prefix ---
+# A key like `<CLIENT>-1141` names one organisation's Linear workspace as
+# surely as their
+# hostname would. The placeholder is TEAM-<n>, from $LINEAR_CLIENT_TEAM_KEY.
+third_party_issue_key_check() {
+  if [[ ! -s "$TRACKED_ALL_FILE" ]]; then
+    err "issue-tracker key check could not run" \
+      "no git file list — this check cannot be skipped; run the suite inside the checkout"
+    return
+  fi
+  local allow alt hits
+  allow=$(allowed_constants issue-prefix)
+  hits=$(grep_tracked_all -oH '\b[A-Z][A-Z0-9]{1,9}-[0-9]{1,6}\b' || true)
+  if [[ -n "$allow" ]]; then
+    # Anchor on the captured token so `HEATEAM-1` cannot ride in on `TEAM`.
+    alt=$(echo "$allow" | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd '|' -)
+    hits=$(echo "$hits" | grep -vE ":($alt)-[0-9]{1,6}$" || true)
+  fi
+  hits=$(echo "$hits" | grep -v '^$' || true)
+  if [[ -n "$hits" ]]; then
+    local count; count=$(echo "$hits" | wc -l | tr -d ' ')
+    err "third-party issue-tracker key(s)" \
+      "$count match(es) — use TEAM-<n> and read the real key from \$LINEAR_CLIENT_TEAM_KEY"
+    echo "$hits" | head -5 | sed 's/^/    /'
+  else
+    ok "no third-party issue-tracker keys"
+  fi
+}
+third_party_issue_key_check
+
+# --- Operator locale must not be baked into code ---
+# An IANA zone in a script says where the operator lives. Prose may name zones
+# as examples (the setup guide lists several), so this covers executables and
+# config only, and allows a zone that sits next to its own env-var default.
+operator_timezone_check() {
+  if [[ ! -s "$TRACKED_ALL_FILE" ]]; then
+    err "timezone check could not run" \
+      "no git file list — this check cannot be skipped; run the suite inside the checkout"
+    return
+  fi
+  local code_list hits
+  code_list="$(mktemp -t ops-no-secrets-code.XXXXXX)"
+  grep -vE '\.(md|txt|mdx)$' "$TRACKED_ALL_FILE" > "$code_list" || true
+  if [[ -s "$code_list" ]]; then
+    hits=$(tr '\n' '\0' < "$code_list" | xargs -0 grep -InE \
+      '\b(Africa|America|Asia|Atlantic|Australia|Europe|Indian|Pacific)/[A-Za-z_]+' 2>/dev/null \
+      | grep -vE '(OPS_TZ|TZ:-|TIMEZONE|timeZone|Etc/UTC|Europe/Asia)' || true)
+  fi
+  rm -f "$code_list"
+  hits=$(echo "${hits:-}" | grep -v '^$' || true)
+  if [[ -n "$hits" ]]; then
+    local count; count=$(echo "$hits" | wc -l | tr -d ' ')
+    err "hardcoded IANA timezone(s) in code/config" \
+      "$count site(s) — express schedules in UTC and read the display zone from \$OPS_TZ"
+    echo "$hits" | head -5 | sed 's/^/    /'
+  else
+    ok "no hardcoded operator timezone in code/config"
+  fi
+}
+operator_timezone_check
+
 # --- User preferences must never be tracked ---
 # Preferences hold the operator's own identity, contacts, and channel config.
 # .gitignore alone is not a guard: a file already tracked stays tracked, and
@@ -257,7 +457,16 @@ identity_denylist_check() {
   fi
   terms=$(echo "$terms" | grep -vE '^\s*$' | sort -u || true)
   if [[ -z "$terms" ]]; then
-    ok "operator identity denylist (none configured — set \$OPS_PII_DENYLIST or .pii-denylist to enable)"
+    # A check that verifies nothing must not report PASS. In CI there is no
+    # operator denylist to load, so this branch is the normal CI path: report it
+    # as SKIP so nobody reads "27 passed" as "identity was checked". Set
+    # OPS_PII_DENYLIST_REQUIRED=1 (or run with a denylist) to make it a failure.
+    if [[ "${OPS_PII_DENYLIST_REQUIRED:-0}" == "1" ]]; then
+      err "operator identity denylist not configured" \
+        "OPS_PII_DENYLIST_REQUIRED=1 but no denylist found"
+      return
+    fi
+    skip "operator identity denylist NOT CHECKED (no denylist configured — set \$OPS_PII_DENYLIST or .pii-denylist)"
     return
   fi
   local alt
@@ -279,9 +488,53 @@ identity_denylist_check() {
 }
 identity_denylist_check
 
+# --- Operator identity in tracked FILENAMES ---
+# A content grep can never see this: a brand or personal name in a path leaks the
+# same fact as one in a line. Found in the wild — a tracked asset filename carried
+# the operator's company name while every content check reported PASS.
+identity_filename_check() {
+  local file="" terms=""
+  for cand in "${OPS_PII_DENYLIST_FILE:-}" "$PLUGIN_ROOT/.pii-denylist" \
+              "$PLUGIN_ROOT/../.pii-denylist" "$HOME/.config/claude-ops/pii-denylist.txt"; do
+    [[ -n "$cand" && -f "$cand" ]] && { file="$cand"; break; }
+  done
+  [[ -n "$file" ]] && terms="$(grep -vE '^[[:space:]]*(#|$)' "$file" 2>/dev/null || true)"
+  if [[ -n "${OPS_PII_DENYLIST:-}" ]]; then
+    terms+=$'\n'"$(echo "$OPS_PII_DENYLIST" | tr ',[:space:]' '\n\n')"
+  fi
+  terms=$(echo "$terms" | grep -vE '^[[:space:]]*$' | sort -u || true)
+  if [[ -z "$terms" ]]; then
+    skip "operator identity in filenames NOT CHECKED (no denylist configured)"
+    return
+  fi
+  if [[ "$USE_TRACKED" != "1" || ! -s "$TRACKED_ALL_FILE" ]]; then
+    skip "operator identity in filenames NOT CHECKED (no tracked-file list)"
+    return
+  fi
+  # Match REPO-RELATIVE paths only. The absolute path contains the checkout
+  # location — which on a developer machine includes their own username, a live
+  # denylist term — so scanning absolute paths flags every file in the repo.
+  # That is a property of where the clone sits, not of what is committed.
+  local hits
+  hits=$(sed "s|^$PLUGIN_ROOT/||" "$TRACKED_FILE" \
+    | grep -iF -f <(echo "$terms") 2>/dev/null || true)
+  if [[ -n "$hits" ]]; then
+    local count; count=$(echo "$hits" | wc -l | tr -d ' ')
+    err "operator identity term(s) in tracked filename(s)" "$count path(s)"
+    echo "$hits" | head -5 | sed 's/^/    /'
+  else
+    ok "no operator identity terms in tracked filenames"
+  fi
+}
+identity_filename_check
+
 echo ""
 echo "---"
-echo "Results: $pass passed, $fail failed"
+if [[ "${skipped:-0}" -gt 0 ]]; then
+  echo "Results: $pass passed, $fail failed, $skipped skipped (a SKIP verified nothing)"
+else
+  echo "Results: $pass passed, $fail failed"
+fi
 echo ""
 
 if (( fail > 0 )); then

@@ -39,7 +39,7 @@ New events are **off by default** (no channels) until opted in.
 {
   "pocket": {
     "notifications": {
-      "tz": "Europe/Amsterdam",
+      "tz": "Etc/UTC",
       "default_cooldown": 300,
       "defaults": { "channels": [], "severity": "medium" },
       "events": {

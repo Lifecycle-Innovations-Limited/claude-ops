@@ -22,6 +22,10 @@ ENV_PATHS = (
 DEFAULT_API = "http://127.0.0.1:18790"
 AURORA_COMPANY_ID = os.environ.get("PAPERCLIP_AURORA_COMPANY_ID", "")
 CLIENT_COMPANY_ID = os.environ.get("PAPERCLIP_CLIENT_COMPANY_ID", "")
+# Linear team key for the configured client team. A team key identifies another
+# organisation's workspace, so it is read from the environment and never
+# committed. "TEAM" is a neutral placeholder, not anybody's real key.
+CLIENT_TEAM_KEY = os.environ.get("LINEAR_CLIENT_TEAM_KEY", "TEAM")
 PRIMARY_COMPANY_ID = CLIENT_COMPANY_ID
 CLAIM_TTL_SECONDS = 2 * 60 * 60
 
@@ -38,7 +42,7 @@ PR_URL_RE = re.compile(r"https?://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)")
 # Linear (from PC):    [Paperclip {pc_id}] {semantic}
 # Never nest [Paperclip …] or re-wrap issue-id brackets.
 _PC_PREFIX_RE = re.compile(r"^\s*\[Paperclip\s+([A-Z]{2,6}-\d+)\]\s*", re.I)
-# Incomplete storm residue: "[Paperclip HEA-1141" (no closing bracket, title truncated)
+# Incomplete storm residue: "[Paperclip TEAM-1141" (no closing bracket, title truncated)
 _PC_PREFIX_OPEN_RE = re.compile(r"^\s*\[Paperclip\s+([A-Z]{2,6}-\d+)\s*$", re.I)
 _PC_ANY_RE = re.compile(r"\s*\[Paperclip\s+[A-Z]{2,6}-\d+\]\s*", re.I)
 _PC_TRUNC_RE = re.compile(r"\s*\[Paperclip\s+[A-Z]{2,6}-\d*\s*$", re.I)

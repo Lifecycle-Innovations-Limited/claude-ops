@@ -76,7 +76,14 @@ print('\n  - '.join(subjects))
 fi
 
 # ── Build digest ──────────────────────────────────────────────────────────
-TIMESTAMP=$(TZ="Europe/Amsterdam" date "+%H:%M %Z")
+# Timestamp in the operator's own zone. Set OPS_TZ to override; unset means
+# the host's zone, so no locale is baked into this repo. TZ="" would force
+# UTC, which is why the variable is only exported when it has a value.
+if [[ -n "${OPS_TZ:-}" ]]; then
+  TIMESTAMP=$(TZ="$OPS_TZ" date "+%H:%M %Z")
+else
+  TIMESTAMP=$(date "+%H:%M %Z")
+fi
 DIGEST="*4h Inbox Digest* ($TIMESTAMP)
 
 $WA_SUMMARY

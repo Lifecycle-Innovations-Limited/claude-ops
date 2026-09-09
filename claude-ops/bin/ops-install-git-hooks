@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Wire this repo's .githooks/ into git so the pre-commit PII gate actually runs.
+#
+# Without this, .githooks/pre-commit is dead code: git only runs hooks from
+# core.hooksPath (or .git/hooks), and nothing set either. The hook was present,
+# executable, and never invoked — a gate that exists but does not gate.
+#
+# Safe to run repeatedly. Works from the primary checkout or any worktree.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$repo_root" ]]; then
+  echo "not a git repository" >&2
+  exit 1
+fi
+
+# .githooks lives at the top of the marketplace repo, which may be one level
+# above the plugin dir depending on checkout shape.
+hooks_dir=""
+for cand in "$repo_root/.githooks" "$repo_root/../.githooks"; do
+  [[ -d "$cand" ]] && { hooks_dir="$(cd "$cand" && pwd)"; break; }
+done
+if [[ -z "$hooks_dir" ]]; then
+  echo "no .githooks directory found under $repo_root" >&2
+  exit 1
+fi
+
+chmod +x "$hooks_dir"/* 2>/dev/null || true
+git config core.hooksPath "$hooks_dir"
+
+echo "core.hooksPath -> $hooks_dir"
+echo "installed: $(ls -1 "$hooks_dir" | tr '\n' ' ')"
+
+if [[ -z "${OPS_PII_DENYLIST:-}" ]] \
+  && [[ ! -f "${OPS_PII_DENYLIST_FILE:-/nonexistent}" ]] \
+  && [[ ! -f "$repo_root/.pii-denylist" ]] \
+  && [[ ! -f "$HOME/.config/claude-ops/pii-denylist.txt" ]]; then
+  echo
+  echo "WARNING: no operator identity denylist configured, so the identity"
+  echo "portion of the pre-commit gate will pass while checking nothing."
+  echo "Create \$HOME/.config/claude-ops/pii-denylist.txt (gitignored, one term"
+  echo "per line: your names, brands, hostnames) to enable it."
+fi

@@ -102,8 +102,23 @@ else
 fi
 
 # Public-repo: no home paths or mailbox addresses in this package.
-if grep -RE --exclude-dir='__pycache__' --include='*.py' --include='*.md' --include='*.yaml' \
-  '(/Users/|/home/[a-z]|@gmail\.com|@samfeldt)' "$HP" >/dev/null; then
+#
+# The operator's own domains must NOT be hardcoded here — writing one into the
+# detector publishes exactly what the detector exists to keep out. Machine-specific
+# terms load from the out-of-repo denylist (same resolution order as
+# tests/test-no-secrets.sh and .githooks/pre-commit); only generic shapes live here.
+priv_pat='(/Users/|/home/[a-z]|@gmail\.com)'
+for cand in "${OPS_PII_DENYLIST_FILE:-}" "$PLUGIN_ROOT/.pii-denylist" \
+            "$PLUGIN_ROOT/../.pii-denylist" "$HOME/.config/claude-ops/pii-denylist.txt"; do
+  if [[ -n "$cand" && -f "$cand" ]]; then
+    extra=$(grep -vE '^[[:space:]]*(#|$)' "$cand" 2>/dev/null \
+      | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd '|' - || true)
+    [[ -n "$extra" ]] && priv_pat="${priv_pat%)}|$extra)"
+    break
+  fi
+done
+if grep -REi --exclude-dir='__pycache__' --include='*.py' --include='*.md' --include='*.yaml' \
+  "$priv_pat" "$HP" >/dev/null; then
   err "hermes-plugin contains a private path or mailbox"
 else
   ok "hermes-plugin has no private paths or mailboxes"
