@@ -140,11 +140,14 @@ If `--teams` or `--hybrid` is requested but the flag is off, warn and fall back 
 **GLOBAL mode**: Scan the project registry:
 
 ```bash
-REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
-jq -r '.projects[] | "\(.alias)|\(.paths[0])|\(.repos[0] // "none")|\(.gsd // false)"' "$REGISTRY" 2>/dev/null
+# registry.json is written by scripts/ops-gsd-registry-sync.sh into the data dir.
+# Its schema is name/path/remote_url/status/phase/branch — NOT the alias/paths/repos/gsd
+# shape of registry.example.json. lib/registry-path.sh resolves the real file.
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}" . "${CLAUDE_PLUGIN_ROOT}/lib/registry-path.sh"
+jq -r '.projects[] | "\(.name)|\(.path)|\(.remote_url // "none")|\(.has_roadmap // false)|\(.status // "")|\(.phase // "")|\(.branch // "")"' "$REGISTRY" 2>/dev/null
 ```
 
-For each project path, verify it exists on disk. Skip missing paths.
+For each project path, verify it exists on disk. Skip missing paths. Skip entries under `archives/`, `scratch/` or `.worktrees/` unless `--project` names them; the sync dedupes on `remote_url` and keeps the extra copies in `aliases`.
 
 ### 1b. Parallel audit dispatch
 
