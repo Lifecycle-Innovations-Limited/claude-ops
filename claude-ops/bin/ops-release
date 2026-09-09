@@ -332,7 +332,14 @@ $diffstat"
   fi
   [ -z "$notes" ] && notes="${commits:-- (no notes provided)}"
 fi
-if [ "$ai_used" -eq 1 ]; then
+# Only add a "### Changed" heading when the body has none of its own — notes
+# passed with --notes often already carry "### Fixed" or "### Added", and a
+# second heading would ship an empty section into the GitHub release notes.
+notes_has_heading=0
+if printf '%s\n' "$notes" | grep -qE '^### (Added|Changed|Fixed|Removed)'; then
+  notes_has_heading=1
+fi
+if [ "$ai_used" -eq 1 ] || [ "$notes_has_heading" -eq 1 ]; then
   changelog_section=$'## ['"$NEW"$'] - '"$REL_DATE"$'\n\n'"$notes"$'\n'
 else
   changelog_section=$'## ['"$NEW"$'] - '"$REL_DATE"$'\n\n### Changed\n'"$notes"$'\n'
