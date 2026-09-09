@@ -6,7 +6,14 @@ Every cron tick:
      using the cached Bearer (or API key). Classify:
        healthy        — 200 OK, MCP server responded with init result
        token_expired  — 401, refresh_token exists → recoverable via OAuth refresh
-       needs_bootstrap— 401, no refresh_token → user must do interactive consent
+       needs_bootstrap— 401 after presenting a credential that was rejected →
+                        user must do interactive consent
+       no_probe_credential
+                      — 401 with no credential to present. NOT a fault: Claude
+                        Code keeps OAuth tokens for natively-authenticated HTTP
+                        MCPs in memory, unreachable to any external prober, so
+                        those servers answer every session fine while probing
+                        401 forever. Never dispatches the fixer or a reauth.
        cloudflare_ua  — 403 from Cloudflare's bot challenge (UA filter)
        unreachable    — DNS / connection failure
        server_error   — 5xx
@@ -275,6 +282,13 @@ def probe(url: str, mcp_name: str = "") -> dict:
             if kc_tok:
                 headers["Authorization"] = f"Bearer {kc_tok}"
 
+    # Did we find ANY credential to present? If not, a 401 tells us nothing
+    # about the server — only that the probe knocked with empty hands. Claude
+    # Code holds OAuth tokens for natively-authenticated HTTP MCPs in memory,
+    # where no external prober can reach them, so those servers work perfectly
+    # in every session while probing 401 forever.
+    had_credential = "Authorization" in headers
+
     body = json.dumps({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {
@@ -296,12 +310,22 @@ def probe(url: str, mcp_name: str = "") -> dict:
             pass
         if code == 401:
             has_refresh = bool(tokens and tokens.get("refresh_token"))
+            if has_refresh:
+                state = "token_expired"
+            elif had_credential:
+                # We presented a credential and it was rejected — a real
+                # bootstrap is needed.
+                state = "needs_bootstrap"
+            else:
+                # Nothing to present. Not a diagnosis; the probe is blind here.
+                state = "no_probe_credential"
             return {
-                "state": "token_expired" if has_refresh else "needs_bootstrap",
+                "state": state,
                 "http_code": 401,
                 "detail": err[:120],
                 "has_refresh_token": has_refresh,
                 "tokens_present": bool(tokens),
+                "had_probe_credential": had_credential,
             }
         if code == 403:
             # Cloudflare 1010 bot challenge etc.
@@ -471,7 +495,8 @@ def main() -> int:
 
     cur_state = {}
     summary = {"healthy": 0, "token_expired": 0, "needs_bootstrap": 0,
-               "cloudflare_ua": 0, "server_error": 0, "unreachable": 0, "other": 0}
+               "no_probe_credential": 0, "cloudflare_ua": 0, "server_error": 0,
+               "unreachable": 0, "other": 0}
     recovered = []
     degraded = []
 
@@ -529,15 +554,28 @@ def main() -> int:
                     summary["token_expired"] -= 1
                     summary["healthy"] += 1
 
-        # Diff: degraded means previously healthy now not
-        if prev == "healthy" and cur_state[name]["state"] != "healthy":
-            degraded.append((name, cur_state[name]["state"], cur_state[name].get("detail", "")))
+        # Diff: degraded means previously healthy now not. A blind probe
+        # (no credential to present) is not evidence of degradation.
+        now_state = cur_state[name]["state"]
+        if prev == "healthy" and now_state == "no_probe_credential":
+            # Silent on purpose — but say so in the log, so a token that really
+            # did disappear leaves a trace instead of vanishing into a state
+            # this watchdog is built to ignore.
+            log(f"{name}: probe lost its credential (was healthy); not treating "
+                f"as degraded — verify by calling one of its tools in a session")
+        if (prev == "healthy" and now_state != "healthy"
+                and now_state != "no_probe_credential"):
+            degraded.append((name, now_state, cur_state[name].get("detail", "")))
         if prev and prev != "healthy" and cur_state[name]["state"] == "healthy":
             recovered.append(name)
 
     # Auto-reauth via Playwright for needs_bootstrap MCPs
     if AUTO_REAUTH and REAUTH_SCRIPT.exists():
         for name, info in cur_state.items():
+            # Only a probe that presented a credential and was rejected proves
+            # a bootstrap is needed. no_probe_credential proves nothing, and
+            # driving a browser OAuth flow off that guess wastes a run and can
+            # leave a stranded consent window.
             if info.get("state") != "needs_bootstrap":
                 continue
             host = (urlparse.urlparse(info["url"]).hostname or "").lower()
