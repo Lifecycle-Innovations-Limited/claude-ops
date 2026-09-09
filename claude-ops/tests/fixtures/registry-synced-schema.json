@@ -1,0 +1,50 @@
+{
+  "updated": "2026-09-08T20:40:08Z",
+  "total": 2,
+  "projects": [
+    {
+      "name": "example-api",
+      "path": "/tmp/example-api/",
+      "source": "Developer",
+      "remote_url": "https://github.com/example-org/example-api.git",
+      "last_commit_ts": 1787758201,
+      "phase": "none",
+      "status": "paused",
+      "milestone": "",
+      "next_action": "",
+      "plan_ref": "",
+      "remaining_tasks": "0",
+      "blockers": "0",
+      "has_git": true,
+      "branch": "dev",
+      "uncommitted": 0,
+      "has_roadmap": true,
+      "has_milestones": true,
+      "has_handoff": false,
+      "total_phases": "1",
+      "aliases": []
+    },
+    {
+      "name": "example-web",
+      "path": "/tmp/example-web/",
+      "source": "Developer",
+      "remote_url": "https://github.com/example-org/example-web.git",
+      "last_commit_ts": 1787700000,
+      "phase": "2",
+      "status": "active",
+      "milestone": "",
+      "next_action": "",
+      "plan_ref": "",
+      "remaining_tasks": "3",
+      "blockers": "0",
+      "has_git": true,
+      "branch": "main",
+      "uncommitted": 0,
+      "has_roadmap": false,
+      "has_milestones": false,
+      "has_handoff": false,
+      "total_phases": "0",
+      "aliases": []
+    }
+  ]
+}

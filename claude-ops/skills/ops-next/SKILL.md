@@ -101,7 +101,8 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-unread 2>/dev/null || echo '{}'
 ### GSD active phases
 
 ```!
-for d in $(jq -r '.projects[] | select(.gsd == true) | .paths[]' "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null); do
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}" . "${CLAUDE_PLUGIN_ROOT}/lib/registry-path.sh"
+for d in $(jq -r '.projects[] | select(.has_roadmap == true) | .path' "$REGISTRY" 2>/dev/null); do
   expanded="${d/#\~/$HOME}"
   if [ -f "$expanded/.planning/STATE.md" ]; then
     alias=$(basename "$expanded")
@@ -165,7 +166,7 @@ Find highest-priority issue that is in progress or unstarted.
 ### Priority 6 — GSD WORK
 
 From GSD state, find the highest revenue-impact active phase across all projects.
-Revenue weighting: read `revenue.stage` and `priority` from `scripts/registry.json` — projects with lower priority numbers (higher priority) and revenue stage of `growth` or `active` outrank `pre-launch` or `development`. Within the same tier, prioritize closest-to-done phases.
+Revenue weighting: the synced registry (`${OPS_DATA_DIR}/registry.json`, schema `name/path/remote_url/status/phase/branch`) carries no `revenue` or `priority` field. Rank by `status` (`active` > `paused` > `none`), then `last_commit_ts` (newest first), then `remaining_tasks` (fewest first). Any `priority`/`revenue` values live in `preferences.json` under `projects.<name>`, if set.
 
 ---
 
