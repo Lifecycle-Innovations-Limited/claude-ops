@@ -188,6 +188,21 @@
 
 ## [3.10.11] - 2026-09-09
 
+### Fixed
+
+- fix(ops-release): a `--notes` body that already opens its own
+  `### Added|Changed|Fixed|Removed` section no longer gets an empty
+  `### Changed` prepended. The GitHub release workflow awk-parses the CHANGELOG
+  section verbatim, so v3.10.10's published notes opened with a heading that had
+  nothing under it and had to be patched by hand.
+  `tests/test-ops-release-changelog-heading.sh` lifts the block straight out of
+  `bin/ops-release`, so the test cannot drift from the shipped code; it is red
+  against v3.10.10 and green here.
+
+### Changed
+
+- docs(ops-rules): precedence tiers plus rules 11-17.
+
 ### Testing
 
 - test(hooks): `tests/test-hooks.sh` fails any hook that is neither
