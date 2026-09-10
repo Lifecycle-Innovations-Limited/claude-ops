@@ -4,6 +4,8 @@
 
 - Removed every hard-coded Claude model id and `model:` frontmatter pin; agents, skills and cron scripts now inherit the session default (env-overridable per script).
 
+- Fixed `ops-release` to move the existing `Unreleased` body into the new version once, leaving a blank `Unreleased` heading for future changes.
+
 - fix(security): a third party's identifiers can no longer reach this public
   repo. Every identity check was denylist-driven, and a denylist can only hold
   the operator's OWN terms — it structurally cannot hold a client's workspace

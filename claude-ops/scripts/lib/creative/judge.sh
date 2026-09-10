@@ -55,7 +55,7 @@ creative_judge() {
     return 0
   fi
 
-  # ── LLM verdict via claude_invoke Opus 4.7 ──────────────────────────────
+  # ── LLM verdict via claude_invoke (session default unless overridden) ───
   local live_count
   live_count="$(printf '%s' "$live_context_json" | jq 'length' 2>/dev/null || echo 0)"
 

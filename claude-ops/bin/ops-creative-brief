@@ -205,7 +205,11 @@ EOF
   # shellcheck disable=SC1091
   source "$PLUGIN_ROOT/scripts/lib/claude-invoke.sh" 2>/dev/null || true
   if command -v claude_invoke >/dev/null 2>&1; then
-    printf '%s' "$prompt" | claude_invoke --model sonnet --no-session-persistence -p > "$out"
+    local -a claude_args=(--no-session-persistence -p)
+    if [ -n "${OPS_CREATIVE_BRIEF_CLAUDE_MODEL:-}" ]; then
+      claude_args=(--model "$OPS_CREATIVE_BRIEF_CLAUDE_MODEL" "${claude_args[@]}")
+    fi
+    printf '%s' "$prompt" | claude_invoke "${claude_args[@]}" > "$out"
   else
     printf '%s' "$prompt" | claude -p > "$out"
   fi

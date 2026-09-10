@@ -2117,7 +2117,7 @@ The binary owns all deterministic, money-touching logic (cap pre-flight, pause s
     "enabled": true,
     "video": "veo-3.1-fast-generate-preview",
     "image": "gemini-3.1-flash-image-preview",
-    "analysis": { "multimodal": "gemini-3.1-pro-preview", "judge": "claude-opus-4-7" },
+    "analysis": { "multimodal": "gemini-3.1-pro-preview", "judge": "" },
     "daily_gen_spend_cap_usd": 5,
     "neurons": { "enabled": false }
   },
