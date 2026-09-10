@@ -76,7 +76,7 @@ for agent_file in "${agent_files[@]}"; do
     err "missing 'description' field in frontmatter"
   fi
 
-  # --- 3. model field present ---
+  # --- 3. model field (optional: inherits session default if omitted) ---
   if echo "$frontmatter" | grep -q "^model:"; then
     model_val=$(fm_val model)
     if [[ -n "$model_val" ]]; then
@@ -85,7 +85,7 @@ for agent_file in "${agent_files[@]}"; do
       err "empty 'model' field"
     fi
   else
-    err "missing 'model' field — agents must declare a model"
+    ok "model omitted (inherits session default)"
   fi
 
   # --- 4. maxTurns must be a positive integer if present ---
