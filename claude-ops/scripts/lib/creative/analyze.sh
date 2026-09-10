@@ -5,7 +5,7 @@
 #   creative_analyze <asset_path> <copy_text> <models_json>
 #
 # models_json example:
-#   '{"multimodal":"gemini-3.1-pro-preview","judge":"claude-opus-4-7",
+#   '{"multimodal":"gemini-3.1-pro-preview","judge":"",
 #     "image":"gemini-flash-latest","api_key_ref":"env:GEMINI_API_KEY"}'
 #
 # Prints ONE JSON:
@@ -299,10 +299,10 @@ Return ONLY a JSON object with these exact keys. Example:
   printf '%s' "$raw_text"
 }
 
-# ── _claude_copy_score — Opus 4.7 copy analysis ──────────────────────────────
+# ── _claude_copy_score — Claude copy analysis (session default model unless overridden) ──────────────────────────────
 _claude_copy_score() {
   local copy_text="$1"
-  local model="${2:-claude-opus-4-7}"
+  local model="${2:-}"
 
   local prompt
   prompt="$(cat <<PROMPT
@@ -332,7 +332,7 @@ PROMPT
 )"
 
   local raw
-  raw="$(claude_invoke -p "$prompt" --model "$model" --no-session-persistence --output-format json 2>/dev/null || true)"
+  raw="$(claude_invoke -p "$prompt" ${model:+--model "$model"} --no-session-persistence --output-format json 2>/dev/null || true)"
   printf '%s' "$raw"
 }
 
@@ -346,7 +346,7 @@ creative_analyze() {
   local multimodal_model image_model judge_model api_key_ref
   multimodal_model="$(printf '%s' "$models_json" | jq -r '.multimodal // "gemini-3.1-pro-preview"' 2>/dev/null)"
   image_model="$(printf '%s' "$models_json" | jq -r '.image // "gemini-flash-latest"' 2>/dev/null)"
-  judge_model="$(printf '%s' "$models_json" | jq -r '.judge // "claude-opus-4-7"' 2>/dev/null)"
+  judge_model="$(printf '%s' "$models_json" | jq -r '.judge // empty' 2>/dev/null)"
   api_key_ref="$(printf '%s' "$models_json" | jq -r '.api_key_ref // "env:GEMINI_API_KEY"' 2>/dev/null)"
 
   local gemini_key

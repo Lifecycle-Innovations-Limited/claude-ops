@@ -203,7 +203,7 @@ USER
 
   local output
   output="$(claude_invoke \
-    --model claude-haiku-4-5 \
+    ${OPS_SEO_BLOG_MODEL:+--model "$OPS_SEO_BLOG_MODEL"} \
     --no-session-persistence \
     -p "${system_prompt}
 ${user_prompt}" 2>/dev/null || echo '')"

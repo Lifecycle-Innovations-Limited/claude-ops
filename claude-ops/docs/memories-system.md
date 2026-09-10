@@ -193,7 +193,7 @@ The daemon triggers extraction when **any** of these conditions are met:
 | Volume-based | Message count in `~/.whatsapp-bridge/.health` increased by more than 5 |
 | Manual       | `/ops:doctor --run-memory-extractor`                                   |
 
-The extractor uses `claude-haiku-4-5-20251001` (fast + cheap) for all extraction work. It merges new information into existing profiles rather than overwriting, so context accumulates over time.
+The extractor uses the model named in `OPS_MEMORY_EXTRACTOR_MODEL` (no pin in the script) for all extraction work. It merges new information into existing profiles rather than overwriting, so context accumulates over time.
 
 > [!NOTE]
 > Haiku 4.5 is used deliberately here — memory extraction is a high-frequency, low-reasoning-depth workload. The tradeoff: cost stays low enough to run every 30 min on every user's machine.

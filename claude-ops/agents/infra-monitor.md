@@ -1,7 +1,6 @@
 ---
 name: infra-monitor
 description: "OPS specialist: Multi-service infrastructure health checker"
-model: claude-sonnet-4-6
 effort: medium
 maxTurns: 25
 tools:

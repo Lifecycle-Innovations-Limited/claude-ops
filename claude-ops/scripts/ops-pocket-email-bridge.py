@@ -419,7 +419,7 @@ Schema:
     claude_bin = os.environ.get("POCKET_CLAUDE_BIN", str(HOME / ".local/bin/claude"))
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     cmd = [claude_bin, "--dangerously-skip-permissions",
-           "--model", parser_model, "-p", prompt]
+           *(["--model", parser_model] if parser_model else []), "-p", prompt]
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=90)
     except subprocess.TimeoutExpired:
@@ -484,7 +484,7 @@ def drain_inbound(cfg: dict) -> tuple[int, int]:
         new_messages = messages
 
     opens = open_questions()
-    parser_model = cfg.get("parser_model", "claude-sonnet-4-6")
+    parser_model = cfg.get("parser_model", "")  # empty = inherit session default
     scanned = 0
     routed = 0
     new_last_id = last_id

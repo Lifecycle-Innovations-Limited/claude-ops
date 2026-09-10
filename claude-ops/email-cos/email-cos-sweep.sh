@@ -77,7 +77,7 @@ rc=0
 # `|| rc=$?` keeps `set -e`/`pipefail` from aborting before the metrics line
 # below runs. Under pipefail the pipeline status is claude's exit code.
 printf '%s' "$RENDERED_PROMPT" | \
-  claude --print --model "$EMAIL_COS_SWEEP_MODEL" --dangerously-skip-permissions \
+  claude --print ${EMAIL_COS_SWEEP_MODEL:+--model "$EMAIL_COS_SWEEP_MODEL"} --dangerously-skip-permissions \
     --strict-mcp-config --mcp-config '{"mcpServers":{}}' --allowedTools Bash >> "$SD/sweep.out" 2>&1 || rc=$?
 secs=$(( $(date +%s) - start ))
 echo "{\"ts\":\"$ts\",\"tier\":\"sweep\",\"exit\":$rc,\"secs\":$secs,\"new\":$new}" >> "$SD/metrics.jsonl"

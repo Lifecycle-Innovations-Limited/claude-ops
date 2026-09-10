@@ -23,7 +23,7 @@ The recap marquee is a launchd-managed daemon that aggregates per-session Claude
 | Path                                                       | Role                                                       |
 | ---------------------------------------------------------- | ---------------------------------------------------------- |
 | `${CLAUDE_PLUGIN_ROOT}/scripts/recap/daemon.sh`            | Background loop — polls inputs, calls digest.sh when stale |
-| `${CLAUDE_PLUGIN_ROOT}/scripts/recap/digest.sh`            | Synthesizes one-line digest via `claude -p --model claude-sonnet-4-6` |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/recap/digest.sh`            | Synthesizes one-line digest via `claude -p` (session default model; `OPS_RECAP_MODEL` overrides) |
 | `${CLAUDE_PLUGIN_ROOT}/scripts/recap/marquee.sh`           | Tmux-side scroller (called from `status-right`)            |
 | `${CLAUDE_PLUGIN_ROOT}/hooks/recap-capture.sh`             | Stop hook → writes `/tmp/claude-recap-<sid>`               |
 | `${CLAUDE_PLUGIN_ROOT}/hooks/recap-tool-activity.sh`       | PostToolUse hook → live activity per session               |

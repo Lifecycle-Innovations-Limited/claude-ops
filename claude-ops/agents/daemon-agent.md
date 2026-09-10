@@ -1,7 +1,6 @@
 ---
 name: ops-daemon-manager
 description: "OPS specialist: Manages the ops background daemon"
-model: claude-sonnet-4-6
 effort: low
 maxTurns: 10
 memory: project

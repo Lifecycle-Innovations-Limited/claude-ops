@@ -55,7 +55,7 @@ creative_judge() {
     return 0
   fi
 
-  # ── LLM verdict via claude_invoke Opus 4.7 ──────────────────────────────
+  # ── LLM verdict via claude_invoke (session default unless overridden) ───
   local live_count
   live_count="$(printf '%s' "$live_context_json" | jq 'length' 2>/dev/null || echo 0)"
 
@@ -95,10 +95,10 @@ PROMPT
 )"
 
   local raw
-  raw="$(claude_invoke -p "$prompt" --model "claude-opus-4-7" --no-session-persistence --output-format json 2>/dev/null || true)"
+  raw="$(claude_invoke -p "$prompt" ${OPS_CREATIVE_JUDGE_MODEL:+--model "$OPS_CREATIVE_JUDGE_MODEL"} --no-session-persistence --output-format json 2>/dev/null || true)"
 
   _judge_retry_llm() {
-    claude_invoke -p "$prompt" --model "claude-opus-4-7" --no-session-persistence --output-format json 2>/dev/null || true
+    claude_invoke -p "$prompt" ${OPS_CREATIVE_JUDGE_MODEL:+--model "$OPS_CREATIVE_JUDGE_MODEL"} --no-session-persistence --output-format json 2>/dev/null || true
   }
 
   local parsed

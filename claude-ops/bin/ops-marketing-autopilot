@@ -2227,18 +2227,19 @@ delegate_claude() {
   . "${_lib_dir}/generate.sh" 2>/dev/null || { report "- ERROR: could not source generate.sh"; return 1; }
 
   # Build models_json from config
-  local mm_model img_model api_key_ref
+  local mm_model img_model judge_model api_key_ref
   mm_model="$(ap_get "$proj" '.creative_gen.analysis.multimodal')"; mm_model="${mm_model:-gemini-3.1-pro-preview}"
   img_model="$(ap_get "$proj" '.creative_gen.image')"; img_model="${img_model:-gemini-3.1-flash-image-preview}"
+  judge_model="$(ap_get "$proj" '.creative_gen.analysis.judge')"; judge_model="${judge_model:-${OPS_CREATIVE_JUDGE_MODEL:-}}"
   api_key_ref="$(ap_get "$proj" '.creative_gen.api_key')"; api_key_ref="${api_key_ref:-env:GEMINI_API_KEY}"
   local models_json
   models_json="$(jq -n \
     --arg mm "$mm_model" \
     --arg img "$img_model" \
-    --arg judge "claude-opus-4-7" \
+    --arg judge "$judge_model" \
     --arg key "$api_key_ref" \
     '{multimodal:$mm,image:$img,judge:$judge,api_key_ref:$key}' 2>/dev/null \
-    || echo '{"multimodal":"gemini-3.1-pro-preview","image":"gemini-3.1-flash-image-preview","judge":"claude-opus-4-7","api_key_ref":"env:GEMINI_API_KEY"}')"
+    || echo '{"multimodal":"gemini-3.1-pro-preview","image":"gemini-3.1-flash-image-preview","judge":"","api_key_ref":"env:GEMINI_API_KEY"}')"
 
   local state_dir="${OPS_DATA_DIR}/autopilot_state/${proj}"
   local asset_dir="${state_dir}/assets"
@@ -2267,7 +2268,11 @@ delegate_claude() {
     fi
     local brief_prompt="Generate a brief for a single ad creative for brand '${brand_name}' with voice: ${brand_voice}. Return ONLY JSON: {\"prompt\":\"<vivid 9:16 portrait ad description>\",\"type\":\"video\",\"copy\":\"<headline copy 5-8 words>\"}"
     local brief_raw
-    brief_raw="$(claude_invoke -p "$brief_prompt" --model claude-opus-4-7 --no-session-persistence --output-format json 2>/dev/null || echo '')"
+    local -a brief_args=(-p "$brief_prompt" --no-session-persistence --output-format json)
+    if [ -n "${OPS_MARKETING_AUTOPILOT_MODEL:-}" ]; then
+      brief_args+=(--model "$OPS_MARKETING_AUTOPILOT_MODEL")
+    fi
+    brief_raw="$(claude_invoke "${brief_args[@]}" 2>/dev/null || echo '')"
     local brief_json
     brief_json="$(extract_json "$brief_raw" 2>/dev/null || echo '')"
     if [ -z "$brief_json" ] || [ "$brief_json" = "{}" ]; then
@@ -2550,7 +2555,11 @@ Return ONLY a JSON object with these exact keys:
 Return ONLY the JSON, no other text."
 
   local derive_raw
-  derive_raw="$(claude_invoke -p "$derive_prompt" --model claude-opus-4-7 --no-session-persistence --output-format json 2>/dev/null || echo '')"
+  local -a derive_args=(-p "$derive_prompt" --no-session-persistence --output-format json)
+  if [ -n "${OPS_MARKETING_AUTOPILOT_MODEL:-}" ]; then
+    derive_args+=(--model "$OPS_MARKETING_AUTOPILOT_MODEL")
+  fi
+  derive_raw="$(claude_invoke "${derive_args[@]}" 2>/dev/null || echo '')"
   local strategy
   strategy="$(extract_json "$derive_raw" 2>/dev/null || echo '')"
   if [ -z "$strategy" ] || [ "$strategy" = "{}" ]; then

@@ -145,7 +145,7 @@ USER
 )"
 
   claude_invoke \
-    --model claude-haiku-4-5 \
+    ${OPS_SOCIAL_CALENDAR_MODEL:+--model "$OPS_SOCIAL_CALENDAR_MODEL"} \
     --no-session-persistence \
     -p "${system_prompt}
 ${user_prompt}" 2>/dev/null || echo ''

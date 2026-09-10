@@ -1,7 +1,6 @@
 ---
 name: comms-scanner
 description: "OPS specialist: Scans all communication channels for FULL inbox state (not just unread)"
-model: claude-sonnet-4-6
 effort: low
 maxTurns: 10
 tools:

@@ -203,7 +203,7 @@ USER
 )"
 
   claude_invoke \
-    --model claude-haiku-4-5 \
+    ${OPS_EMAIL_DRAFT_MODEL:+--model "$OPS_EMAIL_DRAFT_MODEL"} \
     --no-session-persistence \
     -p "${system_prompt}
 ${user_prompt}" </dev/null 2>/dev/null | _strip_fences || echo ''
@@ -254,7 +254,7 @@ USER
 )"
 
   claude_invoke \
-    --model claude-haiku-4-5 \
+    ${OPS_EMAIL_DRAFT_MODEL:+--model "$OPS_EMAIL_DRAFT_MODEL"} \
     --no-session-persistence \
     -p "${system_prompt}
 ${user_prompt}" </dev/null 2>/dev/null | _strip_fences || echo ''

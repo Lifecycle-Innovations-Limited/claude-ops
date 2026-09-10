@@ -36,7 +36,7 @@ Config (env or ~/.config/email-cos/config.sh + ~/.mcp-secrets.env):
   POCKET_STATE_DIR              Pipeline state dir (default /var/lib/pocket-pipeline).
   COS_TG_SEND_CAP               Max button messages per send run (default 8).
   POCKET_CLAUDE_BIN             claude binary for the LLM mapper (default: resolved).
-  POCKET_RESPONDER_MODEL        LLM model for freeform mapping (default claude-haiku-4-5).
+  POCKET_RESPONDER_MODEL        LLM model for freeform mapping (unset = session default model).
   POCKET_RESPONDER_LLM          "0" disables the LLM fallback (fast-path only).
   POCKET_RESPONDER_LLM_THRESHOLD  Min confidence to act on an LLM mapping (default 0.6).
   POCKET_TYPEFULLY_JS           typefully.js path (social publish). Default: skill path.
@@ -239,7 +239,7 @@ def _redraft_email(er, orig_body, instruction):
     if not cb:
         return ""
     model = os.environ.get("POCKET_REDRAFT_MODEL") or os.environ.get(
-        "POCKET_RESPONDER_MODEL", "claude-haiku-4-5"
+        "POCKET_RESPONDER_MODEL", ""
     )
     prompt = (
         "You revise a DRAFT email reply per the owner's instruction. Output ONLY JSON: "
@@ -252,7 +252,7 @@ def _redraft_email(er, orig_body, instruction):
         f"CURRENT DRAFT:\n{orig_body}\n\nOWNER INSTRUCTION:\n{instruction}\n\nJSON:"
     )
     try:
-        r = subprocess.run([cb, "-p", prompt, "--model", model, *_CLAUDE_FLAGS],
+        r = subprocess.run([cb, "-p", prompt, *(["--model", model] if model else []), *_CLAUDE_FLAGS],
                            capture_output=True, text=True, timeout=120, env=os.environ)
         out = (r.stdout or "").strip()
     except Exception as e:
@@ -547,7 +547,7 @@ def _validate_action(ent):
     }
     ctx = _gather_action_context(ent)
     rules = _load_approval_rules()
-    model = os.environ.get("POCKET_RESPONDER_MODEL", "claude-haiku-4-5")
+    model = os.environ.get("POCKET_RESPONDER_MODEL", "")
     prompt = (
         "You are a pre-send guard for an action the owner already approved. Decide "
         "PROCEED (send it) or HOLD (it looks stale, already handled, or breaks a rule). "
@@ -558,7 +558,7 @@ def _validate_action(ent):
         "If context is empty or unclear, default to proceed. JSON:"
     )
     try:
-        r = subprocess.run([cb, "-p", prompt, "--model", model, *_CLAUDE_FLAGS],
+        r = subprocess.run([cb, "-p", prompt, *(["--model", model] if model else []), *_CLAUDE_FLAGS],
                            capture_output=True, text=True, timeout=90, env=os.environ)
         out = (r.stdout or "").strip()
     except Exception as e:
@@ -702,7 +702,7 @@ def _llm_map(codemap, message):
         ob = "  options: " + "; ".join(f"{o['key']}) {o['label'][:50]}" for o in opts) if opts else ""
         lines.append(f"{code}: {ent.get('title','')[:120]}{ob}")
     catalog = "\n".join(lines)
-    model = os.environ.get("POCKET_RESPONDER_MODEL", "claude-haiku-4-5")
+    model = os.environ.get("POCKET_RESPONDER_MODEL", "")
     prompt = (
         "You map a person's freeform approval message to decisions on a fixed list "
         "of pending items. Output ONLY a JSON array, no prose.\n\n"
@@ -718,7 +718,7 @@ def _llm_map(codemap, message):
         f"PENDING ITEMS:\n{catalog}\n\nMESSAGE:\n{message}\n\nJSON:"
     )
     try:
-        r = subprocess.run([cb, "-p", prompt, "--model", model, *_CLAUDE_FLAGS],
+        r = subprocess.run([cb, "-p", prompt, *(["--model", model] if model else []), *_CLAUDE_FLAGS],
                            capture_output=True, text=True, timeout=90, env=os.environ)
         out = (r.stdout or "").strip()
     except Exception as e:

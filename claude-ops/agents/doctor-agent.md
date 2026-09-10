@@ -1,7 +1,6 @@
 ---
 name: doctor-agent
 description: "OPS specialist: Diagnoses and auto-fixes ops plugin configuration errors, manifest issues, broken…"
-model: claude-sonnet-4-6
 effort: high
 maxTurns: 30
 tools:

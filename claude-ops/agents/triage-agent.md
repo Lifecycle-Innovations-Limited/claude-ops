@@ -1,7 +1,6 @@
 ---
 name: triage-agent
 description: "OPS specialist: Investigates a specific issue from Sentry, Linear, or GitHub"
-model: claude-sonnet-4-6
 effort: high
 maxTurns: 40
 tools:
