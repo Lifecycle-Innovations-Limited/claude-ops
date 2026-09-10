@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed `ops-post-update-migrate` so a SessionStart hook from an older cached
+  plugin version cannot rsync its stale tree over a newer `cache/ops/current`.
+
+- Bounded the `ops-speedup` Docker reclaimable-space probe so an unavailable
+  Docker daemon cannot hang diagnostics or the full test suite indefinitely.
+
 ## [3.10.13] - 2026-09-10
 
 - Removed every hard-coded Claude model id and `model:` frontmatter pin; agents, skills and cron scripts now inherit the session default (env-overridable per script).

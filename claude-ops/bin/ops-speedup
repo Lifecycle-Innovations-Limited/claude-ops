@@ -174,7 +174,16 @@ to_mb() {
 
 docker_reclaimable_mb() {
   command -v docker >/dev/null 2>&1 || { echo 0; return; }
-  to_mb "$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1)"
+  local reclaimable
+  if command -v timeout >/dev/null 2>&1; then
+    reclaimable=$(timeout 5 docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1) || { echo 0; return; }
+  elif command -v gtimeout >/dev/null 2>&1; then
+    reclaimable=$(gtimeout 5 docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1) || { echo 0; return; }
+  else
+    echo 0
+    return
+  fi
+  to_mb "$reclaimable"
 }
 
 json_escape() {

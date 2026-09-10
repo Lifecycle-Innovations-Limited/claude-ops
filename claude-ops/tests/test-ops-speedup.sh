@@ -54,6 +54,7 @@ assert_true "has runtime-first health model" grep -q 'runtime-first' "$BIN"
 assert_true "CPU hog kill gated by aggressive" grep -q 'Despite the legacy name, default cleanup only demotes hogs' "$BIN"
 assert_true "GPU probe uses ioreg without sudo" grep -q 'ioreg -r -d1 -w0 -c IOGPU' "$BIN"
 assert_true "long-lived hog threshold is 3 hours" grep -q 'elapsed >= 10800' "$BIN"
+assert_true "Docker reclaimable probe is timeout-bounded" grep -Eq '(g?timeout) [0-9]+ docker system df' "$BIN"
 
 # Drive the shipped process-state classifier through the real binary. A PID that
 # appears blocked in only one sample is transient; only the PID blocked in all
