@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Guards refresh_current_directory in bin/ops-post-update-migrate:
 #   1. cache-GC bookkeeping (.orphaned_at, .in_use) never rides into current/
-#   2. installed_plugins.json is rewritten atomically, keeping its mode
+#   2. stale sessions cannot downgrade current/, while forward updates still work
+#   3. installed_plugins.json is rewritten atomically, keeping its mode
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT="${SCRIPT:-$ROOT/bin/ops-post-update-migrate}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -86,7 +88,7 @@ JSON
 		CLAUDE_CONFIG_DIR="$config_dir" \
 		CLAUDE_PLUGIN_DATA_DIR="$data_dir" \
 		PATH="$path_override" \
-		bash "$ROOT/bin/ops-post-update-migrate"
+		bash "$SCRIPT"
 
 	# 1. real content copied through
 	[[ -f "$current_dir/bin/marker-file" ]] ||
@@ -133,7 +135,78 @@ PY
 	printf 'ok: %s\n' "$label"
 }
 
+run_downgrade_case() {
+	local base="$TMP/refuse-downgrade"
+	local plugin_root="$base/cache/ops-marketplace/ops/2.0.0"
+	local current_dir="$base/cache/ops-marketplace/ops/current"
+	local config_dir="$base/config"
+	local data_dir="$base/data"
+
+	mkdir -p "$plugin_root/.claude-plugin" "$plugin_root/bin" \
+		"$current_dir/.claude-plugin" "$current_dir/bin" \
+		"$config_dir/plugins" "$data_dir/.migrated" "$base/home"
+	printf '{"version":"2.0.0"}\n' >"$plugin_root/.claude-plugin/plugin.json"
+	printf 'older\n' >"$plugin_root/bin/older-marker"
+	printf '{"version":"3.0.0"}\n' >"$current_dir/.claude-plugin/plugin.json"
+	printf 'newer\n' >"$current_dir/bin/newer-marker"
+	touch "$data_dir/.migrated/v2.0.0"
+
+	HOME="$base/home" \
+		CLAUDE_PLUGIN_ROOT="$plugin_root" \
+		CLAUDE_CONFIG_DIR="$config_dir" \
+		CLAUDE_PLUGIN_DATA_DIR="$data_dir" \
+		bash "$SCRIPT"
+
+	[[ -f "$current_dir/bin/newer-marker" ]] ||
+		fail "refuse-downgrade: older plugin root replaced newer current/"
+	[[ ! -e "$current_dir/bin/older-marker" ]] ||
+		fail "refuse-downgrade: older payload was copied into newer current/"
+	[[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$current_dir/.claude-plugin/plugin.json")" == "3.0.0" ]] ||
+		fail "refuse-downgrade: current/ version was downgraded"
+
+	printf 'ok: refuse-downgrade\n'
+}
+
+run_forward_update_case() {
+	local base="$TMP/allow-forward-update"
+	local plugin_root="$base/cache/ops-marketplace/ops/3.0.0"
+	local current_dir="$base/cache/ops-marketplace/ops/current"
+	local config_dir="$base/config"
+	local data_dir="$base/data"
+
+	mkdir -p "$plugin_root/.claude-plugin" "$plugin_root/bin" \
+		"$current_dir/.claude-plugin" "$current_dir/bin" \
+		"$config_dir/plugins" "$data_dir/.migrated" "$base/home"
+	printf '{"version":"3.0.0"}\n' >"$plugin_root/.claude-plugin/plugin.json"
+	printf 'newer\n' >"$plugin_root/bin/newer-marker"
+	printf '{"version":"2.0.0"}\n' >"$current_dir/.claude-plugin/plugin.json"
+	# Avoid rsync's size+mtime quick-check treating equal-length fixture files
+	# created in the same second as unchanged.
+	touch -t 203001010000 "$plugin_root/.claude-plugin/plugin.json"
+	printf 'older\n' >"$current_dir/bin/older-marker"
+	touch "$data_dir/.migrated/v3.0.0"
+
+	HOME="$base/home" \
+		CLAUDE_PLUGIN_ROOT="$plugin_root" \
+		CLAUDE_CONFIG_DIR="$config_dir" \
+		CLAUDE_PLUGIN_DATA_DIR="$data_dir" \
+		bash "$SCRIPT"
+
+	[[ -f "$current_dir/bin/newer-marker" ]] ||
+		fail "allow-forward-update: newer plugin root did not refresh current/"
+	[[ ! -e "$current_dir/bin/older-marker" ]] ||
+		fail "allow-forward-update: stale payload survived refresh"
+	local actual_version
+	actual_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$current_dir/.claude-plugin/plugin.json")"
+	[[ "$actual_version" == "3.0.0" ]] ||
+		fail "allow-forward-update: current/ version is $actual_version, want 3.0.0"
+
+	printf 'ok: allow-forward-update\n'
+}
+
 run_case rsync-path rsync
 run_case cp-fallback nossync
+run_downgrade_case
+run_forward_update_case
 
-printf 'PASS: current/ stays free of cache-GC markers; installed_plugins.json rewritten atomically\n'
+printf 'PASS: current/ stays free of cache-GC markers, blocks downgrades, permits forward updates, and rewrites installed_plugins.json atomically\n'
