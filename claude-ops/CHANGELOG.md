@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [3.10.13] - 2026-09-10
+
 - Removed every hard-coded Claude model id and `model:` frontmatter pin; agents, skills and cron scripts now inherit the session default (env-overridable per script).
 
 - Fixed `ops-release` to move the existing `Unreleased` body into the new version once, leaving a blank `Unreleased` heading for future changes.
@@ -189,6 +191,7 @@
 - **ops-desk (new skill):** `/ops:ops-desk` desk sweep — fans out read-only context agents (batched, Workflow tool) over the owner's open decisions/drafts/payments/sign-offs and returns a ranked, ready-to-approve action queue worked down under the per-draft outbound gate. Complements `/ops:ops-inbox`.
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
+
 
 ## [3.10.12] - 2026-09-09
 
