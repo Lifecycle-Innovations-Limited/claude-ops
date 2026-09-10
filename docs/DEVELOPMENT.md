@@ -122,7 +122,6 @@ Agent `.md` format:
 ---
 name: my-agent
 description: What this agent does and when it is invoked.
-model: claude-sonnet-4-6 # claude-opus-4-6 | claude-sonnet-4-6 | claude-haiku-4-5
 effort: medium
 maxTurns: 25
 tools:
@@ -141,11 +140,7 @@ memory: project # project | user | none
 Agent instructions here.
 ```
 
-**Model selection convention:**
-
-- `claude-opus-4-6` — C-suite agents (`yolo-ceo`, `yolo-cfo`, `yolo-coo`, `yolo-cto`)
-- `claude-sonnet-4-6` — Scanner, monitor, and fix agents
-- `claude-haiku-4-5` — High-frequency lightweight agents (memory extraction)
+**Model convention:** never set `model:`. Every agent inherits the session default. A pinned id drifts as models are retired and fails outright when an organization restricts it (`/ops:ops-orchestrate` died on `claude-opus-4-6` this way). Scripts that call `claude -p` follow the same rule: `--model` only when an env var is set.
 
 Agents are invoked from skills via the `Agent` tool. They never call other agents (note `Agent` in `disallowedTools` for most agents — this prevents recursive spawning).
 
@@ -320,7 +315,7 @@ If `test-no-secrets.sh` fails, the commit must not proceed. This is enforced by 
 **Agents (`agents/`):**
 
 - Agents are read-only by default — add `Write` and `Edit` to `disallowedTools` unless the agent genuinely needs to write files
-- C-suite agents run on `claude-opus-4-6`; scanner and fix agents run on `claude-sonnet-4-6`
+- Agents carry no `model:` pin; every one inherits the session default
 - Agents must not call other agents (`Agent` in `disallowedTools`) to prevent recursive spawning
 
 **Secrets and credentials:**

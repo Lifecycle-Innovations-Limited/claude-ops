@@ -91,6 +91,40 @@ else
   err "section does not start with '## [version] - date'"
 fi
 
+# 6. A release drains Unreleased into the new version exactly once.
+# shellcheck source=../scripts/lib/release-changelog.sh
+. "$PLUGIN_ROOT/scripts/lib/release-changelog.sh"
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+cat > "$tmpdir/in.md" <<'MD'
+# Changelog
+
+## Unreleased
+
+### Fixed
+- first pending fix
+- second pending fix
+
+## [1.2.3] - 2026-01-01
+
+### Changed
+- old release
+MD
+unreleased="$(release_unreleased_body "$tmpdir/in.md")"
+printf '## [1.2.4] - 2026-01-02
+
+%s
+' "$unreleased" > "$tmpdir/section.md"
+release_write_changelog "$tmpdir/in.md" "$tmpdir/section.md" "$tmpdir/out.md"
+if [[ "$(grep -c 'first pending fix' "$tmpdir/out.md")" == "1" ]] \
+  && [[ "$(grep -c '^## Unreleased$' "$tmpdir/out.md")" == "1" ]] \
+  && awk '/^## Unreleased$/{getline; if ($0=="") ok=1} END{exit !ok}' "$tmpdir/out.md" \
+  && grep -q '^## \[1.2.4\] - 2026-01-02$' "$tmpdir/out.md"; then
+  ok "Unreleased is drained into the new version exactly once"
+else
+  err "Unreleased body was duplicated, retained, or lost"
+fi
+
 echo ""
 echo "---"
 echo "Results: $pass passed, $fail failed"

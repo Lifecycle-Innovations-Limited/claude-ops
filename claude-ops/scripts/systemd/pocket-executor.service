@@ -13,7 +13,7 @@ Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
 Environment=POCKET_CLAUDE_BIN=/usr/local/bin/claude
 Environment=POCKET_EXEC_CWD=__HOME__
 Environment=POCKET_MAX_CONCURRENT=3
-Environment=POCKET_WORKER_MODEL=claude-sonnet-4-6
+# POCKET_WORKER_MODEL is intentionally unset: workers inherit the session default model.
 Environment=POCKET_WORKER_TIMEOUT=1800
 ExecStart=__HOME__/.venv-pocket/bin/python3 __PLUGIN_ROOT__/scripts/ops-cron-pocket-executor.py
 StandardOutput=append:__HOME__/.claude/state/pocket/executor-stdout.log

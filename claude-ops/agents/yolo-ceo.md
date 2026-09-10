@@ -1,7 +1,6 @@
 ---
 name: yolo-ceo
 description: "OPS specialist: Strategic priority agent"
-model: claude-opus-4-6
 effort: high
 maxTurns: 35
 tools:

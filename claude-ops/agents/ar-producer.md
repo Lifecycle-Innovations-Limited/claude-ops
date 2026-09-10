@@ -1,7 +1,6 @@
 ---
 name: ar-producer
 description: "OPS specialist: A&R a record like a dance-pop hit label owner + master producer"
-model: opus
 tools: Bash, Read, WebSearch, mcp__audio-ar__full_ar_report, mcp__audio-ar__analyze_track, mcp__audio-ar__mood_score, mcp__audio-ar__transcribe_vocals, mcp__audio-ar__separate_stems, mcp__audio-ar__render_visuals, mcp__audio-ar__analyze_stems, mcp__audio-ar__cyanite_analyze, mcp__audio-ar__musicai_analyze, mcp__audio-ar__soundcharts_lookup
 ---
 

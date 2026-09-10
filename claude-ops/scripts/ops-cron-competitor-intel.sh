@@ -309,7 +309,7 @@ Output format (STRICT):
 ...
 EOF
 
-  SYNTHESIS=$(claude_invoke --model claude-sonnet-4-6 --no-session-persistence \
+  SYNTHESIS=$(claude_invoke ${OPS_COMPETITOR_INTEL_MODEL:+--model "$OPS_COMPETITOR_INTEL_MODEL"} --no-session-persistence \
     --system-prompt "$SYSTEM_PROMPT" -p < "$PROMPT_FILE" 2>>"$LOG" || echo "")
   rm -f "$PROMPT_FILE"
 else

@@ -1,7 +1,6 @@
 ---
 name: yolo-cto
 description: "OPS specialist: Technical health agent"
-model: claude-opus-4-6
 effort: high
 maxTurns: 40
 tools:

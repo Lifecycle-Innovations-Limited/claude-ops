@@ -82,7 +82,6 @@ Task:
 name: <kebab-name>
 description: <one-paragraph: when to use, with 2-3 example scenarios in <example>...</example> tags>
 tools: <comma-separated tool list scoped to genuine needs>
-model: sonnet
 ---
 <persona body — 100-300 words covering capabilities, operating constraints, output format>
 
@@ -90,8 +89,12 @@ Final line of your output: 'NEW: <name>' or 'SKIP: <reason>'."
 
   nohup bash -c "
     . '$PLUGIN_ROOT/scripts/lib/claude-invoke.sh'
-    printf '%s' \"\$1\" | claude_invoke -p --model claude-sonnet-4-6 --dangerously-skip-permissions --no-session-persistence > '$drafter_log' 2>&1
-  " _ "$draft_prompt" </dev/null >/dev/null 2>&1 &
+    drafter_args=(-p --dangerously-skip-permissions --no-session-persistence)
+    if [ -n "\$2" ]; then
+      drafter_args+=(--model "\$2")
+    fi
+    printf '%s' "\$1" | claude_invoke "\${drafter_args[@]}" > '$drafter_log' 2>&1
+  " _ "$draft_prompt" "${OPS_AGENT_DRAFTER_MODEL:-}" </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
 fi
 

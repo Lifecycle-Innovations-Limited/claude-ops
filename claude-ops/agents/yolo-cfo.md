@@ -1,7 +1,6 @@
 ---
 name: yolo-cfo
 description: "OPS specialist: Financial analysis agent"
-model: claude-opus-4-6
 effort: high
 maxTurns: 35
 tools:

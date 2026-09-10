@@ -23,7 +23,7 @@ All 21 agents in claude-ops v2.1.0. Agent files live in `agents/`.
 > Agents are spawned by skills — they are not invoked directly. Each has a `memory` scope for cross-session learning and a defined `effort` level that controls token budget.
 
 > [!IMPORTANT]
-> **v1.1.0 model bumps:** All scanner, fix, and daemon agents upgraded to **`claude-sonnet-4-6`**. All C-suite analysts upgraded to **`claude-opus-4-6`**. The `memory-extractor` stays on Haiku for cost — it's the only background service that runs every 30 min on every box.
+> **v1.1.0 model bumps:** All scanner, fix, and daemon agents upgraded to **session default (no pin)**. All C-suite analysts upgraded to **session default (no pin)**. The `memory-extractor` stays on Haiku for cost — it's the only background service that runs every 30 min on every box.
 
 ---
 
@@ -33,14 +33,14 @@ These agents run in the background, feeding structured JSON data to the main ski
 
 | Agent             | Model               | Effort | maxTurns | Tools            | Consumed by               |
 | ----------------- | ------------------- | ------ | -------- | ---------------- | ------------------------- |
-| `comms-scanner`   | `claude-sonnet-4-6` | low    | 10       | Bash (read-only) | `ops-inbox`, `ops-go`     |
-| `infra-monitor`   | `claude-sonnet-4-6` | low    | 15       | Bash             | `ops-fires`, `ops-deploy` |
-| `project-scanner` | `claude-sonnet-4-6` | low    | 15       | Bash             | `ops-projects`, `ops-go`  |
-| `revenue-tracker` | `claude-sonnet-4-6` | medium | 20       | Bash             | `ops-revenue`, `ops-go`   |
+| `comms-scanner`   | session default (no pin) | low    | 10       | Bash (read-only) | `ops-inbox`, `ops-go`     |
+| `infra-monitor`   | session default (no pin) | low    | 15       | Bash             | `ops-fires`, `ops-deploy` |
+| `project-scanner` | session default (no pin) | low    | 15       | Bash             | `ops-projects`, `ops-go`  |
+| `revenue-tracker` | session default (no pin) | medium | 20       | Bash             | `ops-revenue`, `ops-go`   |
 
 ### `comms-scanner` · `agents/comms-scanner.md`
 
-- **Model**: `claude-sonnet-4-6`
+- **Model**: session default (no pin)
 - **Effort**: low · **maxTurns**: 10
 - **Memory**: project scope
 - **Tools**: Bash only (read-only)
@@ -48,7 +48,7 @@ These agents run in the background, feeding structured JSON data to the main ski
 
 ### `infra-monitor` · `agents/infra-monitor.md`
 
-- **Model**: `claude-sonnet-4-6`
+- **Model**: session default (no pin)
 - **Effort**: low · **maxTurns**: 15
 - **Memory**: project scope
 - **Tools**: Bash only
@@ -56,7 +56,7 @@ These agents run in the background, feeding structured JSON data to the main ski
 
 ### `project-scanner` · `agents/project-scanner.md`
 
-- **Model**: `claude-sonnet-4-6`
+- **Model**: session default (no pin)
 - **Effort**: low · **maxTurns**: 15
 - **Memory**: project scope
 - **Tools**: Bash only
@@ -64,7 +64,7 @@ These agents run in the background, feeding structured JSON data to the main ski
 
 ### `revenue-tracker` · `agents/revenue-tracker.md`
 
-- **Model**: `claude-sonnet-4-6`
+- **Model**: session default (no pin)
 - **Effort**: medium · **maxTurns**: 20
 - **Memory**: project scope
 - **Tools**: Bash only
@@ -78,7 +78,7 @@ These agents are dispatched when issues are found and need resolution.
 
 ### `triage-agent` · `agents/triage-agent.md`
 
-- **Model**: `claude-sonnet-4-6`
+- **Model**: session default (no pin)
 - **Effort**: high · **maxTurns**: 40
 - **Isolation**: worktree (sandboxed)
 - **Purpose**: Investigates a specific issue from Sentry, Linear, or GitHub. Finds the root cause in code, checks if it's already fixed, and either confirms resolution or creates a fix branch with a PR. Runs in an isolated worktree to avoid polluting the main working tree.
@@ -93,7 +93,7 @@ These agents are dispatched when issues are found and need resolution.
 All four run in **parallel** when `/ops:yolo` is invoked. Each uses **Opus 4.6** for maximum analytical depth.
 
 > [!IMPORTANT]
-> **v1.1.0 bump:** all four C-suite agents now run on `claude-opus-4-6` (up from `claude-opus-4-5` in v0.7.x). Expect sharper reasoning and slightly higher per-run token cost.
+> **v1.1.0 bump:** all four C-suite agents now run on session default (no pin) (up from session default (no pin) in v0.7.x). Expect sharper reasoning and slightly higher per-run token cost.
 
 ### C-Suite Spawn Flow
 
@@ -139,28 +139,28 @@ sequenceDiagram
 
 ### `yolo-ceo` · `agents/yolo-ceo.md`
 
-- **Model**: `claude-opus-4-6`
+- **Model**: session default (no pin)
 - **Effort**: high · **maxTurns**: 20
 - **Purpose**: Strategic priority analysis. Growth blockers, resource allocation, build vs. buy decisions, investor-readiness. No sugar-coating.
 - **Competitor slice**: `competitor_vertical_slice ceo` — NEW entrants, comp funding, strategic moves. Factors into market-positioning recommendations.
 
 ### `yolo-cto` · `agents/yolo-cto.md`
 
-- **Model**: `claude-opus-4-6`
+- **Model**: session default (no pin)
 - **Effort**: high · **maxTurns**: 25
 - **Purpose**: Technical health analysis. Architecture, tech debt, production risks, scalability limits, and cut corners. Brutally honest about what will break.
 - **Competitor slice**: `competitor_vertical_slice cto` — changelog/feature page-diffs, Show HN / Launch HN. Benchmarks tech velocity.
 
 ### `yolo-cfo` · `agents/yolo-cfo.md`
 
-- **Model**: `claude-opus-4-6`
+- **Model**: session default (no pin)
 - **Effort**: high · **maxTurns**: 20
 - **Purpose**: Financial analysis. AWS burn rate, runway, ROI on current work, credits expiry, cost anomalies. No optimism without data.
 - **Competitor slice**: `competitor_vertical_slice cfo` — pricing diffs with money tokens (severity:high), comp funding rounds. Quantifies revenue impact of competitor pricing moves.
 
 ### `yolo-coo` · `agents/yolo-coo.md`
 
-- **Model**: `claude-opus-4-6`
+- **Model**: session default (no pin)
 - **Effort**: high · **maxTurns**: 25
 - **Purpose**: Operations execution analysis. Stale work, broken processes, missing automation, communication failures. What the CEO doesn't see.
 - **Competitor slice**: `competitor_vertical_slice coo` — Greenhouse/Lever hiring signals (especially senior roles), layoff signals. Surfaces operational threats and poaching opportunities.
@@ -174,21 +174,21 @@ sequenceDiagram
 
 ### `daemon-agent` · `agents/daemon-agent.md`
 
-- **Model**: `claude-sonnet-4-6`
+- **Model**: session default (no pin)
 - **Effort**: low · **maxTurns**: 10
 - **Memory**: project scope
 - **Purpose**: Manages the ops background daemon — start, stop, restart services, check health. Spawned by `ops-doctor` and `ops-setup` when daemon configuration changes are needed.
 
 ### `doctor-agent` · `agents/doctor-agent.md`
 
-- **Model**: `claude-sonnet-4-6`
+- **Model**: session default (no pin)
 - **Effort**: high · **maxTurns**: 30
 - **Tools**: Bash, Read, Write, Edit, Grep, Glob (no Agent spawning)
 - **Purpose**: Diagnoses and auto-fixes ops plugin configuration errors, manifest issues, broken permissions, invalid JSON, and stale cache copies. Spawned by `/ops:doctor`.
 
 ### `memory-extractor` · `agents/memory-extractor.md`
 
-- **Model**: `claude-haiku-4-5-20251001`
+- **Model**: session default (no pin)
 - **Effort**: low · **maxTurns**: 10
 - **Memory**: project scope
 - **Purpose**: Background agent that extracts user profiles, contact cards, and behavioral patterns from chat history. Runs as a daemon service every 30 minutes. Writes structured markdown to `memories/`. Used by all communication skills for context-aware drafting.

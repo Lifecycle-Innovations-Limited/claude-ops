@@ -18,7 +18,7 @@
 #   respawn [<id>|--all]        Restart sessions (e.g. to pick up a CC upgrade).
 #
 # Dispatch defaults (override via flags):
-#   --model      opus
+#   --model      inherits the session default (or OPS_BG_MODEL when set)
 #   --effort     high
 #   --add-dir    $PWD
 #   --name       (optional) name shown in `claude agents` / fleet TUI for the bg session
@@ -26,7 +26,7 @@
 #
 # Examples:
 #   ops-bg dispatch "audit My-Project repos for cost-leak gaps"
-#   ops-bg dispatch --agent ops:yolo-cto --model sonnet "analyze prod incidents"
+#   ops-bg dispatch --agent ops:yolo-cto --model <model> "analyze prod incidents"
 #   ops-bg list
 #   ops-bg list --json | jq '.[] | select(.status=="busy")'
 #   ops-bg logs 7c5dcf5d
@@ -63,7 +63,7 @@ USAGE() {
 SUB="$1"; shift
 
 cmd_dispatch() {
-  local model="opus"
+  local model="${OPS_BG_MODEL:-}"
   local effort="high"
   local add_dir="$PWD"
   local agent=""
@@ -89,15 +89,20 @@ cmd_dispatch() {
   # Background sessions run on Claude Code's own OAuth credential. A retired
   # relay backend used to inject a --settings overlay here that pinned every
   # session to a base URL and a static relay token; nothing is injected now.
-  local -a args=(--bg --model "$model" --effort "$effort" --add-dir "$add_dir")
+  local -a args=(--bg --effort "$effort" --add-dir "$add_dir")
   if [ -n "$name" ]; then
-    args=(--bg --name "$name" --model "$model" --effort "$effort" --add-dir "$add_dir")
+    args=(--bg --name "$name" --effort "$effort" --add-dir "$add_dir")
+  fi
+  if [ -n "$model" ]; then
+    args+=(--model "$model")
   fi
   if [ -n "$agent" ]; then
     args+=(--agent "$agent")
   fi
   args+=("$prompt")
-  args+=("${extra[@]}")
+  if [ "${#extra[@]}" -gt 0 ]; then
+    args+=("${extra[@]}")
+  fi
   # Never let agents inherit the API key — force OAuth (subscription) auth.
   unset ANTHROPIC_API_KEY
   # Doppler-wrap the launch (unless the caller already provisioned the env):

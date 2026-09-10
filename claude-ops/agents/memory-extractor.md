@@ -1,7 +1,6 @@
 ---
 name: memory-extractor
 description: "OPS specialist: Background agent that extracts user profiles, contact cards, and behavioral patterns…"
-model: sonnet
 effort: low
 maxTurns: 10
 memory: project
@@ -69,7 +68,7 @@ Both sources are optional — the extractor exits cleanly if unavailable.
 
 ## Extraction Model
 
-Uses `claude-haiku-4-5-20251001` for cost efficiency. Typical cost per run: <$0.01.
+Inherits the session default model. Typical cost per run: <$0.01.
 
 ## Memory Format
 

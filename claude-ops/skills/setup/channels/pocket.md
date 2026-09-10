@@ -159,8 +159,7 @@ jq -n \
   --arg addr  "$SELF_EMAIL" \
   --arg from  "$SELF_EMAIL" \
   '{"enabled": true, "self_address": $addr, "from_account": $from,
-    "subject_prefix": "[Pocket]", "label": "Pocket",
-    "parser_model": "claude-sonnet-4-6"}' \
+    "subject_prefix": "[Pocket]", "label": "Pocket"}' \
   > "$HOME/.claude/state/pocket/email-config.json"
 ```
 

@@ -482,8 +482,14 @@ def infer_tasks_from_recording(recording: dict) -> tuple[list[dict], bool]:
         headers["x-api-key"] = (extras or {}).get("_apikey", "")
     _base_url = (extras or {}).get("_base_url", "https://api.anthropic.com")
 
+    # Raw Messages API: no session default to inherit, so the operator names
+    # the model. Never pin it here.
+    infer_model = os.environ.get("POCKET_INFER_MODEL", "")
+    if not infer_model:
+        log("infer: POCKET_INFER_MODEL is unset; set it to the model id the watcher may call")
+        return [], False
     payload = {
-        "model": "claude-haiku-4-5-20251001",
+        "model": infer_model,
         "max_tokens": 1024,
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_msg}],
@@ -591,7 +597,7 @@ class GigaClient:
         if not self.ok or not self._buffered:
             return True
         claude_bin = os.environ.get("POCKET_CLAUDE_BIN", str(HOME / ".local/bin/claude"))
-        parser_model = os.environ.get("GIGA_FLUSH_MODEL", "claude-sonnet-4-6")
+        parser_model = os.environ.get("GIGA_FLUSH_MODEL", "")  # empty = inherit session default
         # Strip ANTHROPIC_API_KEY so claude uses OAuth subscription auth
         env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
 
@@ -611,7 +617,7 @@ class GigaClient:
             f"No other output. No prose. No markdown."
         )
         cmd = [claude_bin, "--dangerously-skip-permissions",
-               "--model", parser_model, "-p", prompt]
+               *(["--model", parser_model] if parser_model else []), "-p", prompt]
         try:
             proc = subprocess.run(cmd, env=env, capture_output=True,
                                   text=True, timeout=120)

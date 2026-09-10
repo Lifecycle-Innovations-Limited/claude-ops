@@ -32,7 +32,6 @@ allowed-tools:
   - mcp__linear__update_issue
   - mcp__linear__create_issue
 effort: high
-model: claude-opus-4-6
 maxTurns: 100
 context: fork
 ---

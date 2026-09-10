@@ -22,13 +22,13 @@ EMAIL_COS_POCKET_STATE_DIR="/var/lib/pocket-pipeline"
 # ── LLM models ───────────────────────────────────────────────────────────────
 
 # L1 sweep classifier (fast, cheap — haiku-class recommended).
-EMAIL_COS_SWEEP_MODEL="claude-haiku-4-5-20251001"
+EMAIL_COS_SWEEP_MODEL=""   # empty = inherit the session default
 
 # L2 orchestrator (full reasoning — opus recommended for quality drafts).
-EMAIL_COS_ORCH_MODEL="claude-opus-4-5"
+EMAIL_COS_ORCH_MODEL=""    # empty = inherit the session default
 
 # Natural-language approval interpreter (haiku-class recommended).
-EMAIL_COS_NL_MODEL="claude-haiku-4-5-20251001"
+EMAIL_COS_NL_MODEL=""      # empty = inherit the session default
 # Optional: path to a JSON file with ONLY the enrichment MCP servers the
 # orchestrator needs (e.g. gbrain + tavily). Headless agents must NOT load the
 # full MCP env or the model context overflows. Empty => orchestrator runs with

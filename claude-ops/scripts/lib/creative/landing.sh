@@ -183,7 +183,7 @@ SYSTEM
 
   local raw_output
   raw_output="$(claude_invoke \
-    --model claude-haiku-4-5 \
+    ${OPS_CREATIVE_LANDING_MODEL:+--model "$OPS_CREATIVE_LANDING_MODEL"} \
     --no-session-persistence \
     -p "${system_prompt}
 ${user_prompt}" 2>/dev/null || echo '')"

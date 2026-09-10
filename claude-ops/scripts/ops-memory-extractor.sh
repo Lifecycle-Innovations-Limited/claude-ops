@@ -566,10 +566,13 @@ print(json.dumps(data))
   # the store was smaller; it is the store's growth that crossed the boundary.
   # Measured: max_tokens 4096 -> stop_reason "max_tokens", invalid JSON;
   # max_tokens 8192 -> stop_reason "end_turn" at 4187 tokens, valid JSON.
+  # The raw Messages API needs a model id; there is no session default to
+  # inherit here, so the operator must name one. Never pin it in this file.
+  [[ -n "${OPS_MEMORY_EXTRACTOR_MODEL:-}" ]] || die "OPS_MEMORY_EXTRACTOR_MODEL is unset; set it to the model id the extractor may call"
   local payload
   payload=$(cat <<EOF
 {
-  "model": "claude-haiku-4-5-20251001",
+  "model": "${OPS_MEMORY_EXTRACTOR_MODEL}",
   "max_tokens": 8192,
   "stream": true,
   "system": $(printf '%s' "${system_prompt}" | python3 -c "import sys, json; print(json.dumps(sys.stdin.read()))"),
@@ -580,7 +583,7 @@ print(json.dumps(data))
 EOF
 )
 
-  log "Calling Claude Haiku for extraction (auth: ${OPS_AUTH_MODE:-unknown}, streaming)..."
+  log "Calling Claude (${OPS_MEMORY_EXTRACTOR_MODEL}) for extraction (auth: ${OPS_AUTH_MODE:-unknown}, streaming)..."
   local http_status
   # --max-time bounds a stream that stalls mid-flight. The proxy's own read
   # timeout is 900s, which is far too long to leave a scheduled job hanging;

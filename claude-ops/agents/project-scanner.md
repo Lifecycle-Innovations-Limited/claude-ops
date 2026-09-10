@@ -1,7 +1,6 @@
 ---
 name: project-scanner
 description: "OPS specialist: Git, PR, and CI status scanner across all registered repos"
-model: claude-sonnet-4-6
 effort: low
 maxTurns: 15
 tools:
