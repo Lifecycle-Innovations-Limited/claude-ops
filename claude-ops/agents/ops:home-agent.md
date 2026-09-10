@@ -1,7 +1,6 @@
 ---
 name: ops:home-agent
 description: "OPS specialist: Homey Pro probe agent"
-model: claude-sonnet-4-6
 effort: low
 maxTurns: 10
 tools:

@@ -88,7 +88,7 @@ To extend: copy [`config/specialist-keywords.example.json`](../config/specialist
 ## Adding your own specialist
 
 1. Drop a `<name>.md` file under `~/.claude/agents/` (user-scoped) or `agents/` (committed to your project's `.claude/`).
-2. Frontmatter must include `name`, `description`, `model`, `tools` (allow-list).
+2. Frontmatter must include `name`, `description`, `tools` (allow-list). Omit `model`: every agent inherits the session default, and a pinned id breaks the moment an org restricts it.
 3. Add an entry to your `~/.claude/config/specialist-keywords.json` mapping keywords → agent name.
 4. Verify with `/ops:deploy-fix test` (which exercises the keyword path) or by manually invoking `Task` with a matching prompt.
 
@@ -98,7 +98,6 @@ Minimal example:
 ---
 name: my-rust-fixer
 description: Diagnoses and fixes Rust compile errors
-model: sonnet
 tools: [Bash, Read, Edit, Write]
 ---
 

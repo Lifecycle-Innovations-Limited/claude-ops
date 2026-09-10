@@ -1,7 +1,6 @@
 ---
 name: revenue-tracker
 description: "OPS specialist: Revenue, billing, and credits analysis agent"
-model: claude-sonnet-4-6
 effort: high
 maxTurns: 30
 tools:

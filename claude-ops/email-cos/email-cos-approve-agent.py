@@ -26,7 +26,7 @@ SD = pathlib.Path(
     )
 )
 ACCOUNT = os.environ.get("EMAIL_COS_ACCOUNT", "")
-NL_MODEL = os.environ.get("EMAIL_COS_NL_MODEL", "claude-haiku-4-5-20251001")
+NL_MODEL = os.environ.get("EMAIL_COS_NL_MODEL", "")  # empty = inherit session default
 WA_ENABLE = os.environ.get("EMAIL_COS_WA_ENABLE", "false").lower() == "true"
 WA_JID = os.environ.get("EMAIL_COS_WA_JID", "")
 WA_BRIDGE_URL = os.environ.get("EMAIL_COS_WA_BRIDGE_URL", "http://localhost:8080")
@@ -147,8 +147,7 @@ def interpret(reply_text, codemap):
             "--strict-mcp-config",
             "--mcp-config",
             '{"mcpServers":{}}',
-            "--model",
-            NL_MODEL,
+            *(["--model", NL_MODEL] if NL_MODEL else []),
             "--dangerously-skip-permissions",
             prompt,
         ],

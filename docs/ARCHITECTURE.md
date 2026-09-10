@@ -124,9 +124,9 @@ The daemon installs at setup Step 2c — deliberately early — so the briefing 
 
 | Agent class                                                       | Model                       | Use case                                                         |
 | ----------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------- |
-| C-suite analysts (`yolo-ceo`, `yolo-cto`, `yolo-cfo`, `yolo-coo`) | `claude-opus-4-6`           | High-depth strategic, technical, financial, operational analysis |
-| Scanner, fix, and daemon agents                                   | `claude-sonnet-4-6`         | Efficient read-scan-report loops and targeted code fixes         |
-| `memory-extractor`                                                | `claude-haiku-4-5-20251001` | High-frequency (every 30 min) low-cost contact extraction        |
+| C-suite analysts (`yolo-ceo`, `yolo-cto`, `yolo-cfo`, `yolo-coo`) | session default (no pin) | High-depth strategic, technical, financial, operational analysis |
+| Scanner, fix, and daemon agents                                   | session default (no pin) | Efficient read-scan-report loops and targeted code fixes         |
+| `memory-extractor`                                                | session default (no pin) | High-frequency (every 30 min) low-cost contact extraction        |
 
 ---
 

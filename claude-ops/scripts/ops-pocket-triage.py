@@ -27,7 +27,7 @@ Safety doctrine — the model is told that "safe to ACT autonomously" means:
 
 Env:
   POCKET_STATE_DIR              default ~/.claude/state/pocket
-  POCKET_TRIAGE_MODEL           default claude-opus-4-7
+  POCKET_TRIAGE_MODEL           optional; unset = session default model
   POCKET_TRIAGE_THINKING_TOKENS default 4000
   POCKET_TRIAGE_MAX_TOKENS      default 1500
   POCKET_TRIAGE_DRY_RUN=1       skip routing writes, just log decisions
@@ -112,7 +112,7 @@ _TEAM_MEMBERS_DESC = (
 )
 
 STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", HOME / ".claude/state/pocket"))
-MODEL = os.environ.get("POCKET_TRIAGE_MODEL", "claude-sonnet-4-6")
+MODEL = os.environ.get("POCKET_TRIAGE_MODEL", "")  # empty = inherit session default
 RETRY_ON_RATE_LIMIT = os.environ.get("POCKET_TRIAGE_RETRY_RATE_LIMIT", "1") != "0"
 RATE_LIMIT_BACKOFF_SECS = int(os.environ.get("POCKET_TRIAGE_RATE_LIMIT_BACKOFF", "60"))
 THINKING_BUDGET = int(os.environ.get("POCKET_TRIAGE_THINKING_TOKENS", "4000"))
@@ -264,8 +264,7 @@ def _triage_once(task: dict) -> dict:
     cmd = [
         claude_bin,
         "--dangerously-skip-permissions",
-        "--model",
-        MODEL,
+        *(["--model", MODEL] if MODEL else []),
         "-p",
         user_msg,
     ]
@@ -327,7 +326,7 @@ def _triage_once(task: dict) -> dict:
             "concerns": [f"bad json: {text_out[:80]}"],
         }
     decision["_thinking"] = thinking_text.strip()[:4000]
-    decision["_model"] = MODEL
+    decision["_model"] = MODEL or "session-default"
     decision["_raw_output_len"] = len(text_out)
     return decision
 
@@ -435,7 +434,7 @@ def route(task: dict, decision: dict) -> str:
 
 def main() -> int:
     write_health("running", "triage tick")
-    log(f"start (dry_run={DRY_RUN}, model={MODEL})")
+    log(f"start (dry_run={DRY_RUN}, model={MODEL or 'session-default'})")
 
     try:
         initial = PENDING.read_bytes()
@@ -496,7 +495,7 @@ def main() -> int:
                         confidence=float(decision.get("confidence", 0) or 0),
                         reasoning=str(decision.get("reasoning", ""))[:1500],
                         action_taken=verdict,
-                        model=MODEL,
+                        model=MODEL or "session-default",
                     )
                 )
             except Exception as _e:

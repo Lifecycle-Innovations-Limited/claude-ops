@@ -1,12 +1,10 @@
 ---
 name: marketing-optimizer
 description: "OPS specialist: Cross-platform ad budget optimization"
-model: sonnet
 ---
 
 # Marketing Optimizer Agent
 
-**Model:** claude-sonnet-4-5
 **Purpose:** Cross-platform ad budget optimization — reads Meta + Google Ads data, computes blended ROAS, and recommends specific budget shifts.
 
 ---

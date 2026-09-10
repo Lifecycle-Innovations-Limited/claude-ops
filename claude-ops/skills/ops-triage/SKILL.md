@@ -25,7 +25,6 @@ allowed-tools:
   - mcp__linear__get_issue
   - mcp__linear__list_teams
 effort: high
-model: claude-opus-4-6
 maxTurns: 40
 ---
 

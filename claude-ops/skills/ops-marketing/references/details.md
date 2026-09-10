@@ -2054,7 +2054,7 @@ Cross-platform ad optimization agent. Reads Meta + Google Ads data, computes ble
 Spawn the marketing optimizer agent:
 
 ```
-Agent(prompt="Run the marketing optimizer agent. Read ops-marketing-dash data for Meta Ads and Google Ads spend/conversions/ROAS. Compute blended ROAS across platforms. Identify the highest-ROAS platform. Recommend budget shifts with specific dollar amounts. List top 3 actions by expected impact. Use the marketing-optimizer.md agent instructions.", model="claude-sonnet-4-5")
+Agent(prompt="Run the marketing optimizer agent. Read ops-marketing-dash data for Meta Ads and Google Ads spend/conversions/ROAS. Compute blended ROAS across platforms. Identify the highest-ROAS platform. Recommend budget shifts with specific dollar amounts. List top 3 actions by expected impact. Use the marketing-optimizer.md agent instructions.")
 ```
 
 If Agent Teams are available (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`):

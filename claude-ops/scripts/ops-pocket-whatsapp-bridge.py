@@ -24,7 +24,7 @@ Config (~/.claude/state/pocket/whatsapp-config.json):
     "chat_jid": "31612345678@s.whatsapp.net",       # required
     "last_processed_id": "BAE12345...",             # auto-managed
     "enabled": true,
-    "parser_model": "claude-sonnet-4-6"             # optional override
+    "parser_model": ""                              # optional override; empty = session default
   }
 
 Cron: every 1min.
@@ -181,7 +181,7 @@ Schema:
     claude_bin = os.environ.get("POCKET_CLAUDE_BIN", str(HOME / ".local/bin/claude"))
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     cmd = [claude_bin, "--dangerously-skip-permissions",
-           "--model", parser_model, "-p", prompt]
+           *(["--model", parser_model] if parser_model else []), "-p", prompt]
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=90)
     except subprocess.TimeoutExpired:
@@ -285,7 +285,7 @@ def main() -> int:
         return 4
 
     opens = open_questions()
-    parser_model = cfg.get("parser_model", "claude-sonnet-4-6")
+    parser_model = cfg.get("parser_model", "")  # empty = inherit session default
     processed = 0
     matched = 0
     new_last_id = last_id

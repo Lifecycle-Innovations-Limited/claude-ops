@@ -1,7 +1,6 @@
 ---
 name: ops:unifi-agent
 description: "OPS specialist: UniFi probe agent"
-model: claude-sonnet-4-6
 effort: low
 maxTurns: 10
 tools:

@@ -39,7 +39,7 @@ Env:
   POCKET_CLAUDE_BIN       default /usr/local/bin/claude
   POCKET_EXEC_CWD         worker working dir, default $HOME
   POCKET_MAX_CONCURRENT   default 3
-  POCKET_WORKER_MODEL     default claude-sonnet-4-6
+  POCKET_WORKER_MODEL     optional; unset = session default model
   POCKET_WORKER_TIMEOUT   seconds, default 1800 (30 min)
   POCKET_EXEC_DRY_RUN=1   inspect only, no spawns / no writes.
 """
@@ -63,7 +63,7 @@ STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", HOME / ".claude/state/pocket
 CLAUDE_BIN = os.environ.get("POCKET_CLAUDE_BIN", "/usr/local/bin/claude")
 EXEC_CWD = Path(os.environ.get("POCKET_EXEC_CWD", str(HOME)))
 MAX_CONCURRENT = int(os.environ.get("POCKET_MAX_CONCURRENT", "3"))
-WORKER_MODEL = os.environ.get("POCKET_WORKER_MODEL", "claude-sonnet-4-6")
+WORKER_MODEL = os.environ.get("POCKET_WORKER_MODEL", "")  # empty = inherit session default
 WORKER_TIMEOUT = int(os.environ.get("POCKET_WORKER_TIMEOUT", "1800"))
 DRY_RUN = os.environ.get("POCKET_EXEC_DRY_RUN") == "1"
 
@@ -409,8 +409,7 @@ def spawn_worker(task: dict) -> dict | None:
         display_name,
         "--effort",
         "high",
-        "--model",
-        WORKER_MODEL,
+        *(["--model", WORKER_MODEL] if WORKER_MODEL else []),
         "--add-dir",
         str(EXEC_CWD),
         "-p",
@@ -476,7 +475,7 @@ def spawn_worker(task: dict) -> dict | None:
         "deadline_epoch": int(time.time()) + WORKER_TIMEOUT,
         "stdout": str(stdout_path),
         "stderr": str(stderr_path),
-        "model": WORKER_MODEL,
+        "model": WORKER_MODEL or "session-default",
         "bg_session_id": bg_session_id,  # for SendMessage / claude attach
         "spawn_mode": "claude-bg",
     }
@@ -488,7 +487,7 @@ def spawn_worker(task: dict) -> dict | None:
             "pid": proc.pid,
             "pocket_task_id": task_id,
             "title": record["title"],
-            "model": WORKER_MODEL,
+            "model": WORKER_MODEL or "session-default",
             "bg_session_id": bg_session_id,
             "spawn_mode": "claude-bg",
         },

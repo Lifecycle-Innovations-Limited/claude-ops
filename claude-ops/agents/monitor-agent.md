@@ -1,7 +1,6 @@
 ---
 name: monitor-agent
 description: "OPS specialist: Lightweight APM and metrics probe agent"
-model: sonnet
 effort: low
 maxTurns: 15
 tools:
