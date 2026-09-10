@@ -10,6 +10,7 @@
 #   6. GSC filter: excludes out-of-range rows
 #   7. manifest.json created after live run
 #   8. script has no project-specific branding defaults
+#   9. successful live run writes freshness marker; dry-run does not
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -223,6 +224,24 @@ if grep -qiE 'my-project|health, wellness' "${SCRIPT}" 2>/dev/null; then
   err "script contains project-specific defaults" "found project vocab"
 else
   ok "script has no project-specific branding defaults"
+fi
+
+# ── Test 9: freshness marker records successful live runs only ────────────────
+echo "Test 9: freshness marker records successful live runs only"
+MARKER="${OPS_DATA_DIR}/cache/content-seo-blog-last-success"
+rm -f "$MARKER"
+run_script "$PREFS_FULL" testproject --dry-run >/dev/null 2>&1 || true
+if [ ! -e "$MARKER" ]; then
+  ok "dry-run does not write freshness marker"
+else
+  err "dry-run must not write freshness marker" "path: $MARKER"
+fi
+
+run_script "$PREFS_FULL" testproject >/dev/null 2>&1 || true
+if [ -f "$MARKER" ]; then
+  ok "live run writes freshness marker"
+else
+  err "live run should write freshness marker" "path: $MARKER"
 fi
 
 echo ""
