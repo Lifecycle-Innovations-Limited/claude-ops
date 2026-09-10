@@ -83,6 +83,7 @@ run_suite "$TESTS_DIR/test-ops-marketing-dash-brand-isolation.sh"
 run_suite "$TESTS_DIR/test-ops-release-changelog-heading.sh"
 run_suite "$TESTS_DIR/../templates/statusline/tests/run-tests.sh"
 run_suite "$TESTS_DIR/test-registry-schema-skills.sh"
+run_suite "$TESTS_DIR/test-ops-external-registry-classification.sh"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "SUMMARY"
