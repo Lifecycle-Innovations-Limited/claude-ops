@@ -175,13 +175,21 @@ fi
 
 # --- 5. registry.json: legacy external entries (Linear teams, Slack, custom endpoints) ---
 if [ -f "$REGISTRY" ]; then
-  EXTERNAL=$(jq -c '[.projects[]? | select(.type == "external" or (.source != null and .source != "git"))]' "$REGISTRY" 2>/dev/null || echo '[]')
+  # `source` records the discovery root for normal local projects (for example
+  # "Developer", ".grok", or ".pnpm-store"). It is not a git/external flag.
+  # Keep compatibility with legacy external rows that predate type=external,
+  # but only for source kinds this collector actually knows how to probe.
+  EXTERNAL=$(jq -c '[.projects[]? | select(
+    .type == "external" or
+    .source == "shopify" or .source == "linear" or .source == "slack" or
+    .source == "notion" or .source == "custom"
+  )]' "$REGISTRY" 2>/dev/null || echo '[]')
   COUNT=$(echo "$EXTERNAL" | jq 'length')
   # BSD `seq 0 -1` counts down (prints 0\n-1) — guard explicitly when COUNT==0.
   if [ "$COUNT" -gt 0 ]; then
    for i in $(seq 0 $((COUNT - 1))); do
     PROJECT=$(echo "$EXTERNAL" | jq -c ".[$i]")
-    ALIAS=$(echo "$PROJECT" | jq -r '.alias')
+    ALIAS=$(echo "$PROJECT" | jq -r '.alias // .name // .source // "external"')
     SOURCE=$(echo "$PROJECT" | jq -r '.source // "unknown"')
 
     # Skip Shopify duplicates already covered by preferences.

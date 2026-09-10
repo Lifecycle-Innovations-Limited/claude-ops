@@ -861,8 +861,8 @@ render_section_portfolio() {
           expanded="${path/#\~/$HOME}"
 
           if [[ -d "$expanded/.git" ]]; then
-            dirty=$(git -C "$expanded" status --porcelain 2>/dev/null | wc -l | tr -d ' ' || echo "0")
-            ahead=$(git -C "$expanded" rev-list --count "@{upstream}..HEAD" 2>/dev/null || echo "0")
+            dirty=$(git -C "$expanded" status --porcelain 2>/dev/null | wc -l | tr -d ' ') || dirty=0
+            ahead=$(git -C "$expanded" rev-list --count "@{upstream}..HEAD" 2>/dev/null) || ahead=0
             last_commit_epoch=$(git -C "$expanded" log -1 --format="%ct" 2>/dev/null || echo "$NOW_EPOCH")
             age=$(age_human $((NOW_EPOCH - last_commit_epoch)))
 
