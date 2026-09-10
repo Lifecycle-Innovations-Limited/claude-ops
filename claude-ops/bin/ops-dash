@@ -325,8 +325,9 @@ TOTAL_PROBES=13
 
 # 5) Marketing — iterate ALL configured projects in parallel subshells
 (
-  MK_TMPDIR=$(mktemp -d)
-  trap 'rm -rf "$MK_TMPDIR"' EXIT
+  # Subdir of TMPDIR_DASH: one tmpdir, one trap, cleaned after the final wait.
+  MK_TMPDIR="$TMPDIR_DASH/marketing"
+  mkdir -p "$MK_TMPDIR"
 
   # Read project list from preferences; fall back to default_project only
   if [ -f "$PREFS" ]; then
@@ -568,7 +569,10 @@ if [[ "$MOBILE_MODE" -eq 0 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]
   _start_time=$(date +%s)
   _tick=0
   while true; do
-    _done=$(ls "$TMPDIR_DASH"/done_* 2>/dev/null | wc -l | tr -d ' ')
+    # find never fails on zero matches. `ls done_*` exits 2 before the first
+    # probe finishes; with `set -e` + pipefail that killed the script and the
+    # EXIT trap removed TMPDIR_DASH while the workers were still writing.
+    _done=$(find "$TMPDIR_DASH" -maxdepth 1 -name 'done_*' 2>/dev/null | wc -l | tr -d ' ')
     _pct=$(( (_done * 100) / TOTAL_PROBES ))
     _filled=$(( (_done * _bar_width) / TOTAL_PROBES ))
     _empty=$(( _bar_width - _filled ))
