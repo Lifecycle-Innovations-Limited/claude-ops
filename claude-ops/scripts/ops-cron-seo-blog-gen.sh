@@ -29,6 +29,7 @@ export CLAUDE_OPS_USE_CREDIT_POOL="${CLAUDE_OPS_USE_CREDIT_POOL:-0}"
 
 DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 PREFS="${OPS_AUTOPILOT_PREFS:-${DATA_DIR}/preferences.json}"
+SUCCESS_MARKER="${DATA_DIR}/cache/content-seo-blog-last-success"
 
 DRY_RUN=false
 SINGLE_PROJECT=""
@@ -372,4 +373,9 @@ else
     [ -z "$proj" ] && continue
     _process_project "$proj" || true
   done < <(prefs_projects)
+fi
+
+if [ "$DRY_RUN" = "false" ]; then
+  mkdir -p "$(dirname "$SUCCESS_MARKER")"
+  touch "$SUCCESS_MARKER"
 fi
