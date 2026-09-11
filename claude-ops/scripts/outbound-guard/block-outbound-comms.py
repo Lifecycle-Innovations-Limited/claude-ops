@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import sys
 import time
 
@@ -137,6 +138,33 @@ def _load_approved_recipients() -> set:
     return out
 
 
+def _load_approved_whatsapp() -> set:
+    """Return the set of WhatsApp recipients Sam has pre-approved (lowercased).
+
+    Read from the same outbound-approvals.json, under a SEPARATE key so an email
+    address can never silently authorise a WhatsApp send or the reverse:
+        {"approved_whatsapp": ["27765225428@s.whatsapp.net", "157788609228927@lid"]}
+
+    Entries may be full JIDs or bare numbers; both the raw value and its local
+    part (before '@') are indexed so one entry covers a contact whichever JID
+    form a given account happens to address them by. Missing/empty/malformed
+    file → empty set → nothing is auto-approved (strict default, gate stays armed).
+    """
+    out = set()
+    try:
+        with open(OUTBOUND_APPROVALS_PATH) as f:
+            cfg = json.load(f)
+        for v in cfg.get("approved_whatsapp") or []:
+            s = str(v).strip().lower()
+            if not s:
+                continue
+            out.add(s)
+            out.add(s.split('@', 1)[0])
+    except (OSError, json.JSONDecodeError):
+        pass
+    return out
+
+
 def _load_broken_aliases() -> set:
     """Send-as aliases whose mail bounces with a 'Send mail as' misconfiguration.
 
@@ -167,6 +195,7 @@ SELF_JIDS = _load_self_jids()
 SELF_IMESSAGE_HANDLES = _load_self_imessage_handles()
 SELF_TELEGRAM_OWNERS = _load_self_telegram_owners()
 APPROVED_RECIPIENTS = _load_approved_recipients()
+APPROVED_WHATSAPP = _load_approved_whatsapp()
 
 
 def _telegram_recipient_is_self(cmd: str) -> bool:
@@ -242,13 +271,24 @@ def _bash_recipient_is_self(cmd: str) -> bool:
 # --body, --reply-to-message-id) so that merely MENTIONING a send command inside
 # a Python heredoc, shell comment, grep query, or audit script doesn't trip.
 BASH_PATTERNS = [
-    (r'(?:^|[\s;&|`/])gog\s+gmail\s+send\b[^#\n]{0,400}?--(?:to|body|body-file|reply-to-message-id|subject|from|cc|bcc)\b', 'gog gmail send'),
-    (r'(?:^|[\s;&|`/])gog\s+send\b[^#\n]{0,400}?--(?:to|body|body-file|reply-to-message-id|subject|from|cc|bcc)\b', 'gog send (alias)'),
+    # The gap between `send` and its first flag deliberately allows newlines.
+    # Until 2026-09-09 it was [^#\n], so a send written over several lines --
+    # the readable form, and the form every worked example in these files uses --
+    # matched NO pattern at all. detect_outbound_bash then returned None, the
+    # hook exited 0, and the mail left with no gate, no ledger row, and Sam's
+    # approval left unspent, so his next `ok` re-armed an already-sent body.
+    # Measured against a real multi-line `gog gmail send` that slipped through
+    # ungated on 2026-09-09. Newlines are joined by _join_continuations() as well;
+    # the class is widened too so a quoted multi-line argument cannot hide a
+    # send either. Over-detection here costs a needless approval prompt;
+    # under-detection costs an ungated send.
+    (r'(?:^|[\s;&|`/])gog(?:\s+-{1,2}[\w-]+(?:[=\s]+[^\s;&|]+)?)*\s+(?:gmail|mail|email)(?:\s+(?:mail|email|messages?|msgs?))?\s+send\b[^#]{0,400}?--(?:to|body|body-file|reply-to-message-id|subject|from|cc|bcc)\b', 'gog gmail send'),
+    (r'(?:^|[\s;&|`/])gog\s+send\b[^#]{0,400}?--(?:to|body|body-file|reply-to-message-id|subject|from|cc|bcc)\b', 'gog send (alias)'),
     # Both `drafts` and `draft` are valid gog subcommands, and sending a draft is
     # still sending. The old rule only caught the singular. A real draft id must
     # follow (e.g. r2782687644185019208), otherwise the rule also fires on a commit
     # message or documentation that merely names the command.
-    (r'(?:^|[\s;&|`/])gog\s+gmail\s+drafts?\s+send\s+[\w-]{3,}', 'gog gmail drafts send'),
+    (r'(?:^|[\s;&|`/])gog(?:\s+-{1,2}[\w-]+(?:[=\s]+[^\s;&|]+)?)*\s+(?:gmail|mail|email)(?:\s+(?:mail|email|messages?|msgs?))?\s+drafts?\s+send\s+[\w-]{3,}', 'gog gmail drafts send'),
     # The WhatsApp bridge runs locally and had no rule at all. A curl to it sends a
     # real message to a real person, and went past the guard unseen. Multi-account
     # installs use one port per account, hence the 80xx range.
@@ -379,8 +419,18 @@ def _strip_full_line_comments(cmd: str) -> str:
     return "\n".join(l for l in cmd.splitlines() if not l.lstrip().startswith("#"))
 
 
+def _join_continuations(cmd: str) -> str:
+    """Undo shell line continuations, exactly as the shell itself does.
+
+    `gog ... send \\\n  --to ...` is ONE command. Matching it line by line means
+    matching something the shell never runs. Joining first makes the text the
+    patterns see the text that will actually execute.
+    """
+    return re.sub(r'\\\n[ \t]*', ' ', cmd)
+
+
 def detect_outbound_bash(cmd: str):
-    scan = _strip_full_line_comments(cmd)
+    scan = _join_continuations(_strip_full_line_comments(cmd))
     for pat, label in BASH_PATTERNS:
         if re.search(pat, scan, re.IGNORECASE):
             return label
@@ -478,6 +528,77 @@ def _native_route(addr: str) -> str:
     return ''
 
 
+def _bash_gmail_message(cmd: str) -> tuple:
+    """The (recipient, body) of a `gog gmail send` written as a shell command.
+
+    Without this the fingerprint for a Bash send was computed over the whole
+    shell line -- PATH exports, `cd`, the lot -- and could never equal the
+    sha256(recipient|body) that outbound-humanize queued and `ok` minted. Every
+    email routed through Bash was therefore unapprovable, and gog exposes no MCP
+    send tool, so Bash is the only email route on this machine. The effect was a
+    guard that could not be satisfied, which is not a stricter guard: it is the
+    one people work around.
+
+    Returns ('', '') when the message cannot be read literally -- an unbalanced
+    quote, a body built by command substitution, a --body-file not on disk. The
+    caller then keeps the old whole-command fingerprint, so an unreadable send
+    stays unapprovable rather than quietly matching something.
+
+    A --body-file is read from disk here and read again by the sending process a
+    moment later. A third process could swap it in between. That window is
+    inherent to checking a file rather than a value, and is the same window the
+    approve-then-send cycle already has; it is not widened here.
+    """
+    if 'gmail' not in cmd or 'send' not in cmd:
+        return ('', '')
+    try:
+        toks = shlex.split(cmd)
+    except ValueError:
+        return ('', '')
+
+    def _val(names):
+        for i, t in enumerate(toks):
+            for n in names:
+                if t == n and i + 1 < len(toks):
+                    return toks[i + 1]
+                if t.startswith(n + '='):
+                    return t[len(n) + 1:]
+        return None
+
+    to = _val(['--to'])
+    if not to:
+        return ('', '')
+    # De hele ontvangersgroep is de identiteit van het bericht. Tot 8 september
+    # 2026 stond hier een refusal op een cc, een bcc of een komma, waardoor een
+    # mail aan twee mensen niet goed te keuren was. Zie
+    # outbound_guard.canonical_recipients: to, cc en bcc worden samen tot één
+    # genormaliseerde sleutel, dus 'a,b' en to=a cc=b zijn hetzelfde bericht, en
+    # een adres toevoegen of weglaten verandert de afdruk en wordt geweigerd.
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import outbound_guard as _og
+        to = _og.canonical_recipients(to, _val(['--cc']) or '', _val(['--bcc']) or '')
+    except Exception:
+        return ('', '')
+    if not to:
+        return ('', '')
+
+    body = _val(['--body'])
+    if body is None:
+        bf = _val(['--body-file'])
+        if not bf or bf == '-':
+            return ('', '')
+        try:
+            body = open(os.path.expanduser(bf)).read()
+        except OSError:
+            return ('', '')
+    # Anything the shell would still expand means the text checked is not the
+    # text sent. Refuse to fingerprint it.
+    if re.search(r'\$\(|`|\$\{?[A-Za-z_]', body):
+        return ('', '')
+    return (to.strip(), body)
+
+
 def _identify(tool_name: str, tool_input: dict, cmd: str = '') -> tuple[str, str]:
     """Recipient and text of this message, whatever shape it arrives in.
 
@@ -485,37 +606,55 @@ def _identify(tool_name: str, tool_input: dict, cmd: str = '') -> tuple[str, str
     fingerprint. A Bash command has no proxy side, so its fingerprint is simply unique
     per command."""
     if isinstance(tool_input, dict) and tool_input:
-        rcpt = ''
-        for k in ('recipient', 'jid', 'chat_jid', 'chat_id', 'to', 'channel_id'):
-            v = tool_input.get(k)
-            if isinstance(v, str) and v.strip():
-                rcpt = v.strip()
-                break
-            if isinstance(v, list) and v:
-                rcpt = str(v[0]).strip()
-                break
-        body = ''
-        for k in ('message', 'text', 'body', 'payload', 'content'):
-            v = tool_input.get(k)
-            if isinstance(v, str) and v.strip():
-                body = v
-                break
+        # The key lists this used to hold inline now live in
+        # outbound_guard.identify_args(), so the MCP proxy derives the SAME
+        # (recipient, body) from the SAME arguments instead of keeping a second
+        # list that agreed only by coincidence. Behaviour here is unchanged; if
+        # the shared module cannot be imported we fall back to the original
+        # inline logic rather than losing the fingerprint entirely.
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import outbound_guard as _og_ident
+            rcpt, body = _og_ident.identify_args(tool_input)
+        except Exception:
+            rcpt = ''
+            for k in ('recipient', 'jid', 'chat_jid', 'chat_id', 'to', 'channel_id'):
+                v = tool_input.get(k)
+                if isinstance(v, str) and v.strip():
+                    rcpt = v.strip()
+                    break
+                if isinstance(v, list) and v:
+                    rcpt = str(v[0]).strip()
+                    break
+            body = ''
+            for k in ('message', 'text', 'body', 'payload', 'content'):
+                v = tool_input.get(k)
+                if isinstance(v, str) and v.strip():
+                    body = v
+                    break
         if rcpt or body:
             return (rcpt, body)
+    if tool_name == 'Bash' and cmd:
+        r, b = _bash_gmail_message(cmd)
+        if r and b:
+            return (r, b)
     return ('', cmd or '')
 
 
-def check_token(recipient: str = '', body: str = '') -> bool:
+def check_token(recipient: str = '', body: str = '', tool: str = '', session_id: str = '') -> bool:
     """Ask the shared store in outbound_guard for approval.
 
-    That store is the only place counting, for every CLI. It identifies a message by
-    recipient plus content, so the same message crossing several guards costs one unit.
-    If the import fails this hook falls back to the old single-use token: better the
-    older, stricter rule than accidentally allowing everything."""
+    That store now binds approval to the exact (recipient, body) Sam approved, not
+    to a bare count — see outbound_guard.py for why. `tool` and `session_id` are
+    passed through so the guard can (a) give a short free pass to a second guard
+    checking the SAME not-yet-dispatched call, and (b) never let one session's
+    approval be spent by another session's message. If the import fails this hook
+    falls back to the old single-use token: better the older, stricter rule than
+    accidentally allowing everything."""
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import outbound_guard
-        return outbound_guard.consume(recipient, body)
+        return outbound_guard.consume(recipient, body, session_id=session_id, tool=tool)
     except Exception:
         pass
     try:
@@ -529,6 +668,27 @@ def check_token(recipient: str = '', body: str = '') -> bool:
     except Exception:
         pass
     return True
+
+
+def _consent_audit(event: str, **kw):
+    """Best-effort evidence line. Must never be able to break a tool call."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import consent_audit
+        consent_audit.record(event, **kw)
+    except Exception:
+        pass
+
+
+def _consent_fp(recipient: str, body: str) -> str:
+    """The same fingerprint the approval binds to, so the audit joins on it.
+    Falls back to '' rather than inventing a different hash."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import outbound_guard
+        return outbound_guard.fingerprint(recipient, body)
+    except Exception:
+        return ''
 
 
 def audit(verdict: str, tool_name: str, reason: str, cmd_snippet: str = ''):
@@ -566,6 +726,41 @@ def _email_all_recipients_approved(tool_name: str, tool_input: dict, cmd: str) -
     if not targets:
         return False
     return all(t in APPROVED_RECIPIENTS for t in targets)
+
+
+def _whatsapp_all_recipients_approved(tool_name: str, tool_input: dict, cmd: str) -> bool:
+    """True iff this is a WhatsApp TEXT send whose every recipient is on the
+    persistent approved-whatsapp allowlist.
+
+    Deliberately narrow:
+      * Scope is WhatsApp only, keyed off `approved_whatsapp` — the email
+        allowlist grants nothing here, and this grants nothing to email.
+      * Text messages only. send_file and send_audio_message are never
+        auto-approved: attachments carry content the allowlist never reviewed.
+      * Group JIDs (@g.us) are never auto-approved, even if listed. A group is
+        an audience, not the contact Sam signed off on.
+      * An empty recipient set returns False, so a parse miss can never
+        blanket-allow a send.
+    """
+    if not APPROVED_WHATSAPP:
+        return False
+    targets = []
+    if re.search(r'whatsapp[a-z0-9_-]*__send_message$', tool_name) and isinstance(tool_input, dict):
+        v = tool_input.get('recipient')
+        if isinstance(v, str) and v.strip():
+            targets.append(v.strip().lower())
+    elif tool_name == 'Bash' and cmd:
+        if re.search(r'(?:127\.0\.0\.1|localhost):80\d\d/api/send\b', cmd):
+            for m in re.finditer(r'"recipient"\s*:\s*"([^"]+)"', cmd):
+                targets.append(m.group(1).strip().lower())
+    if not targets:
+        return False
+    if any(t.endswith('@g.us') for t in targets):
+        return False
+    return all(
+        (t in APPROVED_WHATSAPP) or (t.split('@', 1)[0] in APPROVED_WHATSAPP)
+        for t in targets
+    )
 
 
 # Tool this invocation is inspecting. Recorded as soon as it is known so the
@@ -689,35 +884,72 @@ def main():
         audit('ALLOWED_APPROVED', tool_name, reason, cmd_snippet)
         sys.exit(0)
 
+    # Same prior-approval principle for WhatsApp, kept on its own allowlist and
+    # its own audit tag so an approved WhatsApp send is never mistaken for an
+    # approved email one. Text to a listed 1:1 contact only; files, audio and
+    # groups still fall through to the gate.
+    if _whatsapp_all_recipients_approved(tool_name, tool_input if isinstance(tool_input, dict) else {}, cmd):
+        audit('ALLOWED_APPROVED_WA', tool_name, reason, cmd_snippet)
+        sys.exit(0)
+
     # Pass recipient and text so the shared store can recognise this message when
     # another guard sees it too. Without them the same message would cost a unit at
-    # every layer.
+    # every layer. Also pass tool name and session id: the guard uses them to bind
+    # approval to the exact message from the exact session that was shown to Sam,
+    # not a bare count any session can spend (fixed 2026-09-02).
     _rcpt, _body = _identify(tool_name, tool_input if isinstance(tool_input, dict) else {}, cmd)
-    if check_token(_rcpt, _body):
+    _session_id = str(data.get('session_id') or data.get('sessionId') or '')
+    if check_token(_rcpt, _body, tool=str(tool_name), session_id=_session_id):
         audit('ALLOWED', tool_name, reason, cmd_snippet)
         sys.exit(0)
 
     audit('BLOCKED', tool_name, reason, cmd_snippet)
+    # Evidence line for the refusal too, same shape and same file as the
+    # AUTHORIZED one, so `grep <fp>` on the consent audit tells the whole story
+    # of a message including the attempts that did NOT go out.
+    _consent_audit(
+        'BLOCKED',
+        recipient=_rcpt,
+        body=_body,
+        fp=_consent_fp(_rcpt, _body),
+        session_id=_session_id,
+        tool=str(tool_name),
+        send_result='blocked',
+        reason=reason,
+    )
 
+    # NAME COLLISION FIXED 2026-09-08. This used to instruct `! ok`, which is a
+    # shell escape that runs `touch /tmp/.claude-send-ok`. But ~/.local/bin/ok
+    # is a DIFFERENT program -- the one that mints a body-bound approval from
+    # the pending queue. Sam typed the wrong one four times in one day, and the
+    # advice was pointing at the weaker mechanism anyway.
+    #
+    # The primary path is now the word. Saying `ok` in the conversation mints
+    # approval bound to fingerprint(recipient, body) for the drafts this session
+    # already showed him -- which is the evidence his policy actually asks for.
+    # The bare token stays documented last, as the fallback it is, for sends
+    # that cannot go through a humanizer pass.
     msg = (
         f'BLOCKED: outbound-comms guardrail tripped ({reason}).\n\n'
-        f"Sam's policy: ONE send per explicit approval. Claude (and claude-ops daemon,\n"
-        f'subagents, any session) may NEVER send email / Slack / WhatsApp / SMS /\n'
-        f'voice calls / team pings without Sam reviewing the FINAL proposed message\n'
-        f'FOR THIS SPECIFIC SEND and authorizing THIS specific send.\n\n'
-        f'Required workflow — repeat for EACH message, no batching:\n'
-        f'  1. Show the FINAL draft for ONE message (to, cc, bcc, subject, full body)\n'
-        f'  2. Wait for Sam to explicitly say send / approve for this exact draft\n'
-        f'  3. Ask Sam to authorize OUTSIDE Claude — via the `!` prompt prefix:\n'
-        f'       ! ok     (shorthand for: touch /tmp/.claude-send-ok)\n'
-        f'  4. Retry this tool call within 120 seconds — the token is single-use.\n'
-        f'  5. For the NEXT message, repeat steps 1-4 with its own approval + token.\n\n'
-        f'Batch sending is forbidden: one token = one send. `--dangerously-skip-permissions`\n'
-        f'does NOT bypass this guardrail. Audit log: /tmp/claude-outbound-audit.log\n\n'
-        f'Persistent prior-approval (email only): to let an already-approved\n'
-        f'recipient send without a token every time, Sam adds the address to\n'
-        f'"approved_recipients" in ~/.claude/state/outbound-approvals.json. Any\n'
-        f'email to a NON-approved address still requires the per-send token above.'
+        f"Sam's policy: ONE send per explicit approval, and the approval must be\n"
+        f'bound to the exact text. No session may send email / Slack / WhatsApp /\n'
+        f'SMS / voice without Sam seeing the FINAL body for THIS send and\n'
+        f'approving THAT send to THAT recipient.\n\n'
+        f'Normal path — no token needed:\n'
+        f'  1. printf \'%s\' "$DRAFT" | outbound-humanize --to \'RECIPIENT\'\n'
+        f'     (rewrites, reads the thread, queues the exact body, stamps it)\n'
+        f'  2. Show Sam that exact stdout, in full.\n'
+        f'  3. Sam replies with one word in the conversation: ok / ja / stuur /\n'
+        f'     send / go. That mints approval bound to (recipient, body).\n'
+        f'     His Telegram DM works too.\n'
+        f'  4. Retry this same tool call. One approval = one successful send.\n\n'
+        f'Do NOT ask him for `! ok`: that is the bare token, it binds to no text,\n'
+        f'and `ok` in the shell is a different program from the `!` escape.\n\n'
+        f'Fallback for sends with no humanizer pass (rare): Sam runs\n'
+        f'`touch /tmp/.claude-send-ok` himself, valid 120s, single use. That is\n'
+        f'weaker evidence and is logged as approval_route=legacy-token.\n\n'
+        f'Consent audit: ~/.claude/state/outbound-consent-audit.jsonl\n'
+        f'Gate audit:    /tmp/claude-outbound-audit.log'
     )
     print(msg, file=sys.stderr)
     sys.exit(2)

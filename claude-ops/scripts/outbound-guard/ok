@@ -1,60 +1,375 @@
-#!/usr/bin/env bash
-# Approve outbound messages. The owner types `! ok` inside the CLI, which runs this in
-# their own shell, outside the agent's reach.
-#
-#   ok           1 message,   2 minute window
-#   ok 3         3 messages, 15 minute window
-#   ok all       10 messages, 15 minute window   (also: ok these)
-#
-# There is one approval store: /tmp/.claude-outbound-guard.json, managed by
-# outbound_guard.py and read by every CLI that goes through the MCP proxy. Each guard
-# used to keep its own file, so this script had to write two and the counts drifted.
-#
-# One message costs exactly one unit even when it crosses several guards: it is
-# identified by recipient plus content, and a guard that sees a fingerprint another
-# guard already charged lets it through for free.
-#
-# A counter never replaces per-draft approval. The agent still shows every draft and
-# waits for a yes. This only saves retyping the approval for each message.
-set -euo pipefail
+#!/usr/bin/env python3
+"""Keur de wachtende concepten van DEZE sessie goed. Sam typt `! ok` in Claude
+Code; dit draait in zijn eigen shell, buiten het model om.
 
-# The counter lives next to this script so it works wherever the plugin is installed.
-# OUTBOUND_GUARD_PY overrides that for installs that split the files up.
-GUARD="${OUTBOUND_GUARD_PY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/outbound_guard.py}"
-LEGACY_SINGLE=/tmp/.claude-send-ok
-LEGACY_BATCH=/tmp/.claude-send-ok-all
-AUDIT="${OUTBOUND_OK_AUDIT:-$HOME/.claude/state/ok-token-audit.log}"
-MAXN=10
+SECURITY FIX 2026-09-02 (companion to outbound_guard.py's rewrite).
 
-arg="${1:-1}"
-case "$arg" in
-  all|these) n=$MAXN ;;
-  ''|*[!0-9]*) echo "usage: ok [N|all]" >&2; exit 2 ;;
-  *) n="$arg" ;;
-esac
-[ "$n" -lt 1 ] && n=1
-if [ "$n" -gt "$MAXN" ]; then
-  echo "capped at $MAXN per approval, reduced from $n." >&2
-  n=$MAXN
-fi
+The old `ok` minted a bare count: `mint <n> <ttl>`, "N sends, whatever recipient,
+whatever body." outbound_guard.py's consume() now refuses that call outright
+(see its own header) because a count is not a signature on a specific message.
+`ok` has no access to the draft text itself, so it cannot compute a fingerprint
+on its own -- the fingerprint has to come from somewhere that already saw and
+committed to the exact text Sam is looking at.
 
-if [ "$n" -eq 1 ]; then ttl=120; window="2 min"; else ttl=900; window="15 min"; fi
+The design: outbound-humanize is the one mandatory step before every send (see
+~/.claude/rules/outbound-humanizer-gate.md). Its stdout is the exact body shown
+to Sam, and it appends a PENDING record before printing that stdout:
 
-python3 "$GUARD" mint "$n" "$ttl" >/dev/null
+    ~/.claude/state/outbound-pending/<session_id>.json
+    [{"recipient": "...", "channel": "...", "body": "...", "fp": "...",
+      "ts": 1786732800, "session_id": "..."}, ...]
 
-# Fallback for guards that have not been migrated yet. The canonical state wins; these
-# exist only so an older code path does not suddenly block everything.
-: >"$LEGACY_SINGLE"
-printf '%s' "$n" >"$LEGACY_BATCH"
-chmod 600 "$LEGACY_SINGLE" "$LEGACY_BATCH"
+`ok` reads that queue and mints approval for EXACTLY those fingerprints,
+nothing else. The security property this preserves: the assistant can only get
+approval for a body it has already committed to in writing before Sam ever
+runs this command. It cannot show Sam text Y and then send text X --
+outbound_guard.consume() hashes the actual send and refuses anything that does
+not match, one character of difference included.
 
-mkdir -p "$(dirname "$AUDIT")"
-printf '%s armed=%s window=%s ppid=%s tty=%s\n' \
-  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$n" "$window" "$PPID" "$(tty 2>/dev/null || echo none)" >>"$AUDIT"
+PER SESSION, since 2026-09-02. The file used to be one shared slot for the
+whole machine, so two sessions drafting at once overwrote each other and `! ok`
+armed whichever landed last -- not the one Sam was reading. That happened: a
+WhatsApp bubble was on screen and an unrelated email got armed. Nothing wrong
+could have been *sent* (the fingerprint stops that), but showing Sam one draft
+and arming another is its own defect. Splitting by session removes it.
 
-if [ "$n" -eq 1 ]; then
-  echo "outbound approval armed for ONE send. Window: $window."
-else
-  echo "outbound approval armed for $n sends. Window: $window."
-  echo "Every draft is still shown to you individually before it goes."
-fi
+BATCH APPROVAL IS BACK, and safe this time. The old `ok N` minted a bare count
+-- "N sends, whatever recipient, whatever body" -- which is a bearer credit,
+not a signature. What `ok` mints now is a SET of fingerprints, each bound to
+one exact (recipient, body) that Sam saw printed above the prompt. So "doe maar
+alle vijf" costs one keystroke and still cannot approve a sixth message, a
+different recipient, or one edited character.
+
+  ok        every draft this session queued, each one listed first
+  ok all    the same
+  ok #2     only draft 2; the rest stay queued
+  ok 2      REFUSED -- ambiguous between "two sends" and "draft two"
+
+Refuses, loudly, with a reason, when the queue is:
+  - missing                        -> run outbound-humanize first
+  - older than PENDING_TTL_SEC     -> ask for a fresh outbound-humanize pass
+  - malformed / missing a field    -> named explicitly, never silently ignored
+  - internally inconsistent        -> an fp does not match its own body
+
+Never touches /tmp/.claude-send-ok. That file is Sam's own manual escape
+hatch (`! touch /tmp/.claude-send-ok`, typed by him, not by this script) and
+stays exactly as it was.
+"""
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+
+# Overridable via env for the regression test suite only; production defaults
+# below are what actually runs on this machine.
+def _session_id() -> str:
+    return (os.environ.get("CLAUDE_CODE_SESSION_ID")
+            or os.environ.get("CLAUDE_SESSION_ID") or "no-session")
+
+
+# Per session, matching outbound-humanize. See its comment for why: one shared
+# slot meant `! ok` could arm a draft from a different session than the one Sam
+# was reading.
+PENDING_DIR = Path(
+    os.environ.get("OUTBOUND_PENDING_DIR")
+    or (HOME / ".claude" / "state" / "outbound-pending")
+)
+PENDING_PATH = Path(
+    os.environ.get("OUTBOUND_PENDING_PATH")
+    or (PENDING_DIR / f"{_session_id()}.json")
+)
+LEGACY_PENDING = HOME / ".claude" / "state" / "outbound-pending.json"
+# Matched to the humanizer stamp's own 30-minute life, not chosen loosely. A
+# pending record that outlives its stamp is worthless anyway: the send is
+# blocked for want of a stamp long before this window matters. The old 600s
+# was strictly tighter than the gate behind it, which only meant Sam had to
+# ask for the same draft twice when he stepped away for a coffee.
+PENDING_TTL_SEC = int(os.environ.get("OUTBOUND_PENDING_TTL_SEC") or 1800)
+# Widened from 120s to 900s on 2026-09-05. What makes an approval safe is that
+# it is bound to one exact (recipient, body) fingerprint and is spent once and
+# ledgered forever -- not that it expires quickly. A 120s window was sized for a
+# human typing `ok` and hitting send in the same breath; an agent's next turn
+# routinely takes longer than that, so the window expired between the approval
+# and the send it was given for, and the answer to a legitimate approval was no.
+# A gate that says no to the approved case is not a stricter gate.
+MINT_TTL_SEC = int(os.environ.get("OUTBOUND_MINT_TTL_SEC") or 900)
+# With a batch, each extra message adds a minute, up to this ceiling. An
+# approval that outlives the conversation it was given in is a stale approval.
+MINT_TTL_MAX_SEC = int(os.environ.get("OUTBOUND_MINT_TTL_MAX_SEC") or 1800)
+def _resolve_guard_py() -> Path:
+    """Where the guard module lives, most specific first.
+
+    An explicit OUTBOUND_GUARD_PY always wins. Otherwise prefer a copy sitting
+    next to this script: that is how the plugin ships the pair, and it keeps a
+    checkout self-consistent instead of silently deciding against an installed
+    copy on a different schema. Only when there is no sibling do we fall back to
+    the installed hook path, which is where a bare `ok` on ~/.local/bin finds it.
+    """
+    explicit = os.environ.get("OUTBOUND_GUARD_PY")
+    if explicit:
+        return Path(explicit)
+    sibling = Path(__file__).resolve().parent / "outbound_guard.py"
+    if sibling.exists():
+        return sibling
+    return HOME / ".claude" / "scripts" / "hooks" / "outbound_guard.py"
+
+
+GUARD_PY = _resolve_guard_py()
+AUDIT = Path(
+    os.environ.get("OUTBOUND_OK_AUDIT")
+    or (HOME / ".claude" / "state" / "ok-token-audit.log")
+)
+
+
+def _audit(line: str) -> None:
+    try:
+        AUDIT.parent.mkdir(parents=True, exist_ok=True)
+        with open(AUDIT, "a") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + " " + line + "\n")
+    except OSError:
+        pass
+
+
+def _die(msg: str, code: int = 2) -> None:
+    print(msg, file=sys.stderr)
+    _audit("REFUSED " + msg.replace("\n", " ")[:300])
+    sys.exit(code)
+
+
+def _load_guard():
+    if not GUARD_PY.exists():
+        _die(f"ok: guard module not found at {GUARD_PY}; refusing rather than guessing.")
+    loader = importlib.machinery.SourceFileLoader("outbound_guard_live", str(GUARD_PY))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        loader.exec_module(mod)
+    except Exception as e:  # noqa: BLE001 - a broken guard module must refuse, not crash unclearly
+        _die(f"ok: could not load {GUARD_PY}: {type(e).__name__}: {e}")
+    return mod
+
+
+def _read_queue() -> list[dict]:
+    """This session's pending drafts, oldest first.
+
+    Every entry is validated before it can be shown or approved. A malformed
+    entry kills the whole call rather than being skipped: silently dropping one
+    draft out of five while approving the rest is how Sam ends up approving a
+    set he did not read."""
+    try:
+        st = PENDING_PATH.stat()
+    except FileNotFoundError:
+        extra = ""
+        if LEGACY_PENDING.exists():
+            extra = (
+                f"\n\nNote: the old shared file {LEGACY_PENDING} still exists.\n"
+                "It predates the per-session split and is ignored on purpose.\n"
+                "Ask the assistant to re-run outbound-humanize in THIS session."
+            )
+        _die(
+            "ok: no pending draft to approve.\n"
+            f"Expected one at {PENDING_PATH}, written by outbound-humanize before it\n"
+            "shows you a draft. Nothing has been proposed to approve yet." + extra
+        )
+    except OSError as e:
+        _die(f"ok: cannot read pending drafts ({e}): {PENDING_PATH}")
+
+    age = time.time() - st.st_mtime
+    if age > PENDING_TTL_SEC:
+        _die(
+            f"ok: pending drafts are {int(age)}s old, older than the {PENDING_TTL_SEC}s "
+            "approval window.\nAsk the assistant to run outbound-humanize again for a "
+            "fresh draft before approving."
+        )
+
+    try:
+        raw = PENDING_PATH.read_text()
+    except OSError as e:
+        _die(f"ok: cannot read pending drafts ({e}): {PENDING_PATH}")
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        _die(f"ok: pending drafts are malformed (invalid JSON: {e}): {PENDING_PATH}")
+
+    if not isinstance(data, list):
+        _die(
+            "ok: pending drafts are malformed (expected a JSON list): "
+            f"{PENDING_PATH}\nThis file may have been written by an older "
+            "outbound-humanize. Re-run it for a fresh draft."
+        )
+    if not data:
+        _die(f"ok: the pending queue is empty: {PENDING_PATH}")
+
+    for i, rec in enumerate(data, 1):
+        if not isinstance(rec, dict):
+            _die(f"ok: pending draft {i} is malformed (not a JSON object): {PENDING_PATH}")
+        for field in ("recipient", "body", "fp"):
+            val = rec.get(field)
+            if not isinstance(val, str) or not val:
+                _die(
+                    f"ok: pending draft {i} is malformed (missing or empty "
+                    f"{field!r}): {PENDING_PATH}"
+                )
+
+    return data
+
+
+USAGE = (
+    "usage:\n"
+    "  ok          approve every draft this session has queued\n"
+    "  ok all      the same thing, spelled out\n"
+    "  ok #2       approve only draft 2 from the list, leave the rest queued\n"
+    "\n"
+    "A bare number is refused on purpose: `ok 5` used to mean 'five sends' and\n"
+    "now reads as 'draft five', and guessing which one Sam meant is not a thing\n"
+    "an approval command gets to do. Write `ok #5` for the draft, `ok` for all."
+)
+
+
+def _select(argv: list[str], queue: list[dict]) -> list[dict]:
+    """Which drafts this invocation approves. Refuses anything ambiguous."""
+    if not argv:
+        return queue
+
+    arg = argv[0].strip().lower()
+    if len(argv) > 1:
+        _die(USAGE + f"\n\nunexpected extra arguments: {argv[1:]!r}")
+
+    if arg in ("all", "alles", "these", "allemaal"):
+        return queue
+
+    if arg.startswith("#") and arg[1:].isdigit():
+        idx = int(arg[1:])
+        if not 1 <= idx <= len(queue):
+            _die(
+                f"ok: there is no draft {idx}; this session has {len(queue)} "
+                "queued.\nRun `ok` with no arguments to see and approve them all."
+            )
+        return [queue[idx - 1]]
+
+    if arg.isdigit():
+        _die(
+            f"ok: refusing the bare number {arg!r} -- it is ambiguous.\n\n" + USAGE
+        )
+
+    _die(USAGE + f"\n\nunexpected argument: {argv[0]!r}")
+    return []  # unreachable; _die exits
+
+
+def main() -> int:
+    queue = _read_queue()
+    selected = _select(sys.argv[1:], queue)
+
+    guard = _load_guard()
+
+    # Verify every record against its own stored fingerprint BEFORE minting any
+    # of them. A partially-minted set would leave Sam having approved messages
+    # he was never shown.
+    for i, rec in enumerate(selected, 1):
+        real_fp = guard.fingerprint(rec["recipient"], rec["body"])
+        if real_fp != rec["fp"]:
+            _die(
+                f"ok: draft {i}'s stored fingerprint does not match its own\n"
+                "(recipient, body). This should never happen from a genuine\n"
+                "outbound-humanize run -- refusing rather than trusting a record\n"
+                "that may have been tampered with or written by something else."
+            )
+
+    fps: dict[str, dict] = {}
+    plural = "s" if len(selected) != 1 else ""
+    print(f"Approving {len(selected)} send{plural}:")
+    for i, rec in enumerate(selected, 1):
+        body = rec["body"]
+        lines = body.splitlines()
+        first_line = lines[0] if lines else "(empty)"
+        nbytes = len(body.encode("utf-8"))
+        print(f"\n  [{i}] to:         {rec['recipient']}")
+        print(f"      channel:    {rec.get('channel') or '(unknown channel)'}")
+        print(f"      first line: {first_line}")
+        print(f"      bytes:      {nbytes}")
+        # Provenance, same three fields the UserPromptSubmit hook carries. Until
+        # 2026-09-09 this lane minted only recipient+preview, so an approval
+        # given in the shell reached the guard with shown_at, route and channel
+        # empty, and the AUTHORIZED line in the consent audit could not say when
+        # Sam was shown the text or how he said yes. The send was still bound to
+        # the exact body -- the fingerprint never depended on these -- but the
+        # evidence trail did, and half a trail is what makes an incident
+        # unreconstructable afterwards.
+        # shown_at is the record's OWN queue-write time: outbound-humanize
+        # writes the queue before it prints the body Sam reads.
+        fps[rec["fp"]] = {
+            "recipient": rec["recipient"],
+            "preview": body[:200],
+            "shown_at": rec.get("ts", ""),
+            "route": "shell-ok",
+            "channel": rec.get("channel", ""),
+        }
+
+    if len(fps) != len(selected):
+        _die(
+            "ok: two selected drafts share a fingerprint, so approving them\n"
+            "would arm fewer sends than shown. Refusing rather than guessing."
+        )
+
+    # Each extra message gets its own slice of time -- five sends cannot
+    # realistically be dispatched inside the window sized for one -- but the
+    # ceiling keeps an approval from lingering for an hour.
+    ttl = min(MINT_TTL_SEC + 60 * (len(selected) - 1), MINT_TTL_MAX_SEC)
+
+    approved = guard.mint(fps, ttl)
+    if set(approved.keys()) != set(fps):
+        _die(
+            "ok: mint did not return exactly the selected fingerprints and\n"
+            "nothing else; refusing rather than leaving an ambiguous approval set."
+        )
+
+    # One-shot per draft: drop what was just approved, keep the rest queued so
+    # `ok #2` does not throw away the drafts Sam has not decided on yet.
+    remaining = [rec for rec in queue if rec["fp"] not in fps]
+    try:
+        if remaining:
+            tmp = PENDING_PATH.with_suffix(PENDING_PATH.suffix + ".tmp")
+            tmp.write_text(json.dumps(remaining))
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, PENDING_PATH)
+        else:
+            PENDING_PATH.unlink()
+    except OSError:
+        pass
+
+    for rec in selected:
+        _audit(
+            f"APPROVED fp={rec['fp']} to={rec['recipient']!r} "
+            f"channel={rec.get('channel') or ''} "
+            f"bytes={len(rec['body'].encode('utf-8'))} "
+            f"session={_session_id()} ppid={os.getppid()} "
+            f"tty={os.environ.get('SSH_TTY') or ''}"
+        )
+
+    # NOTE 2026-09-05: an earlier fix here also wrote /tmp/.claude-send-ok,
+    # on the theory that the PreToolUse guard only read that file. It does not:
+    # it calls outbound_guard.consume(), which matches the fingerprint minted
+    # above. The real defect was in the guard's _identify(), which could not
+    # read the recipient and body out of a Bash `gog gmail send` and so
+    # fingerprinted the whole shell line instead. That is fixed in
+    # block-outbound-comms.py. Writing the legacy token here is now not merely
+    # redundant but harmful: it is a bearer credential any message can spend,
+    # which is exactly the defect the 2026-09-02 rewrite removed. Removed.
+
+    print(f"\noutbound approval armed for {len(selected)} send{plural}. Window: {ttl}s.")
+    if remaining:
+        left = len(remaining)
+        print(f"{left} draft{'s' if left != 1 else ''} still queued, not approved.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
