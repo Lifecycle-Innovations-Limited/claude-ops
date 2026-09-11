@@ -32,29 +32,53 @@ The guard it delegates to is the installed one at
 `~/.claude/scripts/hooks/outbound_guard.py` (override with `OUTBOUND_GUARD_PY`); when it
 cannot be reached, the Node side fails closed.
 
-The copy of `outbound_guard.py` in this directory is still the older count-based version
-and is not yet a valid delegate — bringing it forward also means migrating the `ok`
-script off the retired `mint <n> <ttl>` call. The historical count schema is described
-below for that reason.
+The copy of `outbound_guard.py` in this directory **is** that guard, and `ok` here is its
+companion. Both were shipped forward together, because half a migration is not one: a
+reservation-schema Node twin delegating to a count-schema Python guard fails closed on
+every send, and a bash `ok` calling the retired `mint <n> <ttl>` arms nothing a
+reservation guard will honour.
 
-Historically both sides kept their own copy of one file:
+## What an approval is
+
+An approval is a **signature on one exact message**, never a bearer credit.
 
 ```
 /tmp/.claude-outbound-guard.json
-{"remaining": 3, "minted": 1786732800, "ttl": 900, "spent": {"<fingerprint>": 1786732801}}
+{"minted": 1786732800, "ttl": 900,
+ "approved":     {"<fp>": {"ts": ..., "recipient": "...", "preview": "..."}},
+ "inflight":     {"<fp>|<tool>": 1786732801},
+ "reservations": {"<fp>": {"at": ..., "recipient": "...", "tool": "...",
+                           "session_id": "...", "meta": {...}}}}
 ```
 
-A message is identified by recipient plus content:
-`sha256(recipient|whitespace-normalised body, first 400 chars)`, first 32 hex chars.
-Both languages compute it identically, which is what the test suite checks first.
+A message is identified by recipient plus content: `sha256(recipient|body)`, first 32 hex
+chars, with the body normalised only by stripping trailing whitespace per line and the
+trailing newline. Node and Python compute it identically, which is what the test suite
+checks first.
 
-When a guard sees a fingerprint it has already recorded within `SPENT_WINDOW_SEC`
-(120s), that is the same message arriving at a second layer. It passes and nothing is
-deducted. So one message costs exactly one unit no matter how many guards it crosses,
-and the approval count means what it says.
+The old schema hashed a whitespace-collapsed body truncated at 400 characters, so two
+materially different messages sharing a prefix collided and an approval for one satisfied
+the other. It also minted a bare count, which any session could spend on any recipient.
+Neither is true any more:
+
+- **`ok` mints a set of fingerprints**, read from the drafts this session already showed
+  and queued under `~/.claude/state/outbound-pending/<session>.json`. It verifies every
+  record against its own stored fingerprint before minting any of them.
+- **`consume()` allows only a send whose fingerprint is in that set.** A different
+  recipient or one changed byte finds nothing.
+- **A delivered fingerprint is refused forever** by an append-only ledger at
+  `~/.claude/state/outbound-sent.jsonl`, written the moment approval is granted. An
+  ambiguous delivery leaves a paper trail that blocks a silent duplicate.
+- **`inflight`** (120s, keyed on fingerprint *plus tool*) is the only free pass, and it
+  covers exactly one case: one message crossing both guards in the same PreToolUse cycle.
+
+`reservations` is phase one of a two-phase commit: the approval is held, not spent, while
+the send is attempted, and `commit()` / `release()` settle it. A reservation that outlives
+its TTL (`OUTBOUND_RESERVATION_TTL`, 180s) expires rather than stranding the approval. So
+a send that never happened does not silently burn the owner's yes.
 
 If the shared file is absent, both sides fall back to the old single-use token so a
-partially migrated environment keeps working rather than failing open or shut.
+partially migrated environment keeps working rather than failing open.
 
 ## Keeping the installed twin in sync
 
@@ -86,13 +110,18 @@ id a rank in `schema_rank()`.
 ## Arming
 
 ```
-ok           1 message,   2 minute window
-ok 3         3 messages, 15 minute window
-ok all       10 messages, 15 minute window   (also: ok these)
+ok           approve the pending draft
+ok 2         approve the second draft in the queue
+ok all       approve every draft this session has queued
 ```
 
-`all` is capped, not unlimited. Every draft is still shown to the owner individually
-before it goes; the counter only removes the need to retype the approval per message.
+`ok` never invents an approval. It reads the queue of drafts this session already showed,
+mints exactly those fingerprints, and refuses when the queue is empty, stale, malformed,
+or when a record does not match its own fingerprint. So `ok all` is not "ten free sends":
+it is a yes to the specific drafts on screen, and nothing else can spend it.
+
+`ok` finds the guard module via `OUTBOUND_GUARD_PY`, else a sibling `outbound_guard.py`
+next to it, else the installed hook at `~/.claude/scripts/hooks/outbound_guard.py`.
 
 ## Two rules for anyone adding a send path
 

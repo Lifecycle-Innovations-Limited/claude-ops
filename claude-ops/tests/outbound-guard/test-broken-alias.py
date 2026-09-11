@@ -43,11 +43,34 @@ def disarm():
             os.remove(p)
 
 
-def arm(home):
-    """Mint a real approval so the test proves the block outranks the token."""
-    subprocess.run([sys.executable, os.path.join(SRC, "outbound_guard.py"),
-                    "mint", "5", "900"],
-                   capture_output=True, timeout=30, env=dict(os.environ, HOME=home))
+def arm(home, cmd):
+    """Mint a real approval for EXACTLY this command, so the test proves the
+    alias block outranks a genuine approval rather than an absent one.
+
+    An approval is a signature on one (recipient, body), not a count. The old
+    `mint 5 900` call is retired and now refuses loudly, which silently turned
+    every "armed" case in this test into an unarmed one: the send was blocked
+    for want of approval and the assertion read as if the alias logic had
+    changed. So derive the pair the hook itself will derive, from the hook's own
+    code, and mint that fingerprint.
+    """
+    import importlib.machinery
+    import importlib.util
+
+    loader = importlib.machinery.SourceFileLoader(
+        "guard_under_test", os.path.join(SRC, "outbound_guard.py"))
+    guard = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(guard)
+
+    hook_loader = importlib.machinery.SourceFileLoader("hook_under_test", HOOK)
+    hook = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(hook_loader.name, hook_loader))
+    hook_loader.exec_module(hook)
+
+    recipient, body = hook._identify("Bash", {"command": cmd}, cmd)
+    fp = guard.fingerprint(recipient, body)
+    guard.mint({fp: {"recipient": recipient, "preview": body[:80]}}, 900)
 
 
 def main() -> int:
@@ -61,8 +84,9 @@ def main() -> int:
     try:
         disarm()
 
-        arm(home)
-        rc, err = run(f"{G} send --to x@y.com --from {BROKEN} --body hi", home)
+        cmd = f"{G} send --to x@y.com --from {BROKEN} --body hi"
+        arm(home, cmd)
+        rc, err = run(cmd, home)
         ok = rc == 2 and "misconfigured" in err
         fail += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} broken alias blocked despite approval (exit={rc})")
@@ -71,15 +95,17 @@ def main() -> int:
         fail += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} block message names the repair")
 
-        arm(home)
-        rc, _ = run(f"{G} send --to x@y.com --from {HEALTHY} --body hi", home)
+        cmd = f"{G} send --to x@y.com --from {HEALTHY} --body hi"
+        arm(home, cmd)
+        rc, _ = run(cmd, home)
         ok = rc == 0
         fail += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} healthy alias still allowed (exit={rc})")
 
         # No sender flag at all uses the account default, which cannot be broken this way.
-        arm(home)
-        rc, _ = run(f"{G} send --to x@y.com --body hi", home)
+        cmd = f"{G} send --to x@y.com --body hi"
+        arm(home, cmd)
+        rc, _ = run(cmd, home)
         ok = rc == 0
         fail += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} default sender unaffected (exit={rc})")
@@ -115,8 +141,9 @@ def main() -> int:
         # An empty list must not block anything, or a machine that never ran the
         # refresh script would have every send refused.
         os.remove(os.path.join(home, ".claude", "state", "broken-send-aliases.json"))
-        arm(home)
-        rc, _ = run(f"{G} send --to x@y.com --from {BROKEN} --body hi", home)
+        cmd = f"{G} send --to x@y.com --from {BROKEN} --body hi"
+        arm(home, cmd)
+        rc, _ = run(cmd, home)
         ok = rc == 0
         fail += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} no alias list means no extra blocking (exit={rc})")
