@@ -35,8 +35,7 @@ export const SPENT_WINDOW_SEC = 120;
 const LEGACY_SINGLE = '/tmp/.claude-send-ok';
 const LEGACY_SINGLE_TTL_SEC = 120;
 
-const GUARD_PY =
-  process.env.OUTBOUND_GUARD_PY || `${os.homedir()}/.claude/scripts/hooks/outbound_guard.py`;
+const GUARD_PY = process.env.OUTBOUND_GUARD_PY || `${os.homedir()}/.claude/scripts/hooks/outbound_guard.py`;
 const PYTHON = process.env.OUTBOUND_GUARD_PYTHON || 'python3';
 
 // Same computation as outbound_guard.py:fingerprint(). Kept here only so callers
@@ -94,7 +93,7 @@ function callGuard(fn, payload) {
     const r = spawnSync(PYTHON, ['-c', BRIDGE, GUARD_PY, fn], {
       input: JSON.stringify(payload),
       encoding: 'utf8',
-      timeout: 15000
+      timeout: 15000,
     });
     if (r.error || r.status !== 0) return null;
     const parsed = JSON.parse(r.stdout);
@@ -109,7 +108,7 @@ export function peek() {
   if (!out) return { remaining: 0, validForSec: 0 };
   return {
     remaining: Number(out.remaining ?? 0),
-    validForSec: Math.max(0, Number(out.validForSec ?? 0))
+    validForSec: Math.max(0, Number(out.validForSec ?? 0)),
   };
 }
 
@@ -131,7 +130,7 @@ export function claimReservation({ args, recipient = '', body = '', guard = '', 
     body: String(body ?? ''),
     guard: String(guard),
     session_id: String(sessionId ?? process.env.CLAUDE_SESSION_ID ?? ''),
-    tool: String(tool ?? '')
+    tool: String(tool ?? ''),
   });
   return out ? out.ok === true : false;
 }
@@ -145,7 +144,7 @@ export function consume(recipient = '', body = '', opts = {}) {
     recipient: String(recipient ?? ''),
     body: String(body ?? ''),
     session_id: String(opts.sessionId ?? process.env.CLAUDE_SESSION_ID ?? ''),
-    tool: String(opts.tool ?? '')
+    tool: String(opts.tool ?? ''),
   });
   if (out) return out.ok === true;
 
