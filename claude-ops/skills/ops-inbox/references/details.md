@@ -234,7 +234,11 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
  Last msg: [full body of their last message]
  Context: [related threads/decisions/deadlines found]
 
- Draft reply: "[contextually aware draft based on all above]"
+ Draft reply: "[exact outbound bytes]"
+
+ Why this reply: [what in the live thread this answers]
+ Expected outcome: [what happens after they read it]
+ Why that is good: [concrete gain, no vibe]
 ```
 
 Stage this per the **PER-DRAFT APPROVAL** principle below. On Telegram/Hermes, deliver the block above as a standalone FINAL draft bubble in TURN 1, with no approval card in that turn. In TURN 2, after the owner's next message or continuation event, show the one-item `[Send]` `[Handle this for me]` `[Edit]` `[Skip]` card. Never combine items.
