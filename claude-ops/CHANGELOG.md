@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [3.10.15] - 2026-09-11
+
+### Changed
+WhatsApp health hook no longer advises a local bridge restart. Outbound-guard SessionStart sync cannot silently downgrade the Node twin.
+
+
 ## [3.10.14] - 2026-09-11
 
 ### Changed
