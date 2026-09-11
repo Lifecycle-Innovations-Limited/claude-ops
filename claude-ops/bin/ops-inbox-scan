@@ -24,21 +24,25 @@
 # READ-ONLY: opens every sqlite db in immutable/read-only mode; never sends,
 # archives, or mutates anything. All sending stays in the skill under Rule 6.
 #
-# FULL INBOX, ALWAYS. Both channels scan everything that is not archived, never
-# just the unread. WhatsApp's working set is `archived=0`; email's is `in:inbox`.
-# Neither is sliced by a recency window, because an unanswered ask from three
-# weeks ago is still an unanswered ask. --days sizes only the WhatsApp send-log
-# lookback used for reconciliation; it never hides a chat or a mail.
+# FULL INBOX, ALWAYS. Unread is a DISPLAY state — never the working set.
+# WhatsApp open set is `archived=0`; email open set is `in:inbox`. On top of
+# that, --debt-days (default 90) reopens FORGOTTEN unanswered asks that were
+# archived, read, or otherwise put away while the other person still holds the
+# ball: last inbound is a real question, we never answered (or they asked
+# again after us), inside the debt window. History older than --debt-days
+# stays shut so a sweep cannot drag 2025 back in.
 #
 # FLAGS:
 #   --whatsapp-only / --email-only   limit to one channel
 #   --days N                         send-log lookback, in days (default 7)
+#   --debt-days N                    forgotten-ask window, in days (default 90)
 #   --email-query Q                  Gmail working set (default "in:inbox")
 #   --email-max N                    max Gmail results (default 400)
 #   --gmail-account ADDR             override Gmail account (default: gog default)
 #   --wa-store DB                    WhatsApp messages.db to scan
 #   --bridge-port N                  bridge REST port for that store
 #   --all-accounts                   scan EVERY agent-enabled account, not one
+#                                    (default when no --wa-store is given)
 #   --peer-store DB                  another account's store, read ONLY to see
 #                                    whether a person was already answered there
 #                                    (repeatable; auto-discovered by default)
@@ -54,6 +58,7 @@
 set -euo pipefail
 
 DAYS=7
+DEBT_DAYS=90
 DO_WA=1
 DO_EMAIL=1
 GMAIL_ACCOUNT="${GMAIL_ACCOUNT:-}"
@@ -73,6 +78,9 @@ while [ $# -gt 0 ]; do
     --days)
       [ $# -ge 2 ] || { echo "ops-inbox-scan: --days requires a value" >&2; exit 2; }
       DAYS="$2"; shift 2 ;;
+    --debt-days)
+      [ $# -ge 2 ] || { echo "ops-inbox-scan: --debt-days requires a value" >&2; exit 2; }
+      DEBT_DAYS="$2"; shift 2 ;;
     --email-query)
       [ $# -ge 2 ] || { echo "ops-inbox-scan: --email-query requires a value" >&2; exit 2; }
       EMAIL_QUERY="$2"; shift 2 ;;
@@ -107,6 +115,10 @@ done
 # an `unread` listing — and `unread` is a DISPLAY state, empty for every thread
 # the owner already opened on their phone. A person's real unanswered ask does
 # not have to be unread. So: scan EVERY enabled account and merge, labelled.
+# Default: when the caller did not pin a store, scan every enabled account.
+if [ "$ALL_ACCOUNTS" = 0 ] && [ -z "$WA_STORE_OVERRIDE$BRIDGE_PORT_OVERRIDE" ] && [ "$DO_WA" = 1 ]; then
+  ALL_ACCOUNTS=1
+fi
 if [ "$ALL_ACCOUNTS" = 1 ]; then
   [ -n "$WA_STORE_OVERRIDE$BRIDGE_PORT_OVERRIDE" ] && {
     echo "ops-inbox-scan: --all-accounts cannot be combined with --wa-store/--bridge-port" >&2
@@ -115,10 +127,11 @@ if [ "$ALL_ACCOUNTS" = 1 ]; then
   _resolver="$(dirname "$0")/ops-wa-accounts"
   [ -x "$_resolver" ] || { echo "ops-inbox-scan: ops-wa-accounts not found" >&2; exit 4; }
   _self="$0"
-  "$_resolver" | OIS_SELF="$_self" OIS_DAYS="$DAYS" OIS_DO_EMAIL="$DO_EMAIL" \
+  "$_resolver" | OIS_SELF="$_self" OIS_DAYS="$DAYS" OIS_DEBT_DAYS="$DEBT_DAYS" OIS_DO_EMAIL="$DO_EMAIL" \
     OIS_EMAIL_QUERY="$EMAIL_QUERY" OIS_EMAIL_MAX="$EMAIL_MAX" \
     OIS_GMAIL_ACCOUNT="$GMAIL_ACCOUNT" OIS_PRETTY="$PRETTY" python3 -c '
 import json, os, subprocess, sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 blob = json.load(sys.stdin)
 enabled = [a for a in blob.get("accounts", []) if a.get("agent_enabled") is True]
@@ -128,12 +141,14 @@ if not enabled:
 
 self_bin = os.environ["OIS_SELF"]
 merged = {"generated_at": None, "window_days": int(os.environ["OIS_DAYS"]),
+          "debt_days": int(os.environ.get("OIS_DEBT_DAYS", "90")),
           "notes": [], "whatsapp_accounts": []}
-first = True
-for acct in enabled:
+
+def scan_one(acct):
     store = acct.get("store") or acct.get("remote_store") or ""
     port = acct.get("port")
     cmd = [self_bin, "--whatsapp-only", "--days", os.environ["OIS_DAYS"],
+           "--debt-days", os.environ.get("OIS_DEBT_DAYS", "90"),
            "--wa-store", store, "--bridge-port", str(port)]
     env = dict(os.environ, OIS_SSH=acct.get("ssh") or "",
                OIS_SSH_FALLBACK=acct.get("ssh_fallback") or "",
@@ -144,27 +159,42 @@ for acct in enabled:
         one = json.loads(out.stdout or "{}")
     except Exception as exc:  # a broken account must be LOUD, never silent
         one = {"whatsapp": {"reachable": False, "error": str(exc)}}
-    merged["generated_at"] = merged["generated_at"] or one.get("generated_at")
-    merged["notes"].extend(one.get("notes", []))
-    merged["whatsapp_accounts"].append({
-        "account": acct.get("label"), "phone": acct.get("phone"),
-        "bridge_port": port, "store": store,
-        **one.get("whatsapp", {}),
-    })
-    first = False
+    return acct, store, port, one
 
-if os.environ.get("OIS_DO_EMAIL") == "1":
-    cmd = [self_bin, "--email-only", "--email-query", os.environ["OIS_EMAIL_QUERY"],
-           "--email-max", os.environ["OIS_EMAIL_MAX"]]
-    if os.environ.get("OIS_GMAIL_ACCOUNT"):
-        cmd += ["--gmail-account", os.environ["OIS_GMAIL_ACCOUNT"]]
-    try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        one = json.loads(out.stdout or "{}")
-        merged["email"] = one.get("email")
+workers = min(len(enabled), 4)
+with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+    futs = [pool.submit(scan_one, a) for a in enabled]
+    email_fut = None
+    if os.environ.get("OIS_DO_EMAIL") == "1":
+        def scan_email():
+            cmd = [self_bin, "--email-only", "--email-query", os.environ["OIS_EMAIL_QUERY"],
+                   "--email-max", os.environ["OIS_EMAIL_MAX"]]
+            if os.environ.get("OIS_GMAIL_ACCOUNT"):
+                cmd += ["--gmail-account", os.environ["OIS_GMAIL_ACCOUNT"]]
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            return json.loads(out.stdout or "{}")
+        email_fut = pool.submit(scan_email)
+    by_label = {}
+    for fut in as_completed(futs):
+        acct, store, port, one = fut.result()
+        by_label[id(acct)] = (acct, store, port, one)
+    # Preserve resolver order so the same inbox is labelled the same way every run.
+    for acct in enabled:
+        _acct, store, port, one = by_label[id(acct)]
+        merged["generated_at"] = merged["generated_at"] or one.get("generated_at")
         merged["notes"].extend(one.get("notes", []))
-    except Exception as exc:
-        merged["email"] = {"reachable": False, "note": "email scan failed: %s" % exc}
+        merged["whatsapp_accounts"].append({
+            "account": acct.get("label"), "phone": acct.get("phone"),
+            "bridge_port": port, "store": store,
+            **one.get("whatsapp", {}),
+        })
+    if email_fut is not None:
+        try:
+            one = email_fut.result()
+            merged["email"] = one.get("email")
+            merged["notes"].extend(one.get("notes", []))
+        except Exception as exc:
+            merged["email"] = {"reachable": False, "note": "email scan failed: %s" % exc}
 
 merged["counts"] = {
     "whatsapp": {a["account"]: {b: len(a.get(b) or []) for b in
@@ -294,7 +324,7 @@ if [ "$DO_EMAIL" = 1 ] && [ -z "$GMAIL_ACCOUNT" ]; then
     | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' | head -1 || true)"
 fi
 
-export OIS_DAYS="$DAYS" OIS_DO_WA="$DO_WA" OIS_DO_EMAIL="$DO_EMAIL"
+export OIS_DAYS="$DAYS" OIS_DEBT_DAYS="$DEBT_DAYS" OIS_DO_WA="$DO_WA" OIS_DO_EMAIL="$DO_EMAIL"
 export OIS_WA_MSGDB="$WA_MSGDB" OIS_WA_WADB="$WA_WADB"
 export OIS_GMAIL_ACCOUNT="$GMAIL_ACCOUNT" OIS_PRETTY="$PRETTY"
 export OIS_WA_PHONE="$WA_ACCOUNT_PHONE" OIS_WA_PORT="$BRIDGE_PORT"
@@ -438,6 +468,7 @@ import os, sys, json, sqlite3, re
 from datetime import datetime, timezone
 
 DAYS      = int(os.environ.get("OIS_DAYS", "7"))
+DEBT_DAYS = int(os.environ.get("OIS_DEBT_DAYS", "90"))
 DO_WA     = os.environ.get("OIS_DO_WA") == "1"
 DO_EMAIL  = os.environ.get("OIS_DO_EMAIL") == "1"
 MSGDB     = os.environ.get("OIS_WA_MSGDB", "")
@@ -828,6 +859,65 @@ def scan_whatsapp():
             "sweep, so the archive no longer means dealt-with" % reopened
         )
 
+    # FORGOTTEN DEBT. An archived/read thread can still hold an unanswered ask
+    # the owner put away and never came back to. Unread is a display state, so
+    # this must not depend on unread_count. Narrow: last inbound is a real
+    # question, we never answered (or they asked again after us), inside
+    # --debt-days. Older history stays shut (the 316-chat blowout).
+    ASK_RE = re.compile(
+        r"\?|\b(kun|kan|could|can|would|please|graag|laat.*weten|let me know|"
+        r"need|nodig|wanneer|when|hoe|how|wat|what|waarom|why|stuur|send|"
+        r"call|bel|oké met|oke met|ok with)\b",
+        re.IGNORECASE)
+    forgotten = 0
+    forgotten_jids = set()
+    try:
+        debt_rows = con.execute(
+            "SELECT c.jid AS jid, c.name AS name, "
+            "       c.last_message_time AS last_message_time, "
+            "       (SELECT content FROM messages i WHERE i.chat_jid = c.jid "
+            "          AND i.is_from_me = 0 ORDER BY i.timestamp DESC LIMIT 1) AS last_in_text, "
+            "       (SELECT MAX(i.timestamp) FROM messages i "
+            "          WHERE i.chat_jid = c.jid AND i.is_from_me = 0) AS last_in, "
+            "       (SELECT MAX(o.timestamp) FROM messages o "
+            "          WHERE o.chat_jid = c.jid AND o.is_from_me = 1) AS last_out "
+            "FROM chats c WHERE c.archived = 1 "
+            "  AND c.last_message_time >= datetime('now', ?) "
+            "ORDER BY c.last_message_time DESC",
+            (f"-{DEBT_DAYS} days",),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        debt_rows = []
+        notes.append(f"whatsapp: forgotten-debt check failed ({exc})")
+    for r in debt_rows:
+        jid = r["jid"]
+        if jid in seen_jids:
+            continue
+        if jid.endswith("@broadcast") or jid.endswith("@newsletter") or jid.endswith("@g.us"):
+            continue
+        last_in = r["last_in"]
+        last_out = r["last_out"]
+        body = (r["last_in_text"] or "").strip()
+        if not last_in or not body:
+            continue
+        mark = marks.get(jid)
+        if mark and last_in <= mark:
+            continue
+        if last_out and last_out >= last_in:
+            continue
+        if not ASK_RE.search(body):
+            continue
+        chats.append(r)
+        seen_jids.add(jid)
+        forgotten_jids.add(jid)
+        forgotten += 1
+    if forgotten:
+        notes.append(
+            "whatsapp: %d forgotten unanswered ask(s) reopened inside the "
+            "%d-day debt window (archived/read, still their ball)"
+            % (forgotten, DEBT_DAYS)
+        )
+
     # Build merged DM groups keyed by canonical jid.
     groups = {}   # canonical_jid -> {member_jids:set, name, latest_ts}
     g_chats = []  # @g.us
@@ -894,6 +984,8 @@ def scan_whatsapp():
             "last_from_me": bool(last["is_from_me"]),
             "preview": preview,
         }
+        if forgotten_jids.intersection(members):
+            item["forgotten"] = True
         if last["is_from_me"]:
             out["waiting"].append(item)
         else:
@@ -1085,6 +1177,7 @@ def scan_email():
 result = {
     "generated_at": now.isoformat(),
     "window_days": DAYS,
+    "debt_days": DEBT_DAYS,
     "peer_stores_read": PEER_STORES,
     "notes": notes,
 }

@@ -272,7 +272,7 @@ ts = (datetime.datetime.now(datetime.timezone.utc)
 con.execute("INSERT INTO chats VALUES ('888111@lid','Swept',?,1,0)", (ts,))
 con.execute("INSERT INTO contacts VALUES ('888111@lid','Swept','888111','test',0)")
 con.execute("INSERT INTO messages VALUES ('s1','888111@lid','888111',"
-            "'Anything left to do?',?,0,'','')", (ts,))
+            "'thanks!',?,0,'','')", (ts,))
 con.commit(); con.close()
 PY
 

@@ -536,7 +536,12 @@ def main():
             for e in extra:
                 for row in e["archive"]:
                     swept.extend([row.get("jid")] + list(row.get("alt_jids") or []))
-            stores = [(scan or {}).get("whatsapp_account", {}).get("store")]
+            stores = []
+            if (scan or {}).get("whatsapp_account", {}).get("store"):
+                stores.append(scan["whatsapp_account"]["store"])
+            for acct in (scan or {}).get("whatsapp_accounts", []):
+                if acct.get("store"):
+                    stores.append(acct["store"])
             stores += list(args.wa_store or [])
             write_sweep_watermarks([j for j in swept if j], stores)
         result["applied"] = True
