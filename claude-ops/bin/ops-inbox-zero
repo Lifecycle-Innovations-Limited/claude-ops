@@ -126,8 +126,8 @@ if [ "$DO_WA" = 1 ]; then
 fi
 
 # -------- 3. scan ------------------------------------------------------------
-log "step 2/9 — ops-inbox-scan --pretty --days ${DAYS}"
-if ! ops-inbox-scan --pretty --days "$DAYS" > "$SCAN_OUT" 2>"$SCAN_OUT.err"; then
+log "step 2/9 — ops-inbox-scan --pretty --days ${DAYS} --all-accounts"
+if ! ops-inbox-scan --pretty --days "$DAYS" --all-accounts > "$SCAN_OUT" 2>"$SCAN_OUT.err"; then
   log "scan FAILED — see $SCAN_OUT.err; falling back to per-channel"
   log "falling back to per-channel scans is the agent's job; exiting 3"
   exit 3

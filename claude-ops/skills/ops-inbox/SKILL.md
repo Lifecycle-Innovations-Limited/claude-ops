@@ -145,12 +145,25 @@ Every run, in order:
    surfaced individually with thread context, never as a line in a digest.
    Before drafting to any person, load `relations` for their brief and open
    commitments.
-1. Resolve the WhatsApp account (`ops-wa-accounts` — never hardcode a port).
-2. Freshness: `~/bin/wa-inbox-fresh.sh` (blocking, bounded). Then `bin/ops-inbox-scan --all-accounts`. Never an unread listing: unread is a display state and is empty for every thread already opened on a phone.
-3. **All-context sweep** (Rule 9 + `references/details.md` "ALL CONTEXT SOURCES"): query every configured calendar, mailbox, and messaging channel before any schedule claim or NEEDS_REPLY draft. Google Calendar alone is not enough — Notion show/calendar databases count when Notion is configured. A miss on one store is not absence.
+1. Resolve WhatsApp accounts (`ops-wa-accounts` — never hardcode a port). Scan every agent-enabled number.
+2. Freshness: `~/bin/wa-inbox-fresh.sh` (blocking, bounded). Then `bin/ops-inbox-scan` (defaults to every enabled account, `--debt-days 90`). Never an unread listing: unread is a display state and is empty for every thread already opened on a phone. Forgotten unanswered asks (archived/read, still their ball, inside 90 days) come back tagged `forgotten`.
+2b. **Every other channel in the same pass, in parallel:** iMessage/SMS (`$HERMES_HOME/bin/imessage-inbox-scan --days 30` — copies `-wal`/`-shm` first or recent messages are invisible; alphanumeric shortcodes and OTP bodies are `fyi`, never `needs_reply`). Slack (`conversations_unreads`, DMs first). Telegram user dialogs if configured. Email is already in the scan. A miss on one channel is not absence on another.
+3. **All-context sweep** (Rule 9 + `references/details.md` "ALL CONTEXT SOURCES"): query every configured calendar, mailbox, and messaging channel before any schedule claim or NEEDS_REPLY draft. Google Calendar alone is not enough — Notion show/calendar databases count when Notion is configured.
 4. `bin/ops-inbox-archive-set` report-only. Present KEEP vs ARCHIVE; `--apply` only after explicit OK.
-5. Deep-read KEEP / NEEDS_REPLY. Fan out if volume (`references/fan-out.md`).
+5. Deep-read KEEP / NEEDS_REPLY. Fan out if volume (`references/fan-out.md`). One read-only worker per channel, then one per KEEP thread-chunk. Stage the next draft the moment the previous card is answered — no "next?" pause.
 6. Stage drafts one at a time (Rule 6). Archive after a verified send.
+
+## Every suggested send carries reasoning
+
+A draft without this block is incomplete. Never show only the outbound text.
+
+Print, in the same bubble as the exact draft, three short lines in plain words:
+
+- **Why this reply:** what in the live thread this answers (quote the ask, not a vibe).
+- **Expected outcome:** what happens after they read it (they stop chasing, they can act, the thread closes).
+- **Why that is good:** the concrete gain.
+
+If you cannot fill all three from the thread, do not stage. Go read more.
 
 Channel processing, FULL-THREAD AWARENESS GATE, and per-channel recipes: `references/details.md`.
 
