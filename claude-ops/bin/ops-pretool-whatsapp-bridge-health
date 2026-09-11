@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
-# PreToolUse hook: fast whatsapp-bridge health check (backgrounded to avoid blocking)
+# PreToolUse hook: fast WhatsApp reachability check (backgrounded to avoid blocking)
 # Event JSON arrives on stdin (Claude + Grok). Optional argv kept for old callers.
+#
+# WhatsApp runs on the always-on host (ai-hub), for both numbers. This machine is
+# only ever a CLIENT: the MCP reaches the remote bridge through local reverse
+# proxies. There is no local bridge and there must never be one -- starting or
+# pairing a bridge here hijacks the remote session and logs it out.
+#
+# So this hook checks the CLIENT LEGS, never a local bridge, and never advises
+# starting one. A remote read failure should fail loudly, not fall back to
+# anything local. Advisory only: it always exits 0 and never blocks a tool call.
 set -e
 if [[ -n "${1:-}" ]]; then
   INPUT="$1"
@@ -9,14 +18,28 @@ else
 fi
 echo "$INPUT" | grep -q "whatsapp" || exit 0
 
-# Background the slow checks (lsof, launchctl) so this hook returns instantly.
-# If bridge is down, the skill's own health check will catch it.
+# Local client proxy ports, overridable for hosts wired differently.
+WA_CLIENT_PORT_NL="${OPS_WA_CLIENT_PORT_NL:-8483}"
+WA_CLIENT_PORT_US="${OPS_WA_CLIENT_PORT_US:-8482}"
+
+# Background the slow checks (lsof) so this hook returns instantly.
+# If a leg is down, the skill's own health check will catch it too.
 (
   sleep 0.1
-  if ! (lsof -i :8080 2>/dev/null | grep -q LISTEN); then
+  down=""
+  for entry in "NL:${WA_CLIENT_PORT_NL}" "US:${WA_CLIENT_PORT_US}"; do
+    label="${entry%%:*}"
+    port="${entry##*:}"
+    if ! lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      down="${down} ${label}(:${port})"
+    fi
+  done
+  if [[ -n "$down" ]]; then
     cat <<EOF >&2
-⚠ WhatsApp bridge not on :8080. Restart:
-  launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge
+⚠ WhatsApp client leg down:${down}
+  WhatsApp runs on ai-hub only (both numbers); this machine is just a client.
+  Do NOT start, pair or kickstart a local bridge -- that hijacks the hub session.
+  Check the local reverse proxy and the tunnel to the hub, then retry.
 EOF
   fi
 ) &
