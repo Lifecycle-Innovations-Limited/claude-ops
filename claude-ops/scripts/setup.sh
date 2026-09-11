@@ -47,11 +47,20 @@ fi
 
 # ─── Keep the installed outbound-guard Node twin current ───────────
 # outbound_guard.py documents an installed copy at ~/.claude/mcp-proxy/outbound-guard.mjs
-# that shares its state file and rules. Without a refresh step that copy silently drifts
-# onto an old schema every time outbound-guard.mjs changes in the repo. Re-run on every
-# session start; the sync script is an idempotent overwrite so this is always safe.
-if [ -f "$PLUGIN_ROOT/scripts/outbound-guard/sync-installed-copy.sh" ]; then
-  bash "$PLUGIN_ROOT/scripts/outbound-guard/sync-installed-copy.sh" >/dev/null 2>&1 || true
+# that shares its state file and rules. Without a refresh step that copy drifts onto an
+# old schema every time outbound-guard.mjs changes in the repo.
+#
+# The sync is no longer an unconditional overwrite: it refuses to replace an installed
+# guard whose schema it cannot place, or one newer than the checkout. `|| true` with
+# stderr on /dev/null hid exactly that refusal, which is how a silent downgrade of a
+# security guard became possible. A refusal must not abort session start, but it must be
+# SEEN, so only stdout is discarded and the diagnosis is printed.
+SYNC_GUARD="$PLUGIN_ROOT/scripts/outbound-guard/sync-installed-copy.sh"
+if [ -f "$SYNC_GUARD" ]; then
+  if ! SYNC_ERR="$(bash "$SYNC_GUARD" 2>&1 >/dev/null)"; then
+    echo "  ✗ ops: outbound-guard sync refused — installed copy left untouched" >&2
+    [ -n "$SYNC_ERR" ] && printf '%s\n' "$SYNC_ERR" >&2
+  fi
 fi
 
 # ─── Report only problems ───────────────────────────────────────────

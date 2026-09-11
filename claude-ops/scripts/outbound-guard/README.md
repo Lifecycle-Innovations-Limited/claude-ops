@@ -25,8 +25,19 @@ Three failures came out of that on 2026-08-15:
 
 ## The design
 
-`outbound_guard.py` and `outbound-guard.mjs` are the same logic in two languages,
-reading and writing one file:
+`outbound-guard.mjs` is the Node twin used by the MCP proxy. It no longer reimplements
+the store: it hands every decision to `outbound_guard.py` over stdin, because two
+implementations of "which message is this, and was it approved" is exactly what drifted.
+The guard it delegates to is the installed one at
+`~/.claude/scripts/hooks/outbound_guard.py` (override with `OUTBOUND_GUARD_PY`); when it
+cannot be reached, the Node side fails closed.
+
+The copy of `outbound_guard.py` in this directory is still the older count-based version
+and is not yet a valid delegate — bringing it forward also means migrating the `ok`
+script off the retired `mint <n> <ttl>` call. The historical count schema is described
+below for that reason.
+
+Historically both sides kept their own copy of one file:
 
 ```
 /tmp/.claude-outbound-guard.json
@@ -44,6 +55,33 @@ and the approval count means what it says.
 
 If the shared file is absent, both sides fall back to the old single-use token so a
 partially migrated environment keeps working rather than failing open or shut.
+
+## Keeping the installed twin in sync
+
+`sync-installed-copy.sh` mirrors `outbound-guard.mjs` to
+`~/.claude/mcp-proxy/outbound-guard.mjs`. `scripts/setup.sh` runs it on every
+SessionStart.
+
+It used to be an unconditional overwrite, and that was a defect in its own right. On one
+machine the installed copy was the current reservation-schema guard while the shipped
+copy was still the old count-schema one, so every session start tried to **downgrade a
+security guard** — silently, because setup.sh called it with `|| true` and stderr on
+`/dev/null`. It fails closed, so nothing leaked, but the two-phase commit for
+MCP-proxy-routed sends stops working and approvals are never redeemed. The only thing
+holding it back was a hand-set `chflags uchg` on the installed file, and 304 leaked
+`.tmp.<pid>` files were the evidence that the script had been failing unseen for weeks.
+
+So the sync is now a guarded, one-directional upgrade:
+
+- Both files carry a `// outbound-guard-schema: <id>` marker. Unmarked files are placed
+  by content (delegating guard vs. own count store).
+- An installed copy whose schema cannot be placed is **refused**, on stderr, non-zero.
+- An installed copy newer than the source is refused: sync forward only.
+- `--force` / `OUTBOUND_GUARD_SYNC_FORCE=1` is the deliberate override for a repair.
+- A failed sync cleans up its own temp file (`trap ... EXIT`).
+
+Bump the marker whenever the contract with `outbound_guard.py` changes, and give the new
+id a rank in `schema_rank()`.
 
 ## Arming
 
@@ -107,7 +145,8 @@ gog --access-token "$(gog-sa-token alias@example.com send)" -a alias@example.com
 ## Tests
 
 ```
-bash claude-ops/tests/outbound-guard/test-shared-guard.sh      # cross-language agreement
+bash claude-ops/tests/outbound-guard/test-shared-guard.sh        # Node -> Python delegation contract
+bash claude-ops/tests/outbound-guard/test-installed-copy-sync.sh # sync refuses downgrades
 python3 claude-ops/tests/outbound-guard/test-hook-matrix.py    # block/pass per send path
 python3 claude-ops/tests/outbound-guard/test-broken-alias.py   # broken alias outranks approval
 ```
