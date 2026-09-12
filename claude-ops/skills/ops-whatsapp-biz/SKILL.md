@@ -26,9 +26,9 @@ WhatsApp Business Cloud API — distinct from wacli personal WhatsApp.
 PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
 
 # WhatsApp Business credentials (separate from wacli personal)
-WABA_TOKEN="${WHATSAPP_BUSINESS_TOKEN:-$(claude plugin config get whatsapp_business_token 2>/dev/null)}"
-WABA_PHONE_ID="${WHATSAPP_PHONE_NUMBER_ID:-$(claude plugin config get whatsapp_phone_number_id 2>/dev/null)}"
-WABA_ACCOUNT_ID="${WHATSAPP_BUSINESS_ACCOUNT_ID:-$(claude plugin config get whatsapp_business_account_id 2>/dev/null)}"
+WABA_TOKEN="${WHATSAPP_BUSINESS_TOKEN:-$(jq -r '.user_config.whatsapp_business_token // empty' "$PREFS_PATH" 2>/dev/null)}"
+WABA_PHONE_ID="${WHATSAPP_PHONE_NUMBER_ID:-$(jq -r '.user_config.whatsapp_phone_number_id // empty' "$PREFS_PATH" 2>/dev/null)}"
+WABA_ACCOUNT_ID="${WHATSAPP_BUSINESS_ACCOUNT_ID:-$(jq -r '.user_config.whatsapp_business_account_id // empty' "$PREFS_PATH" 2>/dev/null)}"
 
 # Doppler fallback
 if [ -z "$WABA_TOKEN" ]; then
@@ -325,6 +325,7 @@ Configure WhatsApp Business API credentials.
 **Before asking**, auto-scan for existing credentials:
 
 ```bash
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
 # Scan env vars
 printenv WHATSAPP_BUSINESS_TOKEN WHATSAPP_PHONE_NUMBER_ID WHATSAPP_BUSINESS_ACCOUNT_ID 2>/dev/null
 
@@ -340,9 +341,9 @@ done
 grep -h 'WHATSAPP_BUSINESS\|WHATSAPP_PHONE' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
 
 # Existing plugin config
-claude plugin config get whatsapp_business_token 2>/dev/null && echo "✓ whatsapp_business_token already configured"
-claude plugin config get whatsapp_phone_number_id 2>/dev/null && echo "✓ whatsapp_phone_number_id already configured"
-claude plugin config get whatsapp_business_account_id 2>/dev/null && echo "✓ whatsapp_business_account_id already configured"
+jq -r '.user_config.whatsapp_business_token // empty' "$PREFS_PATH" 2>/dev/null && echo "✓ whatsapp_business_token already configured"
+jq -r '.user_config.whatsapp_phone_number_id // empty' "$PREFS_PATH" 2>/dev/null && echo "✓ whatsapp_phone_number_id already configured"
+jq -r '.user_config.whatsapp_business_account_id // empty' "$PREFS_PATH" 2>/dev/null && echo "✓ whatsapp_business_account_id already configured"
 ```
 
 **If credentials not found**, guide user:
@@ -363,9 +364,21 @@ claude plugin config get whatsapp_business_account_id 2>/dev/null && echo "✓ w
 3. Save via plugin config:
 
 ```bash
-claude plugin config set whatsapp_business_token "$WABA_TOKEN"
-claude plugin config set whatsapp_phone_number_id "$WABA_PHONE_ID"
-claude plugin config set whatsapp_business_account_id "$WABA_ACCOUNT_ID"
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+ops_user_config_set() {  # write into preferences.json .user_config.<key>
+  local key="$1" value="$2" tmp
+  [ -n "$key" ] && [ -f "$PREFS_PATH" ] || return 0
+  tmp="$(mktemp "${PREFS_PATH}.XXXXXX")" || return 0
+  if jq --arg k "$key" --arg v "$value" '.user_config[$k] = $v' "$PREFS_PATH" >"$tmp" 2>/dev/null; then
+    chmod 600 "$tmp"; mv -f "$tmp" "$PREFS_PATH"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+ops_user_config_set whatsapp_business_token "$WABA_TOKEN"
+ops_user_config_set whatsapp_phone_number_id "$WABA_PHONE_ID"
+ops_user_config_set whatsapp_business_account_id "$WABA_ACCOUNT_ID"
 ```
 
 4. Smoke test:

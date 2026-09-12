@@ -68,7 +68,8 @@ Resolve credentials in this order for each service:
 ### Klaviyo
 
 ```bash
-KLAVIYO_KEY="${KLAVIYO_PRIVATE_KEY:-$(claude plugin config get klaviyo_private_key 2>/dev/null)}"
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+KLAVIYO_KEY="${KLAVIYO_PRIVATE_KEY:-$(jq -r '.user_config.klaviyo_private_key // empty' "$PREFS_PATH" 2>/dev/null)}"
 if [ -z "$KLAVIYO_KEY" ]; then
   KLAVIYO_KEY="$(doppler secrets get KLAVIYO_PRIVATE_KEY --plain 2>/dev/null)"
 fi
@@ -77,8 +78,9 @@ fi
 ### Meta Ads
 
 ```bash
-META_TOKEN="${META_ADS_TOKEN:-$(claude plugin config get meta_ads_token 2>/dev/null)}"
-META_ACCOUNT="${META_AD_ACCOUNT_ID:-$(claude plugin config get meta_ad_account_id 2>/dev/null)}"
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+META_TOKEN="${META_ADS_TOKEN:-$(jq -r '.user_config.meta_ads_token // empty' "$PREFS_PATH" 2>/dev/null)}"
+META_ACCOUNT="${META_AD_ACCOUNT_ID:-$(jq -r '.user_config.meta_ad_account_id // empty' "$PREFS_PATH" 2>/dev/null)}"
 if [ -z "$META_TOKEN" ]; then
   META_TOKEN="$(doppler secrets get META_ADS_TOKEN --plain 2>/dev/null)"
 fi
@@ -87,7 +89,8 @@ fi
 ### GA4
 
 ```bash
-GA4_PROPERTY="${GA4_PROPERTY_ID:-$(claude plugin config get ga4_property_id 2>/dev/null)}"
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+GA4_PROPERTY="${GA4_PROPERTY_ID:-$(jq -r '.user_config.ga4_property_id // empty' "$PREFS_PATH" 2>/dev/null)}"
 # GA4 uses gcloud application default credentials — check if configured:
 gcloud auth application-default print-access-token 2>/dev/null
 ```
@@ -95,20 +98,22 @@ gcloud auth application-default print-access-token 2>/dev/null
 ### Google Search Console
 
 ```bash
-GSC_SITE="${GOOGLE_SEARCH_CONSOLE_SITE:-$(claude plugin config get google_search_console_site 2>/dev/null)}"
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+GSC_SITE="${GOOGLE_SEARCH_CONSOLE_SITE:-$(jq -r '.user_config.google_search_console_site // empty' "$PREFS_PATH" 2>/dev/null)}"
 # Uses same gcloud ADC as GA4
 ```
 
 ### Google Ads
 
 ```bash
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
 GADS_API_VERSION="v23"
-GADS_DEV_TOKEN="${GOOGLE_ADS_DEVELOPER_TOKEN:-$(claude plugin config get google_ads_developer_token 2>/dev/null)}"
-GADS_CLIENT_ID="${GOOGLE_ADS_CLIENT_ID:-$(claude plugin config get google_ads_client_id 2>/dev/null)}"
-GADS_CLIENT_SECRET="${GOOGLE_ADS_CLIENT_SECRET:-$(claude plugin config get google_ads_client_secret 2>/dev/null)}"
-GADS_REFRESH_TOKEN="${GOOGLE_ADS_REFRESH_TOKEN:-$(claude plugin config get google_ads_refresh_token 2>/dev/null)}"
-GADS_CUSTOMER_ID="${GOOGLE_ADS_CUSTOMER_ID:-$(claude plugin config get google_ads_customer_id 2>/dev/null)}"
-GADS_LOGIN_CUSTOMER_ID="${GOOGLE_ADS_LOGIN_CUSTOMER_ID:-$(claude plugin config get google_ads_login_customer_id 2>/dev/null)}"
+GADS_DEV_TOKEN="${GOOGLE_ADS_DEVELOPER_TOKEN:-$(jq -r '.user_config.google_ads_developer_token // empty' "$PREFS_PATH" 2>/dev/null)}"
+GADS_CLIENT_ID="${GOOGLE_ADS_CLIENT_ID:-$(jq -r '.user_config.google_ads_client_id // empty' "$PREFS_PATH" 2>/dev/null)}"
+GADS_CLIENT_SECRET="${GOOGLE_ADS_CLIENT_SECRET:-$(jq -r '.user_config.google_ads_client_secret // empty' "$PREFS_PATH" 2>/dev/null)}"
+GADS_REFRESH_TOKEN="${GOOGLE_ADS_REFRESH_TOKEN:-$(jq -r '.user_config.google_ads_refresh_token // empty' "$PREFS_PATH" 2>/dev/null)}"
+GADS_CUSTOMER_ID="${GOOGLE_ADS_CUSTOMER_ID:-$(jq -r '.user_config.google_ads_customer_id // empty' "$PREFS_PATH" 2>/dev/null)}"
+GADS_LOGIN_CUSTOMER_ID="${GOOGLE_ADS_LOGIN_CUSTOMER_ID:-$(jq -r '.user_config.google_ads_login_customer_id // empty' "$PREFS_PATH" 2>/dev/null)}"
 
 # Doppler fallback
 if [ -z "$GADS_REFRESH_TOKEN" ]; then
@@ -534,6 +539,7 @@ Upload an image and create an ad. Collect via AskUserQuestion:
 Then collect headline (free text, up to 40 characters) via a second AskUserQuestion.
 
 ```bash
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
 # Step 1: Upload image
 if [[ "$IMAGE_INPUT" == http* ]]; then
   # Upload by URL
@@ -556,10 +562,10 @@ fi
 # Resolve the Facebook Page ID. Meta's `object_story_spec.page_id` requires a
 # real Page ID — the ad account ID (with `act_` stripped) is NOT a Page ID and
 # the API call will fail. Require META_PAGE_ID in env or plugin prefs.
-META_PAGE_ID="${META_PAGE_ID:-$(claude plugin config get meta_page_id 2>/dev/null || echo "")}"
+META_PAGE_ID="${META_PAGE_ID:-$(jq -r '.user_config.meta_page_id // empty' "$PREFS_PATH" 2>/dev/null)}"
 if [ -z "$META_PAGE_ID" ]; then
   echo "META_PAGE_ID is required to create an ad creative. Set it via:"
-  echo "  claude plugin config set meta_page_id <your_fb_page_id>"
+  echo "  set .user_config.meta_page_id = <your_fb_page_id> in preferences.json"
   echo "Find your Page ID at https://www.facebook.com/<your-page>/about_profile_transparency"
   exit 0
 fi
@@ -1224,12 +1230,24 @@ Instagram publishing and insights via Instagram Graph API (same `META_TOKEN` as 
 **Resolve IG account ID at the start of every instagram invocation:**
 
 ```bash
-IG_ACCOUNT_ID=$(claude plugin config get instagram_account_id 2>/dev/null)
+ops_user_config_set() {  # write into preferences.json .user_config.<key>
+  local key="$1" value="$2" tmp
+  [ -n "$key" ] && [ -f "$PREFS_PATH" ] || return 0
+  tmp="$(mktemp "${PREFS_PATH}.XXXXXX")" || return 0
+  if jq --arg k "$key" --arg v "$value" '.user_config[$k] = $v' "$PREFS_PATH" >"$tmp" 2>/dev/null; then
+    chmod 600 "$tmp"; mv -f "$tmp" "$PREFS_PATH"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+IG_ACCOUNT_ID=$(jq -r '.user_config.instagram_account_id // empty' "$PREFS_PATH" 2>/dev/null)
 if [ -z "$IG_ACCOUNT_ID" ]; then
   IG_ACCOUNT_ID=$(curl -s "https://graph.facebook.com/v21.0/me/accounts?fields=instagram_business_account" \
     -H "Authorization: Bearer ${META_TOKEN}" | jq -r '.data[0].instagram_business_account.id // empty')
   # Cache it
-  [ -n "$IG_ACCOUNT_ID" ] && claude plugin config set instagram_account_id "$IG_ACCOUNT_ID" 2>/dev/null
+  [ -n "$IG_ACCOUNT_ID" ] && ops_user_config_set instagram_account_id "$IG_ACCOUNT_ID"
 fi
 if [ -z "$IG_ACCOUNT_ID" ]; then
   echo "Instagram Business account not linked to your Meta token. Ensure your Facebook Page has an Instagram Business account connected."
@@ -2437,6 +2455,7 @@ For any channel with missing credentials, show `[not configured — /ops:marketi
 **Before asking for anything**, auto-scan ALL sources for existing credentials. Run in a single background batch:
 
 ```bash
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
 # Env vars
 printenv KLAVIYO_API_KEY KLAVIYO_PRIVATE_KEY META_ACCESS_TOKEN FACEBOOK_ACCESS_TOKEN META_AD_ACCOUNT_ID GA4_PROPERTY_ID GA_MEASUREMENT_ID 2>/dev/null
 printenv GOOGLE_ADS_DEVELOPER_TOKEN GOOGLE_ADS_CLIENT_ID GOOGLE_ADS_CLIENT_SECRET GOOGLE_ADS_REFRESH_TOKEN GOOGLE_ADS_CUSTOMER_ID 2>/dev/null
