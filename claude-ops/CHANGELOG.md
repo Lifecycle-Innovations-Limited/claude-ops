@@ -11,6 +11,17 @@
   `preferences.json`, then the system zone. All-day events are passed through
   unconverted so they cannot be dragged onto an adjacent day.
 
+## [3.10.16] - 2026-09-12
+
+### Fixed
+- Outbound guard now ships the reservation-v2 guard, `ok` helper, and hook that the Node twin already expected, so approvals bind to a single exact draft instead of silently falling through.
+- Post-update migration no longer records a temporary staging directory as the install path, which left later updates pointing at a directory that no longer exists.
+- The config command stopped invoking a plugin subcommand that does not exist.
+- Removed dead references in the `ops-daemon` and `ops-gtm` skills, and corrected stale pointers in the marketing and WhatsApp Business skill docs.
+
+### Added
+- `skill-doctor` script that checks skills for broken or dangling references.
+
 ## [3.10.15] - 2026-09-11
 
 ### Changed
