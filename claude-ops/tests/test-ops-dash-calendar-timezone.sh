@@ -27,6 +27,20 @@ note() { echo "FAIL: $*"; fail=1; }
 # sign) and is a fixed offset, so there is no DST ambiguity to argue about.
 VIEWER="Etc/GMT+4"
 
+# The conversion needs a zone database. On a stripped container there is none,
+# and the helper then correctly falls back to the system zone — which would make
+# the assertions below fail for a reason that is not the bug. Say so plainly
+# instead of reporting a misleading wrong time.
+if ! python3 -c 'from zoneinfo import ZoneInfo; ZoneInfo("Etc/GMT+4")' 2>/dev/null; then
+  echo "SKIP: no zone database available; cannot assert cross-zone rendering"
+  grep -Eq '\.start \| split\("T"\)' "$DASH" \
+    && { echo "FAIL: ops-dash still prints a raw wall clock from the timestamp"; exit 1; }
+  grep -Fq 'ops_calendar_rows' "$DASH" \
+    || { echo "FAIL: ops-dash does not use ops_calendar_rows"; exit 1; }
+  echo "PASS: structural checks only (zone database unavailable)"
+  exit 0
+fi
+
 FIXTURE=$(cat <<'EOF'
 {"configured":true,"events":[
  {"summary":"Sync A","calendar":"team-a@example.invalid","start":"2026-09-12T17:05:00+02:00","end":"2026-09-12T17:35:00+02:00","allday":false},
