@@ -375,10 +375,11 @@ Expect `approved` / `disapproved` counts; `null` means merchant ID or auth missi
 Auto-scan for:
 
 ```bash
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
 printenv WHATSAPP_BUSINESS_TOKEN WHATSAPP_PHONE_NUMBER_ID WHATSAPP_BUSINESS_ACCOUNT_ID 2>/dev/null
-claude plugin config get whatsapp_business_token 2>/dev/null && echo "waba_token: already configured"
-claude plugin config get whatsapp_phone_number_id 2>/dev/null && echo "waba_phone_id: already configured"
-claude plugin config get whatsapp_business_account_id 2>/dev/null && echo "waba_account_id: already configured"
+jq -r '.user_config.whatsapp_business_token // empty' "$PREFS_PATH" 2>/dev/null && echo "waba_token: already configured"
+jq -r '.user_config.whatsapp_phone_number_id // empty' "$PREFS_PATH" 2>/dev/null && echo "waba_phone_id: already configured"
+jq -r '.user_config.whatsapp_business_account_id // empty' "$PREFS_PATH" 2>/dev/null && echo "waba_account_id: already configured"
 ```
 
 Where to find credentials:
@@ -390,9 +391,21 @@ Where to find credentials:
 Collect each via AskUserQuestion (free text) if not found. Save:
 
 ```bash
-claude plugin config set whatsapp_business_token "$WABA_TOKEN"
-claude plugin config set whatsapp_phone_number_id "$WABA_PHONE_ID"
-claude plugin config set whatsapp_business_account_id "$WABA_ACCOUNT_ID"
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+ops_user_config_set() {  # write into preferences.json .user_config.<key>
+  local key="$1" value="$2" tmp
+  [ -n "$key" ] && [ -f "$PREFS_PATH" ] || return 0
+  tmp="$(mktemp "${PREFS_PATH}.XXXXXX")" || return 0
+  if jq --arg k "$key" --arg v "$value" '.user_config[$k] = $v' "$PREFS_PATH" >"$tmp" 2>/dev/null; then
+    chmod 600 "$tmp"; mv -f "$tmp" "$PREFS_PATH"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+ops_user_config_set whatsapp_business_token "$WABA_TOKEN"
+ops_user_config_set whatsapp_phone_number_id "$WABA_PHONE_ID"
+ops_user_config_set whatsapp_business_account_id "$WABA_ACCOUNT_ID"
 ```
 
 Smoke test:
