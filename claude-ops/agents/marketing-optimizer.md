@@ -40,8 +40,9 @@ If ops-marketing-dash data is unavailable, pull directly:
 **Meta Ads (last 7d):**
 
 ```bash
-META_TOKEN=$(claude plugin config get meta_ads_token 2>/dev/null || echo "$META_ADS_TOKEN")
-META_ACCOUNT=$(claude plugin config get meta_ad_account_id 2>/dev/null || echo "$META_AD_ACCOUNT_ID")
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+META_TOKEN=$(jq -r '.user_config.meta_ads_token // empty' "$PREFS_PATH" 2>/dev/null || echo "${META_ADS_TOKEN}")
+META_ACCOUNT=$(jq -r '.user_config.meta_ad_account_id // empty' "$PREFS_PATH" 2>/dev/null || echo "${META_AD_ACCOUNT_ID}")
 curl -s "https://graph.facebook.com/v20.0/${META_ACCOUNT}/insights?fields=spend,actions,action_values,impressions,clicks&date_preset=last_7d&level=account" \
   -H "Authorization: Bearer ${META_TOKEN}"
 ```
