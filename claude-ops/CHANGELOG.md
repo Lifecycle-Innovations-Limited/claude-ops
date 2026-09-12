@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed
+- `ops-update` can no longer downgrade the plugin by accident. On 2026-09-11
+  the local marketplace clone sat at 3.10.13 with a dirty tree while v3.10.15
+  was published; `claude plugin marketplace update` reported success without
+  moving it, the stale-clone guard returned "not stale" because a git call
+  failed inside it (fail-open), and the run pruned the installed 3.10.14 and
+  3.10.15 caches, then printed "3.10.15 → 3.10.13 ✓ upgrade complete".
+  Three guards now stand in the way: the clone check is fail-closed (an
+  unverifiable clone aborts; new `--offline` turns that into a warning), the
+  catalogue version is cross-checked against the newest remote `vX.Y.Z` tag,
+  and a target that sorts below the installed version is refused — also with
+  `--to` — unless the new `--allow-downgrade` flag is given. Step 5 never
+  prunes a cache newer than the target without that flag and lists what it
+  kept. Guard: `tests/test-ops-update-downgrade-guard.sh` (15 cases).
+
 ## [3.10.15] - 2026-09-11
 
 ### Changed
