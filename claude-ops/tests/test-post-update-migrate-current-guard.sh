@@ -19,9 +19,9 @@ fail() {
 run_case() {
 	local label="$1" mode="$2"
 	local base="$TMP/$label"
-	local plugin_root="$base/cache/ops-marketplace/ops/2.0.0"
-	local current_dir="$base/cache/ops-marketplace/ops/current"
 	local config_dir="$base/config"
+	local plugin_root="$config_dir/plugins/cache/ops-marketplace/ops/2.0.0"
+	local current_dir="$config_dir/plugins/cache/ops-marketplace/ops/current"
 	local data_dir="$base/data"
 	local installed="$config_dir/plugins/installed_plugins.json"
 
@@ -137,9 +137,9 @@ PY
 
 run_downgrade_case() {
 	local base="$TMP/refuse-downgrade"
-	local plugin_root="$base/cache/ops-marketplace/ops/2.0.0"
-	local current_dir="$base/cache/ops-marketplace/ops/current"
 	local config_dir="$base/config"
+	local plugin_root="$config_dir/plugins/cache/ops-marketplace/ops/2.0.0"
+	local current_dir="$config_dir/plugins/cache/ops-marketplace/ops/current"
 	local data_dir="$base/data"
 
 	mkdir -p "$plugin_root/.claude-plugin" "$plugin_root/bin" \
@@ -169,9 +169,9 @@ run_downgrade_case() {
 
 run_forward_update_case() {
 	local base="$TMP/allow-forward-update"
-	local plugin_root="$base/cache/ops-marketplace/ops/3.0.0"
-	local current_dir="$base/cache/ops-marketplace/ops/current"
 	local config_dir="$base/config"
+	local plugin_root="$config_dir/plugins/cache/ops-marketplace/ops/3.0.0"
+	local current_dir="$config_dir/plugins/cache/ops-marketplace/ops/current"
 	local data_dir="$base/data"
 
 	mkdir -p "$plugin_root/.claude-plugin" "$plugin_root/bin" \
@@ -204,9 +204,102 @@ run_forward_update_case() {
 	printf 'ok: allow-forward-update\n'
 }
 
+# ops-update stages a new version in a `mktemp -d` tree and fires SessionStart
+# from there, so PLUGIN_ROOT sits outside the plugins cache. Deriving current/
+# from dirname(PLUGIN_ROOT) then recorded /var/folders/../T/tmp.XXXX/current as
+# the installPath. macOS reaps that directory, and Claude Code subsequently
+# loaded the plugin as nothing at all — no skills, no commands, no error, while
+# the plugin still read as enabled. Seen live 2026-09-12 with all 66 ops skills
+# silently absent. A temp path must never reach installed_plugins.json.
+#
+# $1 = label, $2 = "live" (recorded installPath still resolves) | "broken"
+run_outside_cache_case() {
+	local label="$1" recorded_state="$2"
+	local base="$TMP/$label"
+	local staged="$base/staging/tmp.XXXX/current"
+	local cache_current="$base/config/plugins/cache/ops-marketplace/ops/current"
+	local config_dir="$base/config"
+	local data_dir="$base/data"
+	local installed="$config_dir/plugins/installed_plugins.json"
+	local recorded
+
+	mkdir -p "$staged/.claude-plugin" "$staged/bin" \
+		"$cache_current/.claude-plugin" "$cache_current/bin" \
+		"$config_dir/plugins" "$data_dir/.migrated" "$base/home"
+	printf '{"version":"4.0.0"}\n' >"$staged/.claude-plugin/plugin.json"
+	printf 'staged\n' >"$staged/bin/staged-marker"
+	printf '{"version":"4.0.0"}\n' >"$cache_current/.claude-plugin/plugin.json"
+	printf 'live\n' >"$cache_current/bin/live-marker"
+	touch "$data_dir/.migrated/v4.0.0"
+
+	if [[ "$recorded_state" == "live" ]]; then
+		recorded="$cache_current"
+	else
+		recorded="$base/staging/tmp.GONE/current"
+	fi
+
+	cat >"$installed" <<JSON
+{
+  "plugins": {
+    "ops@ops-marketplace": [
+      {
+        "scope": "user",
+        "installPath": "$recorded",
+        "version": "4.0.0"
+      }
+    ]
+  }
+}
+JSON
+	chmod 600 "$installed"
+
+	HOME="$base/home" \
+		CLAUDE_PLUGIN_ROOT="$staged" \
+		CLAUDE_CONFIG_DIR="$config_dir" \
+		CLAUDE_PLUGIN_DATA_DIR="$data_dir" \
+		bash "$SCRIPT"
+
+	# The staging tree is never rsynced over the live cache — otherwise a
+	# developer checkout running SessionStart would overwrite the installed
+	# plugin with whatever is on their branch.
+	[[ ! -e "$cache_current/bin/staged-marker" ]] ||
+		fail "$label: staging tree outside the cache was rsynced over live current/"
+	[[ -f "$cache_current/bin/live-marker" ]] ||
+		fail "$label: live current/ payload was destroyed"
+
+	python3 - "$installed" "$config_dir/plugins" "$cache_current" "$recorded_state" "$recorded" "$base/staging" <<'PY' || fail "$label: installed_plugins.json assertions failed"
+import json, os, sys
+path, plugins_dir, cache_current, state, recorded, staging = sys.argv[1:7]
+with open(path) as f:
+    d = json.load(f)
+got = d["plugins"]["ops@ops-marketplace"][0]["installPath"]
+
+
+def under(child, parent):
+    child, parent = os.path.realpath(child), os.path.realpath(parent)
+    return os.path.commonpath([child, parent]) == parent
+
+
+assert under(got, plugins_dir), f"installPath {got!r} escaped the plugins dir {plugins_dir!r}"
+assert not under(got, staging), f"a staging path reached installPath: {got!r}"
+def same(a, b):
+    return os.path.realpath(a) == os.path.realpath(b)
+
+
+if state == "live":
+    assert same(got, recorded), f"a resolving installPath was rewritten: {got!r}"
+else:
+    assert same(got, cache_current), f"broken installPath not repaired: {got!r} want {cache_current!r}"
+PY
+
+	printf 'ok: %s\n' "$label"
+}
+
 run_case rsync-path rsync
 run_case cp-fallback nossync
 run_downgrade_case
 run_forward_update_case
+run_outside_cache_case outside-cache-live live
+run_outside_cache_case outside-cache-broken broken
 
-printf 'PASS: current/ stays free of cache-GC markers, blocks downgrades, permits forward updates, and rewrites installed_plugins.json atomically\n'
+printf 'PASS: current/ stays free of cache-GC markers, blocks downgrades, permits forward updates, keeps staging paths out of installPath, and rewrites installed_plugins.json atomically\n'
