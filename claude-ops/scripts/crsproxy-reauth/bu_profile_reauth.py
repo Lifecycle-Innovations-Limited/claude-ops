@@ -44,6 +44,8 @@ from bu_reauth_lib import (
     cleanup_login_process,
     validate_candidate,
     activate_auth_file,
+    prepare_auth_target,
+    restore_login_candidate,
     extract_callback_url,
     detect_captcha,
     handle_captcha_checkpoint,
@@ -133,7 +135,10 @@ def handle_two_factor_prompt(client: BrowserUseClient, session_id: str,
 def run_profile_reauth(provider: str, email: str, profile_id: str,
                        client: BrowserUseClient,
                        dry_run: bool = False,
-                       two_factor: dict | None = None) -> int:
+                       two_factor: dict | None = None,
+                       auth_file: str = "",
+                       expected_organization_uuid: str = "",
+                       expected_organization_name: str = "") -> int:
     """Run the profile-based OAuth reauth flow.
 
     1. Acquire serialization lease.
@@ -160,7 +165,9 @@ def run_profile_reauth(provider: str, email: str, profile_id: str,
 
     try:
         return _run_profile_reauth_inner(provider, email, profile_id,
-                                         client, dry_run, log_path, two_factor)
+                                         client, dry_run, log_path, two_factor,
+                                         auth_file, expected_organization_uuid,
+                                         expected_organization_name)
     finally:
         release_lease()
 
@@ -168,9 +175,12 @@ def run_profile_reauth(provider: str, email: str, profile_id: str,
 def _run_profile_reauth_inner(provider: str, email: str, profile_id: str,
                               client: BrowserUseClient, dry_run: bool,
                               log_path: Path,
-                              two_factor: dict | None = None) -> int:
+                              two_factor: dict | None = None,
+                              auth_file_name: str = "",
+                              expected_organization_uuid: str = "",
+                              expected_organization_name: str = "") -> int:
     """Inner profile reauth flow — assumes lease is already held."""
-    meta = PROVIDERS[provider]
+    meta = dict(PROVIDERS[provider])
     port = meta["callback_port"]
     safe = safe_email(email)
 
@@ -190,17 +200,13 @@ def _run_profile_reauth_inner(provider: str, email: str, profile_id: str,
         return EXIT_SUCCESS
 
     # --- Step 1.5: Back up stale auth for preservation ---
-    auth_file = AUTH_DIR / f"{meta['auth_file_prefix']}-{email}.json"
-    stale_backup = auth_file.with_suffix(".stale")
-    if auth_file.exists():
-        try:
-            stale_backup.unlink(missing_ok=True)
-            stale_backup.write_text(auth_file.read_text())
-            log(f"[1] Stale auth backed up: {auth_file.name}")
-        except Exception as e:
-            log(f"[1] Stale auth backup warning: {e}")
-    else:
-        log(f"[1] No existing auth file — no stale backup needed")
+    try:
+        auth_file, stale_backup = prepare_auth_target(
+            meta, provider, email, auth_file_name,
+            expected_organization_uuid, expected_organization_name)
+    except (OSError, ValueError) as e:
+        log(f"[1] Auth target setup failed: {e}")
+        return EXIT_FAILURE
 
     # --- Step 2: Start cli-proxy-api login ---
     log(f"[1] Starting cli-proxy-api login for {provider} ({safe})")
@@ -250,7 +256,7 @@ def _run_profile_reauth_inner(provider: str, email: str, profile_id: str,
         if detect_captcha(result, client):
             log("[CAPTCHA] Captcha detected during profile-based auth")
             callback_url, session_id = handle_captcha_checkpoint(
-                client, run_id, session_id, provider, email, port)
+                client, run_id, session_id, provider, email, port, meta)
             if callback_url:
                 return _complete_reauth(proc, callback_url, auth_file,
                                         stale_backup, email, provider, meta)
@@ -304,6 +310,8 @@ def _run_profile_reauth_inner(provider: str, email: str, profile_id: str,
     finally:
         log("[CLEANUP] Stopping all browser sessions...")
         client.stop_all_browsers()
+        if meta.get("_target_auth_file") != auth_file:
+            restore_login_candidate(auth_file, meta)
 
 
 def _fallback_email_entry(proc, client, session_id, provider, email,
@@ -330,6 +338,7 @@ def _fallback_email_entry(proc, client, session_id, provider, email,
         f"Click Continue. Do NOT use Google sign-in. "
         f"Report exactly what you see after clicking Continue."
     )
+    email_requested_at = time.time()
     run_email = client.create_run(task_email, session_id=session_id)
     run_email_id = run_email.get("id", "")
     session_id = run_email.get("sessionId", session_id)
@@ -342,7 +351,7 @@ def _fallback_email_entry(proc, client, session_id, provider, email,
     if detect_captcha(result_email, client):
         log("[CAPTCHA] Captcha detected during email entry")
         callback_url, session_id = handle_captcha_checkpoint(
-            client, run_email_id, session_id, provider, email, port)
+            client, run_email_id, session_id, provider, email, port, meta)
         if callback_url:
             return _complete_reauth(proc, callback_url, auth_file,
                                     stale_backup, email, provider, meta)
@@ -359,7 +368,9 @@ def _fallback_email_entry(proc, client, session_id, provider, email,
         log(f"[FALLBACK] Verification needed — polling Gmail for {safe}")
         time.sleep(5)
 
-        code = poll_gmail_for_code(provider, email, email, kind="code")
+        code = poll_gmail_for_code(
+            provider, email, email, kind="code",
+            not_before=email_requested_at)
         if code:
             record_email_send()
             log("[FALLBACK] Verification code received (value redacted)")
@@ -382,7 +393,8 @@ def _fallback_email_entry(proc, client, session_id, provider, email,
                 if detect_captcha(result_code, client):
                     log("[CAPTCHA] Captcha detected after code entry")
                     callback_url, session_id = handle_captcha_checkpoint(
-                        client, run_code_id, session_id, provider, email, port)
+                        client, run_code_id, session_id, provider, email, port,
+                        meta)
                     if callback_url:
                         return _complete_reauth(proc, callback_url, auth_file,
                                                 stale_backup, email, provider, meta)
@@ -392,7 +404,9 @@ def _fallback_email_entry(proc, client, session_id, provider, email,
                     log(f"[FALLBACK] Code entry failed on attempt {attempt+1}")
                     if attempt < max_code_retries - 1:
                         enforce_email_cooldown()
-                        code = poll_gmail_for_code(provider, email, email, kind="code")
+                        code = poll_gmail_for_code(
+                            provider, email, email, kind="code",
+                            not_before=email_requested_at)
                         if code:
                             record_email_send()
                         else:
@@ -405,7 +419,9 @@ def _fallback_email_entry(proc, client, session_id, provider, email,
                     break
         else:
             log("[FALLBACK] No verification code — trying magic link...")
-            magic = poll_gmail_for_code(provider, email, email, kind="magic")
+            magic = poll_gmail_for_code(
+                provider, email, email, kind="magic",
+                not_before=email_requested_at)
             if magic:
                 log("[FALLBACK] Magic link received (value redacted)")
                 task_magic = (
@@ -443,7 +459,7 @@ def _fallback_email_entry(proc, client, session_id, provider, email,
     if detect_captcha(result_auth, client):
         log("[CAPTCHA] Captcha detected during Authorize")
         callback_url, session_id = handle_captcha_checkpoint(
-            client, run_auth_id, session_id, provider, email, port)
+            client, run_auth_id, session_id, provider, email, port, meta)
         if callback_url:
             return _complete_reauth(proc, callback_url, auth_file,
                                     stale_backup, email, provider, meta)
@@ -482,6 +498,12 @@ def main():
                         help="Account email")
     parser.add_argument("-profile-id", required=True,
                         help="Browser Use Cloud profile ID")
+    parser.add_argument("-auth-file", default="",
+                        help="Account-specific auth JSON basename")
+    parser.add_argument("-expected-organization-uuid", default="",
+                        help="Require this organization UUID before activation")
+    parser.add_argument("-expected-organization-name", default="",
+                        help="Require this organization name before activation")
     parser.add_argument("-dry-run", action="store_true",
                         help="Validate setup without creating browser runs")
     parser.add_argument("-two-factor-method", default="none",
@@ -539,6 +561,9 @@ def main():
             client=client,
             dry_run=args.dry_run,
             two_factor=two_factor,
+            auth_file=args.auth_file,
+            expected_organization_uuid=args.expected_organization_uuid,
+            expected_organization_name=args.expected_organization_name,
         )
     except TimeoutError as e:
         log(f"[TIMEOUT] {e}")

@@ -268,7 +268,9 @@ def send_canary(model: str, timeout: int = 30) -> int:
 # ---------------------------------------------------------------------------
 def validate_candidate(auth_path: Path, expected_email: str,
                        expected_type: str, canary_model: str = "",
-                       skip_canary: bool = False) -> tuple[bool, str]:
+                       skip_canary: bool = False,
+                       expected_organization_uuid: str = "",
+                       expected_organization_name: str = "") -> tuple[bool, str]:
     """Validate a candidate auth file before activation.
 
     Performs four checks:
@@ -309,6 +311,13 @@ def validate_candidate(auth_path: Path, expected_email: str,
     if actual_type != expected_type:
         return False, f"type mismatch: expected {expected_type}, got {actual_type}"
 
+    if (expected_organization_uuid
+            and auth.get("organization_uuid", "") != expected_organization_uuid):
+        return False, "organization UUID mismatch"
+    if (expected_organization_name
+            and auth.get("organization_name", "") != expected_organization_name):
+        return False, "organization name mismatch"
+
     # --- Check 3: Expiry is >24h from now ---
     expired_str = auth.get("expired", "")
     if not expired_str:
@@ -337,6 +346,51 @@ def validate_candidate(auth_path: Path, expected_email: str,
             return False, f"canary request failed: proxy unreachable (connection error)"
 
     return True, "all checks passed"
+
+
+def resolve_auth_file(provider: str, email: str, auth_file: str = "") -> Path:
+    """Resolve an optional account-specific auth basename under AUTH_DIR."""
+    default_name = f"{PROVIDERS[provider]['auth_file_prefix']}-{email}.json"
+    name = auth_file or default_name
+    if Path(name).name != name or not name.endswith(".json"):
+        raise ValueError("auth file must be a JSON basename")
+    return AUTH_DIR / name
+
+
+def prepare_auth_target(meta: dict, provider: str, email: str,
+                        auth_file: str = "",
+                        expected_organization_uuid: str = "",
+                        expected_organization_name: str = "") -> tuple[Path, Path]:
+    """Preserve the target and canonical login output before OAuth writes."""
+    candidate = AUTH_DIR / f"{meta['auth_file_prefix']}-{email}.json"
+    target = resolve_auth_file(provider, email, auth_file)
+    target_backup = target.with_suffix(".stale")
+    target_backup.unlink(missing_ok=True)
+    if target.exists():
+        target_backup.write_text(target.read_text())
+
+    candidate_backup = candidate.with_suffix(".login-stale")
+    candidate_backup.unlink(missing_ok=True)
+    if candidate != target and candidate.exists():
+        candidate_backup.write_text(candidate.read_text())
+
+    meta["_target_auth_file"] = target
+    meta["_candidate_backup"] = candidate_backup
+    meta["_expected_organization_uuid"] = expected_organization_uuid
+    meta["_expected_organization_name"] = expected_organization_name
+    return candidate, target_backup
+
+
+def restore_login_candidate(candidate: Path, meta: dict):
+    """Restore a canonical auth file displaced by account-specific login."""
+    if meta.get("_candidate_restored"):
+        return
+    backup = meta.get("_candidate_backup")
+    if candidate.exists():
+        candidate.unlink()
+    if backup and backup.exists():
+        os.replace(backup, candidate)
+    meta["_candidate_restored"] = True
 
 
 # ---------------------------------------------------------------------------
@@ -921,7 +975,8 @@ def cleanup_login_process(proc: subprocess.Popen):
 # Gmail polling (delegates to reauth_hub.poll_gmail)
 # ---------------------------------------------------------------------------
 def poll_gmail_for_code(provider: str, email: str, gog_account: str,
-                        kind: str = "code") -> str | None:
+                        kind: str = "code",
+                        not_before: float | None = None) -> str | None:
     """Poll Gmail for a verification code or magic link via gogcli.
 
     Delegates to reauth_hub.poll_gmail to avoid duplicating the Gmail logic.
@@ -942,7 +997,8 @@ def poll_gmail_for_code(provider: str, email: str, gog_account: str,
     }
     log_path = Path("/tmp/bu_reauth_gmail.log")
     result = _poll_gmail(seat, gog_account, kind=kind, log_path=log_path,
-                        timeout=GMAIL_POLL_TIMEOUT)
+                         timeout=GMAIL_POLL_TIMEOUT,
+                         not_before=not_before)
     if result:
         log(f"Gmail {kind} found (value redacted)")
     else:
@@ -1119,7 +1175,7 @@ def detect_captcha(run_result: dict, client: BrowserUseClient) -> bool:
 # ---------------------------------------------------------------------------
 def write_checkpoint(session_id: str, run_id: str, browser_session_id: str,
                      live_view_url: str, provider: str, email: str,
-                     callback_port: int):
+                     callback_port: int, meta: dict | None = None):
     """Write checkpoint state to a file for human captcha solving.
 
     The checkpoint file contains the full live_view_url (needed by Sam to
@@ -1127,6 +1183,7 @@ def write_checkpoint(session_id: str, run_id: str, browser_session_id: str,
     about the reauth attempt.  The file is world-readable so the
     orchestrator can read it without sudo.
     """
+    meta = meta or {}
     data = {
         "session_id": session_id,
         "run_id": run_id,
@@ -1135,6 +1192,11 @@ def write_checkpoint(session_id: str, run_id: str, browser_session_id: str,
         "provider": provider,
         "email": email,
         "callback_port": callback_port,
+        "auth_file": meta.get("_target_auth_file", Path()).name,
+        "expected_organization_uuid": meta.get(
+            "_expected_organization_uuid", ""),
+        "expected_organization_name": meta.get(
+            "_expected_organization_name", ""),
         "status": "waiting",
         "timestamp": time.time(),
     }
@@ -1178,7 +1240,7 @@ def clear_checkpoint():
 
 def handle_captcha_checkpoint(client: BrowserUseClient, run_id: str,
                               session_id: str, provider: str, email: str,
-                              port: int) -> tuple[str | None, str]:
+                              port: int, meta: dict) -> tuple[str | None, str]:
     """Handle the human captcha checkpoint flow.
 
     1. Get live_view_url from the run's browser.ready event.
@@ -1230,7 +1292,7 @@ def handle_captcha_checkpoint(client: BrowserUseClient, run_id: str,
 
     # --- 4. Write checkpoint file ---
     write_checkpoint(session_id, run_id, browser_session_id, live_url,
-                     provider, email, port)
+                     provider, email, port, meta)
 
     # Extend the signal-based timeout to account for the checkpoint wait
     signal.alarm(0)  # Cancel current alarm
@@ -1343,12 +1405,18 @@ def _complete_reauth(proc: subprocess.Popen, callback_url: str,
         expected_email=email,
         expected_type=provider,
         canary_model=meta.get("canary_model", ""),
+        expected_organization_uuid=meta.get("_expected_organization_uuid", ""),
+        expected_organization_name=meta.get("_expected_organization_name", ""),
     )
 
     if not valid:
         log(f"[FAIL] Candidate validation failed: {reason}")
-        log("[9] Preserving stale auth — restoring from backup")
-        if stale_backup.exists():
+        target_auth_file = meta.get("_target_auth_file", auth_file)
+        if target_auth_file != auth_file:
+            restore_login_candidate(auth_file, meta)
+            log("[9] Rejected candidate removed; target auth preserved")
+        elif stale_backup.exists():
+            log("[9] Preserving stale auth — restoring from backup")
             try:
                 os.rename(str(stale_backup), str(auth_file))
                 log(f"[9] Stale auth restored: {auth_file.name}")
@@ -1366,7 +1434,14 @@ def _complete_reauth(proc: subprocess.Popen, callback_url: str,
     log("[9] Atomically activating auth file...")
     if not activate_auth_file(auth_file):
         log("[FAIL] Could not activate auth file")
+        if meta.get("_target_auth_file", auth_file) != auth_file:
+            restore_login_candidate(auth_file, meta)
         return EXIT_FAILURE
+
+    target_auth_file = meta.get("_target_auth_file", auth_file)
+    if target_auth_file != auth_file:
+        os.replace(auth_file, target_auth_file)
+        restore_login_candidate(auth_file, meta)
 
     # Clean up stale backup on success
     try:
@@ -1377,13 +1452,35 @@ def _complete_reauth(proc: subprocess.Popen, callback_url: str,
     # Clear email cooldown state on successful completion
     clear_email_cooldown()
 
-    log(f"[OK] Auth file activated: {auth_file.name}")
+    log(f"[OK] Auth file activated: {target_auth_file.name}")
     return EXIT_SUCCESS
+
+
+def build_email_login_task(oauth_url: str, email: str,
+                           prefer_magic: bool = False) -> str:
+    """Build the initial login task, explicitly selecting magic links when required."""
+    task = (
+        f"Go to {oauth_url}. "
+        f"Enter {email} in the email field. "
+        f"Click Continue. Do NOT use Google sign-in. "
+    )
+    if prefer_magic:
+        task += (
+            "Choose the option labeled 'Email me a login link' and click it "
+            "to send the link. Report whether the fresh login link was sent."
+        )
+    else:
+        task += "Report exactly what you see after clicking Continue."
+    return task
 
 
 def run_reauth(provider: str, email: str, gog_account: str,
                client: BrowserUseClient, dry_run: bool = False,
-               two_factor: dict | None = None) -> int:
+               two_factor: dict | None = None,
+               auth_file: str = "",
+               expected_organization_uuid: str = "",
+               expected_organization_name: str = "",
+               prefer_magic: bool = False) -> int:
     """Run the full Browser Use Cloud OAuth reauth flow.
 
     Returns exit code: 0=success, 1=failure, 2=captcha.
@@ -1400,7 +1497,9 @@ def run_reauth(provider: str, email: str, gog_account: str,
 
     try:
         return _run_reauth_inner(provider, email, gog_account, client,
-                                 dry_run, log_path, two_factor)
+                                 dry_run, log_path, two_factor, auth_file,
+                                 expected_organization_uuid,
+                                 expected_organization_name, prefer_magic)
     finally:
         release_lease()
 
@@ -1408,9 +1507,13 @@ def run_reauth(provider: str, email: str, gog_account: str,
 def _run_reauth_inner(provider: str, email: str, gog_account: str,
                       client: BrowserUseClient, dry_run: bool,
                       log_path: Path,
-                      two_factor: dict | None = None) -> int:
+                      two_factor: dict | None = None,
+                      auth_file_name: str = "",
+                      expected_organization_uuid: str = "",
+                      expected_organization_name: str = "",
+                      prefer_magic: bool = False) -> int:
     """Inner reauth flow — assumes lease is already held."""
-    meta = PROVIDERS[provider]
+    meta = dict(PROVIDERS[provider])
     port = meta["callback_port"]
     safe = safe_email(email)
 
@@ -1431,17 +1534,13 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
         return EXIT_SUCCESS
 
     # --- Step 1.5: Back up stale auth for preservation ---
-    auth_file = AUTH_DIR / f"{meta['auth_file_prefix']}-{email}.json"
-    stale_backup = auth_file.with_suffix(".stale")
-    if auth_file.exists():
-        try:
-            stale_backup.unlink(missing_ok=True)
-            stale_backup.write_text(auth_file.read_text())
-            log(f"[1] Stale auth backed up: {auth_file.name}")
-        except Exception as e:
-            log(f"[1] Stale auth backup warning: {e}")
-    else:
-        log(f"[1] No existing auth file — no stale backup needed")
+    try:
+        auth_file, stale_backup = prepare_auth_target(
+            meta, provider, email, auth_file_name,
+            expected_organization_uuid, expected_organization_name)
+    except (OSError, ValueError) as e:
+        log(f"[1] Auth target setup failed: {e}")
+        return EXIT_FAILURE
 
     # --- Step 2: Start cli-proxy-api login ---
     log(f"[1] Starting cli-proxy-api login for {provider} ({safe})")
@@ -1458,12 +1557,8 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
 
         # --- Step 4: Agent — navigate + enter email ---
         log(f"[3] Agent: navigating to OAuth URL and entering email for {safe}")
-        task1 = (
-            f"Go to {oauth_url}. "
-            f"Enter {email} in the email field. "
-            f"Click Continue. Do NOT use Google sign-in. "
-            f"Report exactly what you see after clicking Continue."
-        )
+        task1 = build_email_login_task(oauth_url, email, prefer_magic)
+        email_requested_at = time.time()
         run1 = client.create_run(task1)
         run1_id = run1.get("id", "")
         session_id = run1.get("sessionId", "")
@@ -1476,7 +1571,7 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
         if detect_captcha(result1, client):
             log("[CAPTCHA] Captcha detected during email entry")
             callback_url, session_id = handle_captcha_checkpoint(
-                client, run1_id, session_id, provider, email, port)
+                client, run1_id, session_id, provider, email, port, meta)
             if callback_url:
                 return _complete_reauth(proc, callback_url, auth_file,
                                         stale_backup, email, provider, meta)
@@ -1495,8 +1590,10 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
             log(f"[4] Verification needed — polling Gmail for {safe}")
             time.sleep(15)  # Give Gmail time to receive the email
 
-            # Try code first, then magic link
-            code = poll_gmail_for_code(provider, email, gog_account, kind="code")
+            # Try code first unless this account requires a magic link.
+            code = None if prefer_magic else poll_gmail_for_code(
+                provider, email, gog_account, kind="code",
+                not_before=email_requested_at)
             if code:
                 record_email_send()
                 log("[4] Verification code received (value redacted)")
@@ -1526,7 +1623,8 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                     if detect_captcha(result2, client):
                         log("[CAPTCHA] Captcha detected after code entry")
                         callback_url, session_id = handle_captcha_checkpoint(
-                            client, run2_id, session_id, provider, email, port)
+                            client, run2_id, session_id, provider, email, port,
+                            meta)
                         if callback_url:
                             return _complete_reauth(proc, callback_url,
                                                     auth_file, stale_backup,
@@ -1545,7 +1643,8 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                             enforce_email_cooldown()
                             log("[4] Polling for new verification code")
                             code = poll_gmail_for_code(
-                                provider, email, gog_account, kind="code")
+                                provider, email, gog_account, kind="code",
+                                not_before=email_requested_at)
                             if code:
                                 record_email_send()
                                 log("[4] New verification code received "
@@ -1565,8 +1664,9 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                        ["link sent", "magic", "selectaccount", "click the link"]):
                     log("[5] Magic link flow detected — polling Gmail")
                     time.sleep(5)
-                    magic = poll_gmail_for_code(provider, email, gog_account,
-                                                kind="magic")
+                    magic = poll_gmail_for_code(
+                        provider, email, gog_account, kind="magic",
+                        not_before=email_requested_at)
                     if magic:
                         log("[5] Magic link received (value redacted)")
                         task3 = (
@@ -1587,7 +1687,8 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                         if detect_captcha(result3, client):
                             log("[CAPTCHA] Captcha detected after magic link")
                             callback_url, session_id = handle_captcha_checkpoint(
-                                client, run3_id, session_id, provider, email, port)
+                                client, run3_id, session_id, provider, email,
+                                port, meta)
                             if callback_url:
                                 return _complete_reauth(proc, callback_url, auth_file,
                                                         stale_backup, email, provider, meta)
@@ -1600,8 +1701,9 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                         return EXIT_FAILURE
             else:
                 log("[4] No verification code — trying magic link...")
-                magic = poll_gmail_for_code(provider, email, gog_account,
-                                            kind="magic")
+                magic = poll_gmail_for_code(
+                    provider, email, gog_account, kind="magic",
+                    not_before=email_requested_at)
                 if magic:
                     log("[4] Magic link received (value redacted)")
                     task2 = (
@@ -1621,7 +1723,8 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                     if detect_captcha(result2, client):
                         log("[CAPTCHA] Captcha detected after magic link")
                         callback_url, session_id = handle_captcha_checkpoint(
-                            client, run2_id, session_id, provider, email, port)
+                            client, run2_id, session_id, provider, email, port,
+                            meta)
                         if callback_url:
                             return _complete_reauth(proc, callback_url, auth_file,
                                                     stale_backup, email, provider, meta)
@@ -1654,7 +1757,7 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
         if detect_captcha(result_auth, client):
             log("[CAPTCHA] Captcha detected during Authorize")
             callback_url, session_id = handle_captcha_checkpoint(
-                client, run_auth_id, session_id, provider, email, port)
+                client, run_auth_id, session_id, provider, email, port, meta)
             if callback_url:
                 return _complete_reauth(proc, callback_url, auth_file,
                                         stale_backup, email, provider, meta)
@@ -1703,6 +1806,8 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
         client.stop_all_browsers()
         # Always clean up the login process
         cleanup_login_process(proc)
+        if meta.get("_target_auth_file") != auth_file:
+            restore_login_candidate(auth_file, meta)
 
 
 # ---------------------------------------------------------------------------
@@ -1739,6 +1844,11 @@ def _checkpoint_resume(args) -> int:
     provider = ckpt.get("provider", "")
     email = ckpt.get("email", "")
     port = ckpt.get("callback_port", 0)
+    auth_file_name = ckpt.get("auth_file", "")
+    expected_organization_uuid = ckpt.get(
+        "expected_organization_uuid", "")
+    expected_organization_name = ckpt.get(
+        "expected_organization_name", "")
 
     if not session_id or not provider or not email:
         log("[FAIL] Checkpoint file missing required fields")
@@ -1788,16 +1898,17 @@ def _checkpoint_resume(args) -> int:
         return EXIT_FAILURE
     log(f"[2] OAuth URL captured: {sanitize_url(oauth_url)}")
 
-    # Back up stale auth
-    auth_file = AUTH_DIR / f"{meta['auth_file_prefix']}-{email}.json"
-    stale_backup = auth_file.with_suffix(".stale")
-    if auth_file.exists():
-        try:
-            stale_backup.unlink(missing_ok=True)
-            stale_backup.write_text(auth_file.read_text())
-            log(f"[1] Stale auth backed up: {auth_file.name}")
-        except Exception as e:
-            log(f"[1] Stale auth backup warning: {e}")
+    # Preserve both the account-specific target and the canonical same-email
+    # login output. Captcha resume must retain the exact seat identity selected
+    # by the original run instead of collapsing back to provider + email.
+    try:
+        auth_file, stale_backup = prepare_auth_target(
+            meta, provider, email, auth_file_name,
+            expected_organization_uuid, expected_organization_name)
+    except (OSError, ValueError) as e:
+        log(f"[1] Auth target setup failed: {e}")
+        cleanup_login_process(proc)
+        return EXIT_FAILURE
 
     try:
         # Create follow-up run in the same session
@@ -1872,6 +1983,14 @@ def main():
                         help="Account email address")
     parser.add_argument("-gog-account", default="",
                         help="Gogcli account for Gmail polling")
+    parser.add_argument("-auth-file", default="",
+                        help="Account-specific auth JSON basename")
+    parser.add_argument("-expected-organization-uuid", default="",
+                        help="Require this organization UUID before activation")
+    parser.add_argument("-expected-organization-name", default="",
+                        help="Require this organization name before activation")
+    parser.add_argument("-prefer-magic", action="store_true",
+                        help="Request a fresh email login link instead of a code")
     parser.add_argument("-dry-run", action="store_true",
                         help="Validate setup without running browser flows")
     parser.add_argument("-validate-only", action="store_true",
@@ -1915,7 +2034,12 @@ def main():
     # --- Validate-only mode: standalone candidate validation ---
     if args.validate_only:
         meta = PROVIDERS[args.provider]
-        auth_file = AUTH_DIR / f"{meta['auth_file_prefix']}-{args.email}.json"
+        try:
+            auth_file = resolve_auth_file(
+                args.provider, args.email, args.auth_file)
+        except ValueError as e:
+            log(f"[FAIL] Invalid auth file: {e}")
+            return EXIT_FAILURE
         log(f"=== Validate-only: {args.provider} / {safe_email(args.email)} ===")
         log(f"Auth file: {auth_file.name}")
 
@@ -1929,6 +2053,8 @@ def main():
             expected_type=args.provider,
             canary_model=meta.get("canary_model", ""),
             skip_canary=args.skip_canary,
+            expected_organization_uuid=args.expected_organization_uuid,
+            expected_organization_name=args.expected_organization_name,
         )
 
         if not valid:
@@ -1999,6 +2125,10 @@ def main():
             client=client,
             dry_run=args.dry_run,
             two_factor=two_factor,
+            auth_file=args.auth_file,
+            expected_organization_uuid=args.expected_organization_uuid,
+            expected_organization_name=args.expected_organization_name,
+            prefer_magic=args.prefer_magic,
         )
     except TimeoutError as e:
         log(f"[TIMEOUT] {e}")
