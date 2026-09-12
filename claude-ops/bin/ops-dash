@@ -9,6 +9,8 @@ PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "${PLUGIN_ROOT}/lib/registry-path.sh"
 # Schema-tolerant registry readers (GSD schema has no .repos[]/.paths[]/.gsd).
 . "${PLUGIN_ROOT}/lib/registry-resolve.sh"
+# Display-zone resolution + calendar time localization (ops_calendar_rows).
+. "${PLUGIN_ROOT}/lib/calendar-tz.sh"
 PREFS="${OPS_DATA_DIR}/preferences.json"
 
 # ── Mobile / SSH detection (Rule 7) ─────────────────────────────────────────
@@ -1052,18 +1054,17 @@ render_section_calendar() {
   # Mobile: just count + first 3 titles
   if [[ "$MOBILE_MODE" -eq 1 ]]; then
     p "calendar: ${EVENT_COUNT} events today"
-    echo "$CALENDAR_JSON" | jq -r '.events[0:3][] | "  \(.start | split("T")[1] // "all-day" | .[0:5])  \(.summary)"' 2>/dev/null \
-      | while IFS= read -r line; do [[ -n "$line" ]] && p "$line"; done
+    echo "$CALENDAR_JSON" | ops_calendar_rows 3 \
+      | while IFS=$'\t' read -r time summary cal; do
+          [[ -z "$summary" ]] && continue
+          [[ "$time" == "ALLDAY" || -z "$time" ]] && time="all-day"
+          p "  ${time}  ${summary}"
+        done
     p ""; return
   fi
 
   # Desktop: time + title + calendar label (max 8)
-  echo "$CALENDAR_JSON" | jq -r '.events[0:8][] |
-    if .allday then
-      "ALLDAY\t\(.summary)\t\(.calendar)"
-    else
-      "\(.start | split("T")[1] // "" | .[0:5])\t\(.summary)\t\(.calendar)"
-    end' 2>/dev/null \
+  echo "$CALENDAR_JSON" | ops_calendar_rows 8 \
     | while IFS=$'\t' read -r time summary cal; do
         # Trim calendar to short label (before @)
         cal_short="${cal%@*}"
