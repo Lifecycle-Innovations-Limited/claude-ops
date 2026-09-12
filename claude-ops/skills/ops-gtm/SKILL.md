@@ -302,4 +302,5 @@ All behavior above respects `claude-ops/CLAUDE.md`:
 
 ## Additional resources
 
-CLI detail: `references/cli.md`.
+Channel catalogue: `references/catalog.md`. CLI detail lives in the `/marketing` skill,
+which owns credential resolution and the channel API calls.

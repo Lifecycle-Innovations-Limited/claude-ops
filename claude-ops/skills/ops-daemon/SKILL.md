@@ -31,7 +31,7 @@ Diagnostic + auto-fix surface for the background `ops-daemon` process. Acts like
 
 ## CLI/API Reference
 
-### bin/ops-daemon-manager.sh
+### scripts/ops-daemon-manager.sh
 
 | Command                                                         | Usage                                          | Output                                                                  |
 | --------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------- |
