@@ -26,17 +26,23 @@ PROFILE_ID = "prof-0123456789abcdef-tail"
 EMAIL = "operator@example.com"
 
 
-def make_account(provider="claude", email=EMAIL, two_factor=None):
+def make_account(provider="claude", email=EMAIL, two_factor=None,
+                 auth_file=None):
     """Build the account dict trigger_reauth expects."""
     account = {"provider": provider, "email": email, "reason": "expired"}
     if two_factor is not None:
         account["two_factor"] = two_factor
+    if auth_file is not None:
+        account["file"] = auth_file
     return account
 
 
-def seats_for(provider="claude", email=EMAIL, profile_id=PROFILE_ID):
-    return {"seats": [{"provider": provider, "email": email,
-                       "profile_id": profile_id}]}
+def seats_for(provider="claude", email=EMAIL, profile_id=PROFILE_ID,
+              auth_file=None):
+    seat = {"provider": provider, "email": email, "profile_id": profile_id}
+    if auth_file is not None:
+        seat["auth_file"] = auth_file
+    return {"seats": [seat]}
 
 
 class FakeProc:
@@ -47,7 +53,7 @@ class FakeProc:
 
 
 class TestFindSeat(unittest.TestCase):
-    """find_seat matches on provider AND email, never one alone."""
+    """find_seat distinguishes seats that share provider and email."""
 
     def test_matches_provider_and_email(self):
         seat = auto_reauth.find_seat(seats_for(), "claude", EMAIL)
@@ -65,6 +71,29 @@ class TestFindSeat(unittest.TestCase):
 
     def test_missing_seats_key_returns_none(self):
         self.assertIsNone(auto_reauth.find_seat({}, "claude", EMAIL))
+
+    def test_auth_file_selects_one_of_two_same_email_seats(self):
+        seats = {"seats": [
+            {"provider": "claude", "email": EMAIL,
+             "auth_file": "claude-operator-max.json", "profile_id": "max-profile"},
+            {"provider": "claude", "email": EMAIL,
+             "auth_file": "claude-operator-team.json", "profile_id": "team-profile"},
+        ]}
+
+        seat = auto_reauth.find_seat(
+            seats, "claude", EMAIL, "claude-operator-max.json")
+
+        self.assertEqual(seat["profile_id"], "max-profile")
+
+    def test_ambiguous_same_email_seats_do_not_pick_first(self):
+        seats = {"seats": [
+            {"provider": "claude", "email": EMAIL,
+             "auth_file": "claude-operator-max.json", "profile_id": "max-profile"},
+            {"provider": "claude", "email": EMAIL,
+             "auth_file": "claude-operator-team.json", "profile_id": "team-profile"},
+        ]}
+
+        self.assertIsNone(auto_reauth.find_seat(seats, "claude", EMAIL))
 
 
 class TestTriggerReauthScriptChoice(unittest.TestCase):
@@ -86,6 +115,14 @@ class TestTriggerReauthScriptChoice(unittest.TestCase):
         self.assertNotIn(auto_reauth.REAUTH_SCRIPT, cmd)
         self.assertIn("-profile-id", cmd)
         self.assertEqual(cmd[cmd.index("-profile-id") + 1], PROFILE_ID)
+
+    def test_auth_file_is_forwarded_to_reauth_script(self):
+        auth_file = "claude-operator-max.json"
+        _, _, cmd = self._run(
+            make_account(auth_file=auth_file),
+            seats_for(auth_file=auth_file))
+
+        self.assertEqual(cmd[cmd.index("-auth-file") + 1], auth_file)
 
     def test_unmapped_account_falls_back_to_email_script(self):
         ok, msg, cmd = self._run(make_account(), {"seats": []})

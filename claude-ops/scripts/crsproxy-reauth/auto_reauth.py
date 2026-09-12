@@ -260,28 +260,37 @@ def load_reauth_seats() -> dict:
         return {}
 
 
-def find_seat(seats: dict, provider: str, email: str) -> dict | None:
-    """Find the seat entry matching provider+email in reauth_seats.json."""
-    for seat in seats.get("seats", []):
-        if seat.get("provider") == provider and seat.get("email") == email:
-            return seat
-    return None
+def find_seat(seats: dict, provider: str, email: str,
+              auth_file: str = "") -> dict | None:
+    """Find an unambiguous seat, using auth_file for same-email accounts."""
+    matches = [seat for seat in seats.get("seats", [])
+               if seat.get("provider") == provider
+               and seat.get("email") == email]
+    if auth_file:
+        matches = [seat for seat in matches
+                   if seat.get("auth_file") == auth_file]
+    return matches[0] if len(matches) == 1 else None
 
 
-def find_policy_account(policy: dict | None, provider: str, email: str) -> dict | None:
-    """Find the account-policy entry matching provider+email."""
+def find_policy_account(policy: dict | None, provider: str, email: str,
+                        auth_file: str = "") -> dict | None:
+    """Find an unambiguous policy account, including its auth filename."""
     if not policy:
         return None
-    for entry in policy.get("accounts", []):
-        if entry.get("provider") == provider and entry.get("email") == email:
-            return entry
-    return None
+    matches = [entry for entry in policy.get("accounts", [])
+               if entry.get("provider") == provider
+               and entry.get("email") == email]
+    if auth_file:
+        matches = [entry for entry in matches
+                   if entry.get("auth_file") == auth_file]
+    return matches[0] if len(matches) == 1 else None
 
 
 # ---------------------------------------------------------------------------
 # Auth file lookup
 # ---------------------------------------------------------------------------
-def find_auth_file(provider: str, email: str) -> Path | None:
+def find_auth_file(provider: str, email: str,
+                   auth_file: str = "") -> Path | None:
     """Find the auth file for a given provider and email.
 
     Auth file naming conventions:
@@ -290,6 +299,12 @@ def find_auth_file(provider: str, email: str) -> Path | None:
       - codex:   codex-{hash}-{email}-pro.json
       - antigravity: antigravity-{email}.json
     """
+    if auth_file:
+        if Path(auth_file).name != auth_file:
+            return None
+        exact = AUTH_DIR / auth_file
+        return exact if exact.is_file() else None
+
     # Try direct name first (works for claude, xai, antigravity).
     direct = AUTH_DIR / f"{provider}-{email}.json"
     if direct.exists():
@@ -428,7 +443,9 @@ def scan_auth_files(policy_disabled=None):
         email = data.get("email", "")
         # Skip accounts that are intentionally disabled by policy — they
         # should not be re-queued for reauth by the generic scan.
-        if policy_disabled and (provider, email) in policy_disabled:
+        if policy_disabled and (
+                (provider, email) in policy_disabled
+                or (provider, email, path.name) in policy_disabled):
             continue
         disabled = bool(data.get("disabled", False))
         exp = parse_expiry(data.get("expired", ""))
@@ -486,7 +503,21 @@ def trigger_reauth(account: dict, env: dict,
     # Look up seat mapping for profile-first reauth.
     seat = None
     if seats is not None:
-        seat = find_seat(seats, provider, email)
+        seat = find_seat(seats, provider, email, account.get("file", ""))
+
+    identity_args = []
+    if account.get("file"):
+        identity_args.extend(["-auth-file", account["file"]])
+    if account.get("expected_organization_uuid"):
+        identity_args.extend([
+            "-expected-organization-uuid",
+            account["expected_organization_uuid"],
+        ])
+    if account.get("expected_organization_name"):
+        identity_args.extend([
+            "-expected-organization-name",
+            account["expected_organization_name"],
+        ])
 
     two_factor = account.get("two_factor") or {}
     two_factor_method = str(two_factor.get("method") or "none").strip()
@@ -508,6 +539,7 @@ def trigger_reauth(account: dict, env: dict,
             "-provider", provider,
             "-email", email,
             "-profile-id", profile_id,
+            *identity_args,
             *two_factor_args,
         ]
         method = "profile"
@@ -535,6 +567,7 @@ def trigger_reauth(account: dict, env: dict,
             "-provider", provider,
             "-email", email,
             "-gog-account", gog_account,
+            *identity_args,
             *two_factor_args,
         ]
         method = "email"
@@ -601,7 +634,8 @@ def reconcile_accounts(env: dict, seats: dict, state: dict) -> dict:
         masked = mask_email(email)
 
         # Find the auth file for this account.
-        auth_file = find_auth_file(provider, email)
+        configured_auth_file = str(entry.get("auth_file") or "")
+        auth_file = find_auth_file(provider, email, configured_auth_file)
         if not auth_file:
             if should_be_enabled:
                 log(f"[reconcile] {masked} ({provider}): no auth file — "
@@ -625,7 +659,7 @@ def reconcile_accounts(env: dict, seats: dict, state: dict) -> dict:
 
         if should_be_enabled and is_disabled:
             # Policy says enabled but auth file is disabled -> trigger reauth.
-            key = f"{provider}:{email}"
+            key = f"{provider}:{email}:{auth_file.name}"
             if in_cooldown(state, key):
                 log(f"[reconcile] {masked} ({provider}): should be enabled "
                     "but is disabled — in cooldown, skipping")
@@ -640,6 +674,8 @@ def reconcile_accounts(env: dict, seats: dict, state: dict) -> dict:
                 "email": email,
                 "reason": "policy-enabled-but-disabled",
                 "two_factor": entry.get("two_factor") or {},
+                "expected_organization_uuid": entry.get("organization_uuid") or "",
+                "expected_organization_name": entry.get("organization_name") or "",
             }
             success, reason = trigger_reauth(account, env, seats)
             record_attempt(state, key, success, reason)
@@ -728,8 +764,10 @@ def main() -> int:
     if policy:
         for entry in policy.get("accounts", []):
             if not entry.get("enabled", True):
-                policy_disabled.add(
-                    (entry.get("provider", ""), entry.get("email", "")))
+                identity = (entry.get("provider", ""), entry.get("email", ""))
+                if entry.get("auth_file"):
+                    identity += (entry["auth_file"],)
+                policy_disabled.add(identity)
 
     # 4. Scan auth files for expired/disabled accounts.
     needs = scan_auth_files(policy_disabled=policy_disabled)
@@ -744,16 +782,23 @@ def main() -> int:
     attempted = 0
     succeeded = 0
     for account in needs:
-        key = f"{account['provider']}:{account['email']}"
+        key = (f"{account['provider']}:{account['email']}:"
+               f"{account.get('file', '')}")
         if in_cooldown(state, key):
             log(f"[skip] {mask_email(account['email'])} ({account['provider']}) "
                 f"in cooldown — last attempt too recent")
             continue
 
         policy_entry = find_policy_account(
-            policy, account["provider"], account["email"])
+            policy, account["provider"], account["email"], account.get("file", ""))
         if policy_entry and "two_factor" in policy_entry:
             account = {**account, "two_factor": policy_entry.get("two_factor") or {}}
+        if policy_entry:
+            account = {
+                **account,
+                "expected_organization_uuid": policy_entry.get("organization_uuid") or "",
+                "expected_organization_name": policy_entry.get("organization_name") or "",
+            }
 
         attempted += 1
         success, reason = trigger_reauth(account, env, seats)
