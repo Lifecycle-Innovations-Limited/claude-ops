@@ -12,6 +12,16 @@ effort: low
 maxTurns: 30
 ---
 
+## Heartbeat-triggered runs
+
+When asked to run a newly configured session heartbeat, read its saved prompt from the active Hermes database's `state_meta` entry `heartbeat:<session_id>`. Slash-command setup may not appear in conversation history, config.yaml, or cron/jobs.json. Execute that prompt in the current turn; do not invent a `hermes heartbeat` CLI command or mark a scheduler fire that did not occur.
+
+Validate scan warnings with short live samples before changing the machine. Existing swap use alone is not active memory pressure; a transient blocked process or CPU spike does not justify cache purges or killing useful workers.
+
+When host memory is available but swapping and stalls persist, inspect `memory.high`, `memory.events`, and `memory.pressure` at EVERY cgroup ancestor, not only the process's leaf. An inherited soft limit can force disk reclaim despite free host RAM. Establish the limit's original purpose before changing it; preserve service headroom, back up persistent settings, and verify that new high-limit events stop. Disk recovery can lag after the limit is corrected; do not call the whole host recovered from a configuration readback alone.
+
+When a memory-limit fix reverts after daemon-reload, inspect all systemd drop-ins, including system.control and ordinary unit overrides. Align the stale conflicting source after backing it up; test a daemon-reload and read the live cgroup limit. A successful set-property alone does not prove reload persistence. Keep separate worker hard limits intact; diagnose worker heap settings against those limits rather than raising them indiscriminately.
+
 ## Runtime Context
 
 Before scanning, load:
