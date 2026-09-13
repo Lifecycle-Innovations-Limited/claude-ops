@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## [3.10.17] - 2026-09-13
+
+### Fixed
+- The `Agent` PreToolUse hook matcher is now anchored, so it only fires on the `Agent` tool instead of every tool whose name contains "Agent" (such as `ListAgents`).
+
+### Changed
+- `ops-speedup` now documents how heartbeat-triggered runs work: the saved prompt lives in the active Hermes database under the `heartbeat:<session_id>` state entry, and is executed in the current turn rather than through a non-existent CLI command.
+- `ops-speedup` guidance on memory diagnostics is stricter: validate scan warnings with live samples before changing the machine, treat existing swap use as no proof of memory pressure, read `memory.high` at every cgroup ancestor rather than only the leaf, and verify a limit fix survives `daemon-reload` by checking all systemd drop-ins and the live cgroup value.
+
+
 ## [3.10.16] - 2026-09-12
 
 ### Fixed
