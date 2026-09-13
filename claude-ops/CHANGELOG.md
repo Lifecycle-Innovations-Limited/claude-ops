@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+- `ops-dash` now converts every CALENDAR event into one display zone before
+  printing it, instead of showing the raw clock half of each timestamp. Events
+  from a calendar in a different zone previously rendered at that calendar's
+  wall-clock time, so unrelated events could appear minutes apart and look like
+  a conflict. The zone is resolved from `$OPS_TZ`, then `timezone` in
+  `preferences.json`, then the system zone. All-day events are passed through
+  unconverted so they cannot be dragged onto an adjacent day.
+
 ## [3.10.16] - 2026-09-12
 
 ### Fixed
@@ -12,7 +21,6 @@
 
 ### Added
 - `skill-doctor` script that checks skills for broken or dangling references.
-
 
 ## [3.10.15] - 2026-09-11
 
