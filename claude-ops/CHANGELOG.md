@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+- `ops-dash` now converts every CALENDAR event into one display zone before
+  printing it, instead of showing the raw clock half of each timestamp. Events
+  from a calendar in a different zone previously rendered at that calendar's
+  wall-clock time, so unrelated events could appear minutes apart and look like
+  a conflict. The zone is resolved from `$OPS_TZ`, then `timezone` in
+  `preferences.json`, then the system zone. All-day events are passed through
+  unconverted so they cannot be dragged onto an adjacent day.
+
 ## [3.10.17] - 2026-09-13
 
 ### Fixed
@@ -10,7 +19,6 @@
 ### Changed
 - `ops-speedup` now documents how heartbeat-triggered runs work: the saved prompt lives in the active Hermes database under the `heartbeat:<session_id>` state entry, and is executed in the current turn rather than through a non-existent CLI command.
 - `ops-speedup` guidance on memory diagnostics is stricter: validate scan warnings with live samples before changing the machine, treat existing swap use as no proof of memory pressure, read `memory.high` at every cgroup ancestor rather than only the leaf, and verify a limit fix survives `daemon-reload` by checking all systemd drop-ins and the live cgroup value.
-
 
 ## [3.10.16] - 2026-09-12
 
@@ -22,7 +30,6 @@
 
 ### Added
 - `skill-doctor` script that checks skills for broken or dangling references.
-
 
 ## [3.10.15] - 2026-09-11
 
