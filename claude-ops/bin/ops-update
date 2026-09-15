@@ -7,7 +7,13 @@
 #   1. Refresh the marketplace catalogue clone     (claude plugin marketplace update)
 #      — runs for real even under --dry-run: it is a read-only pull of the
 #        public catalogue, and step 2 needs it current to report accurately.
+#      — then PROVES the clone is at its remote tip and that the catalogue's
+#        version is not behind the newest remote tag. Either check that cannot
+#        run (fetch/ls-remote failed) aborts, unless --offline.
 #   2. Resolve the target version from the refreshed marketplace.json
+#      — refuses to move to a LOWER version than the one installed unless
+#        --allow-downgrade is given (2026-09-11: a stale catalogue at 3.10.13
+#        silently pruned the installed 3.10.15 and printed "upgrade complete").
 #   3. Update the installed plugin                 (claude plugin update ops@ops-marketplace)
 #      — with a force-reinstall fallback for the known Claude Code bug where
 #        `plugin update` reports "already at latest" while the cache stays stale
@@ -28,12 +34,17 @@
 #   A session restart (or /reload-plugins) is required for the new version to load.
 #
 # Usage:
-#   ops-update [--dry-run] [--force] [--to X.Y.Z] [--no-prune] [--no-patches]
-#              [--no-rewrite] [--no-localsync] [--no-companions] [--no-clisync]
+#   ops-update [--dry-run] [--force] [--to X.Y.Z] [--allow-downgrade] [--offline]
+#              [--no-prune] [--no-patches] [--no-rewrite] [--no-localsync]
+#              [--no-companions] [--no-clisync]
 #
 #   --dry-run       show everything that would happen; change nothing
 #   --force         force-reinstall even if the CLI says "already at latest" (bug #61954)
 #   --to X.Y.Z      target a specific version instead of the marketplace's newest
+#   --allow-downgrade  permit a target LOWER than the installed version, and let
+#                   step 5 prune caches newer than the target (default: refuse)
+#   --offline       if the remote cannot be reached (fetch / ls-remote fail),
+#                   warn and continue instead of aborting (default: abort)
 #   --no-prune      keep old cache versions
 #   --no-patches    skip the cache-patch reapply step
 #   --no-rewrite    skip the stale-version-path rewrite step
@@ -56,18 +67,21 @@ DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$PLUGINS_DIR/data/ops-${MARKETPLACE}}"
 THIS_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 DRY=0; FORCE=0; PRUNE=1; PATCHES=1; REWRITE=1; LOCALSYNC=1; COMPANIONS=1; CLISYNC=1; TARGET=""
+ALLOW_DOWNGRADE=0; OFFLINE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY=1; shift ;;
     --force) FORCE=1; shift ;;
-    --to) TARGET="$2"; shift 2 ;;
+    --to|--target) TARGET="$2"; shift 2 ;;
+    --allow-downgrade) ALLOW_DOWNGRADE=1; shift ;;
+    --offline) OFFLINE=1; shift ;;
     --no-prune) PRUNE=0; shift ;;
     --no-patches) PATCHES=0; shift ;;
     --no-rewrite) REWRITE=0; shift ;;
     --no-localsync) LOCALSYNC=0; shift ;;
     --no-companions) COMPANIONS=0; shift ;;
     --no-clisync) CLISYNC=0; shift ;;
-    -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^# Public repo/p' "$0" | sed '$d'; exit 0 ;;
     *) echo "ops-update: unknown arg '$1'" >&2; exit 2 ;;
   esac
 done
@@ -120,13 +134,43 @@ else
 fi
 
 # Verify the clone is actually at its remote tip, whatever the CLI claimed.
+#
+# FAIL-CLOSED. Until 2026-09-11 every failure below `return 1`-ed, which reads
+# as "not stale": a fetch that could not reach origin, a detached HEAD, or a
+# missing tracking ref all let the run continue against whatever the clone
+# happened to hold. That is how a clone parked at 3.10.13 with a dirty tree
+# passed this guard while v3.10.15 was on the remote, and the run then pruned
+# the installed 3.10.15 as an "upgrade". A check that cannot run must abort,
+# not vouch. `--offline` is the only way to turn an unreachable remote into a
+# warning, and it still cannot silence a proven-stale clone.
+mkt_guard_fail() {
+  # $1 = what could not be verified
+  if [[ "$OFFLINE" -eq 1 ]]; then
+    warn "--offline: could not verify $1 — continuing on the local catalogue UNVERIFIED"
+    return 0
+  fi
+  err "could not verify $1"
+  say "  clone:  $MKT_CLONE"
+  say "  fix:    restore network access and re-run, or pass --offline to accept"
+  say "          the local catalogue unverified (a downgrade is still refused)."
+  err "refusing to continue: a catalogue that cannot be checked is not a catalogue"
+  exit 1
+}
+
+# Exit 0 = stale, 1 = at tip. Any failure to *determine* that exits the run
+# (or warns under --offline), so a return of 1 always means "proven current".
 mkt_clone_is_stale() {
   local branch remote_sha local_sha
-  git -C "$MKT_CLONE" fetch -q origin >/dev/null 2>&1 || return 1
-  branch="$(git -C "$MKT_CLONE" rev-parse --abbrev-ref HEAD 2>/dev/null)" || return 1
-  [[ -n "$branch" && "$branch" != HEAD ]] || return 1
-  remote_sha="$(git -C "$MKT_CLONE" rev-parse "origin/$branch" 2>/dev/null)" || return 1
-  local_sha="$(git -C "$MKT_CLONE" rev-parse HEAD 2>/dev/null)" || return 1
+  git -C "$MKT_CLONE" fetch -q origin >/dev/null 2>&1 \
+    || { mkt_guard_fail "the marketplace clone against its remote (git fetch origin failed)"; return 1; }
+  branch="$(git -C "$MKT_CLONE" rev-parse --abbrev-ref HEAD 2>/dev/null)" \
+    || { mkt_guard_fail "the clone's current branch (git rev-parse HEAD failed)"; return 1; }
+  [[ -n "$branch" && "$branch" != HEAD ]] \
+    || { mkt_guard_fail "the clone's branch (HEAD is detached, no tracking branch to compare)"; return 1; }
+  remote_sha="$(git -C "$MKT_CLONE" rev-parse "origin/$branch" 2>/dev/null)" \
+    || { mkt_guard_fail "the remote tip origin/$branch (git rev-parse failed)"; return 1; }
+  local_sha="$(git -C "$MKT_CLONE" rev-parse HEAD 2>/dev/null)" \
+    || { mkt_guard_fail "the clone's HEAD (git rev-parse failed)"; return 1; }
   [[ "$local_sha" != "$remote_sha" ]]
 }
 
@@ -152,6 +196,39 @@ if [[ "$MKT_HEAD_BEFORE" != "$(git -C "$MKT_CLONE" rev-parse HEAD 2>/dev/null)" 
   ok "catalogue advanced to $(git -C "$MKT_CLONE" log --oneline -1 2>/dev/null)"
 fi
 
+# Second, independent proof: the newest release tag on the remote must not be
+# ahead of what the catalogue says. The tip check above compares SHAs on one
+# branch; this compares versions, so a clone that is "at tip" of the wrong
+# branch, or a catalogue commit that never bumped marketplace.json, is caught
+# too. Same fail-closed rule: no tag list, no run (unless --offline).
+CAT_VER="$(jq -r --arg n "$PLUGIN" '.plugins[]|select(.name==$n).version' "$MKT_JSON" 2>/dev/null || true)"
+REMOTE_TAG_VER=""; TAGS_OK=1
+if REMOTE_TAGS="$(git -C "$MKT_CLONE" ls-remote --tags --refs origin 'v[0-9]*' 2>/dev/null)"; then
+  REMOTE_TAG_VER="$(printf '%s\n' "$REMOTE_TAGS" | sed -E 's#.*refs/tags/v##' \
+    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+else
+  TAGS_OK=0
+fi
+if [[ "$TAGS_OK" -eq 0 ]]; then
+  mkt_guard_fail "the remote's release tags (git ls-remote --tags origin failed)"
+elif [[ -z "$REMOTE_TAG_VER" ]]; then
+  say "  ${c_dim}remote has no vX.Y.Z tags — tag cross-check has nothing to compare${c_rst}"
+elif [[ "$CAT_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+     && [[ "$CAT_VER" != "$REMOTE_TAG_VER" ]] \
+     && [[ "$(printf '%s\n' "$CAT_VER" "$REMOTE_TAG_VER" | sort -V | head -1)" == "$CAT_VER" ]]; then
+  err "catalogue behind remote tag v$REMOTE_TAG_VER (catalogue says $CAT_VER)"
+  say "  clone:  $MKT_CLONE"
+  say "  at:     $(git -C "$MKT_CLONE" log --oneline -1 2>/dev/null)"
+  say "  fix:    the clone is not on the commit that published v$REMOTE_TAG_VER."
+  say "          Clean its tree, fast-forward it to origin's default branch, re-run."
+  err "refusing to continue against a STALE CATALOGUE — every version below would be wrong"
+  exit 1
+elif [[ "$CAT_VER" == "$REMOTE_TAG_VER" ]]; then
+  ok "catalogue $CAT_VER matches newest remote tag v$REMOTE_TAG_VER"
+else
+  say "  ${c_dim}catalogue $CAT_VER is ahead of newest remote tag v$REMOTE_TAG_VER (release not tagged yet)${c_rst}"
+fi
+
 # ── 2. Resolve target version ──────────────────────────────────────────────
 step "2/11  Resolve target version"
 if [[ -n "$TARGET" ]]; then
@@ -163,6 +240,25 @@ fi
 say "target version:    $NEW"
 if [[ "$CUR" == "$NEW" && "$FORCE" -eq 0 ]]; then
   warn "already on $NEW. Use --force to re-materialise the cache (bug #61954 stale-cache guard)."
+fi
+
+# Downgrade guard. "Upgrade" must never mean "go backwards". If the resolved
+# target sorts below what is installed, stop here — before step 3 materialises
+# it and step 5 deletes the newer caches. Applies to --to as well: an explicit
+# target is still not an explicit downgrade; that needs --allow-downgrade.
+semver_lt() { [[ "$1" != "$2" && "$(printf '%s\n' "$1" "$2" | sort -V | head -1)" == "$1" ]]; }
+if [[ "$CUR" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && semver_lt "$NEW" "$CUR"; then
+  if [[ "$ALLOW_DOWNGRADE" -eq 1 ]]; then
+    warn "DOWNGRADE $CUR → $NEW permitted by --allow-downgrade"
+  else
+    err "refusing to DOWNGRADE $CUR → $NEW"
+    say "  installed: $CUR"
+    say "  target:    $NEW  ($([[ -n "$TARGET" ]] && echo '--to' || echo "from $MKT_JSON"))"
+    say "  hint:      if the catalogue is right and the older version is wanted,"
+    say "             re-run with:  ops-update --to $NEW --allow-downgrade"
+    say "             otherwise the catalogue is stale — fix the clone and re-run."
+    exit 1
+  fi
 fi
 
 # ── 3. Update the installed plugin ─────────────────────────────────────────
@@ -201,15 +297,22 @@ step "5/11  Prune old cache versions"
 if [[ "$PRUNE" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-prune)${c_rst}"
 else
-  pruned=0
+  pruned=0; kept_newer=""
   for d in "$CACHE_ROOT"/*/; do
     [[ -d "$d" ]] || continue
     v="$(basename "$d")"
     [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
     [[ "$v" == "$NEW" ]] && continue
+    # Never delete a cache NEWER than the target. Pruning only ever means
+    # "remove what was superseded"; a version above $NEW was not superseded
+    # by it. Only an explicit --allow-downgrade may take newer caches out.
+    if semver_lt "$NEW" "$v" && [[ "$ALLOW_DOWNGRADE" -eq 0 ]]; then
+      kept_newer="$kept_newer $v"; continue
+    fi
     run "rm -rf \"$d\""
     ok "pruned cache $v"; pruned=$((pruned+1))
   done
+  [[ -n "$kept_newer" ]] && warn "kept cache(s) newer than $NEW:${kept_newer} (pass --allow-downgrade to prune them)"
   [[ "$pruned" -eq 0 ]] && say "  ${c_dim}no old cache versions to prune${c_rst}"
 fi
 
