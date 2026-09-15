@@ -204,6 +204,33 @@ else
   fail "--offline still refuses a downgrade (rc=$RC, got: $(head -c 400 <<<"$out8"))"
 fi
 
+# ── 9. Cross-digit-width downgrade: installed 3.10.13, catalogue 3.10.9 → refused.
+#    Guards the `sort -V` comparison itself: a naive string compare reads
+#    "3.10.13" < "3.10.9" and would treat 3.10.13 → 3.10.9 as an UPGRADE,
+#    silently reintroducing the exact downgrade class this PR prevents. The
+#    catalogue and newest tag agree at 3.10.9 so the tag cross-check passes and
+#    execution reaches the downgrade guard (the comparison under test).
+b9="$tmpdir/crossdigit-downgrade"
+make_fixture "$b9" 3.10.9 "v3.10.9" 3.10.13 >/dev/null
+run_update "$b9" --dry-run; out9="$OUT"
+if [ "$RC" -ne 0 ] && grep -qF "refusing to DOWNGRADE 3.10.13 → 3.10.9" <<<"$out9"; then
+  pass "cross-digit 3.10.13 → 3.10.9 is refused as a DOWNGRADE (sort -V, not string compare)"
+else
+  fail "cross-digit 3.10.13 → 3.10.9 is refused as a DOWNGRADE (rc=$RC, got: $(head -c 400 <<<"$out9"))"
+fi
+
+# ── 10. Cross-major-digit tag cross-check: catalogue 3.9.20, newest tag v3.10.0.
+#    Guards the tag check's own `sort -V`: a naive string compare reads
+#    "3.9.20" > "3.10.0" and would let a stale 3.9.x catalogue pass the tag gate.
+b10="$tmpdir/crossdigit-tag"
+make_fixture "$b10" 3.9.20 "v3.9.20,v3.10.0" 3.9.20 >/dev/null
+run_update "$b10" --dry-run; out10="$OUT"
+if [ "$RC" -ne 0 ] && grep -qF "catalogue behind remote tag v3.10.0 (catalogue says 3.9.20)" <<<"$out10"; then
+  pass "cross-digit tag check flags 3.9.20 catalogue behind v3.10.0 (sort -V, not string compare)"
+else
+  fail "cross-digit tag check flags 3.9.20 catalogue behind v3.10.0 (rc=$RC, got: $(head -c 400 <<<"$out10"))"
+fi
+
 echo ""
 echo "test-ops-update-downgrade-guard.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
