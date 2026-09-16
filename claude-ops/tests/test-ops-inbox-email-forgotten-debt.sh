@@ -117,6 +117,15 @@ cat >"$FIX/archived.json" <<'JSON'
       "labels": ["CATEGORY_PROMOTIONS"]
     },
     {
+      "id": "swept-oneway-1",
+      "threadId": "t-swept-oneway",
+      "date": "2026-09-13 09:00",
+      "internalDateIso": "2026-09-13T09:00:00+02:00",
+      "from": "Cold Pitch <hi@coldpitch.example.com>",
+      "subject": "Quick intro about our platform",
+      "labels": ["CATEGORY_PERSONAL"]
+    },
+    {
       "id": "robot-1",
       "threadId": "t-robot",
       "date": "2026-09-14 09:00",
@@ -155,11 +164,27 @@ cat >"$FIX/sent.json" <<'JSON'
 }
 JSON
 
+# A bulk sweep stamps every archived thread in one second. That watermark must
+# silence the one-way pitch, and must NOT silence a conversation Sam is in:
+# archiving is a filing decision, never proof that a reply was sent. On
+# 2026-09-16 a watermark over 1007 threads wiped all 12 genuine two-way threads
+# out of the result — this fixture pins that it cannot happen again.
+WM_DIR="$TMP/hermes/state"
+mkdir -p "$WM_DIR"
+cat >"$WM_DIR/ops-email-sweep-watermarks-sam_example.com.json" <<'JSON'
+{
+  "t-believe": "2026-09-16 09:00:00+00:00",
+  "t-swept-oneway": "2026-09-16 09:00:00+00:00"
+}
+JSON
+
 run_scan() {
   OPS_TEST_FIXTURES="$FIX" \
   PATH="$TMP/bin:$PATH" \
   GOG_ACCOUNT="sam@example.com" \
+  GMAIL_ACCOUNT="sam@example.com" \
   GOG_KEYRING_PASSWORD="test" \
+  HERMES_HOME="$TMP/hermes" \
   "$SCAN" --email-only --debt-days 90 2>/dev/null
 }
 
@@ -187,6 +212,12 @@ else
     && ok "archived thread where they spoke last comes back as forgotten" \
     || bad "Believe thread landed in '$b'"
 
+  # Same thread also carries a sweep watermark. A conversation Sam wrote into
+  # must survive it; only the direction test may close it.
+  [ "$b" = "needs_reply:forgotten" ] \
+    && ok "bulk sweep watermark does not bury a two-way conversation" \
+    || bad "watermark buried a thread Sam participated in"
+
   b="$(bucket_of "$OUT" "Still in the inbox")"
   [ "$b" = "needs_reply:live" ] \
     && ok "ordinary inbox thread stays live, not forgotten" \
@@ -206,6 +237,11 @@ else
   [ "$b" = "ABSENT" ] \
     && ok "no-reply sender stays shut" \
     || bad "robot mail came back as '$b'"
+
+  b="$(bucket_of "$OUT" "Quick intro about our platform")"
+  [ "$b" = "ABSENT" ] \
+    && ok "one-way pitch we swept stays filed (watermark honoured)" \
+    || bad "swept one-way pitch came back as '$b'"
 
   grep -q "archived/filtered thread" <<<"$OUT" \
     && ok "scan states that it reopened filtered mail" \
