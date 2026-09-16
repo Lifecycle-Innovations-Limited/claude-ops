@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+- `ops-release` now sweeps open pull requests before it cuts anything. Twice in
+  one day a release went out while reviewed, good external PRs sat open, and
+  both had to be merged by hand and the release re-cut. The new stage runs
+  before the version bump, so the changelog and tag cover everything that
+  landed. For every open PR against `main` — drafts and fork PRs included — it
+  classifies the PR, approves workflow runs that GitHub is holding at
+  `action_required`, dispatches one background review agent per PR (all of them
+  together, so independent PRs are reviewed in parallel), and merges only what
+  the agent blessed and the required checks report green. `skipped`, `neutral`
+  and `cancelled` are not failures; `failure`, `timed_out`, `action_required`
+  and `error` are. Anything the agent would not clearly bless, anything still
+  red, still draft, or in conflict is reported and left open, and the release
+  proceeds without it. The stage is on by default, `--no-sweep` skips it, and
+  `--sweep-only` runs the sweep and stops. `--dry-run` never sweeps, since a
+  sweep merges for real.
+
+### Fixed
+- A pull request from a fork looked permanently blocked. GitHub holds a fork's
+  workflow runs at `action_required` until a maintainer approves them, so the
+  required checks never started and `mergeable_state` stayed `blocked` forever.
+  The sweep approves those held runs, which is what unblocked both stalled
+  external contributions.
+
 ## [3.10.19] - 2026-09-16
 
 ### Added
