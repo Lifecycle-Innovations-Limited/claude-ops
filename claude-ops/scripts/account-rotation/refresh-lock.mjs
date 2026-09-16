@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
@@ -16,6 +16,14 @@ const envValue = (name) => process.env[`CLAUDE_REFRESH_${name}`] ?? process.env[
 const LOCK_DIR = envValue('LOCK_DIR') || DEFAULT_LOCK_DIR;
 const LOCK_TTL_MS = (Number(envValue('LOCK_TTL_SEC')) || 120) * 1000;
 const GUARD_TTL_MS = 10_000;
+// A guard whose owner process is still alive is only reclaimed after this much
+// longer window, which exists solely to resolve a recycled pid. A guard is held
+// for the microseconds one filesystem action takes, so a live owner is a live
+// guard and wall-clock age must not be allowed to reap it.
+const GUARD_ABANDONED_MS = 60_000;
+// Every code another worker can hand us by owning, moving or removing the slot
+// underneath us. Losing is normal; it must never crash the process.
+const LOST_GUARD_RACE_CODES = new Set(['EEXIST', 'ENOTEMPTY', 'ENOENT', 'EINVAL', 'EBUSY']);
 const PRODUCTION_MIN_PACE_MS = 1_000;
 const MIN_PACE_MS = Math.max(
   envValue('TEST_ALLOW_ZERO_PACE') === '1' ? 0 : PRODUCTION_MIN_PACE_MS,
@@ -65,26 +73,52 @@ function sleepBriefly() {
   } catch {}
 }
 
-function tryCreateGuard(path, owner) {
+function directoryAgeMs(path) {
   try {
-    mkdirSync(path);
-  } catch (error) {
-    if (error.code === 'EEXIST') return false;
-    throw error;
+    return Date.now() - statSync(path).mtimeMs;
+  } catch {
+    return Number.POSITIVE_INFINITY;
   }
+}
+
+// Build the guard in a private staging directory and move it into place, so the
+// guard never exists on disk without the owner record that proves who holds it.
+// rename(2) refuses to replace a non-empty directory, which makes the move the
+// atomic acquisition: exactly one worker wins and every loser gets an error
+// code back instead of a half-built guard another worker can mistake for stale.
+function tryCreateGuard(path, owner) {
+  // rename(2) still replaces an *empty* target directory, and an empty guard is
+  // how an interrupted older process leaves the slot. Decline that outright so
+  // the reclaim path, which waits out the guard TTL first, is the only thing
+  // allowed to clear it.
+  if (existsSync(path)) return false;
+  let staging;
   try {
-    writeFileSync(join(path, 'owner.json'), JSON.stringify(owner), { mode: 0o600, flag: 'wx' });
+    staging = mkdtempSync(`${path}.new.`);
+    writeFileSync(join(staging, 'owner.json'), JSON.stringify(owner), { mode: 0o600, flag: 'wx' });
+    renameSync(staging, path);
     return true;
   } catch (error) {
-    rmSync(path, { recursive: true, force: true });
+    if (staging) rmSync(staging, { recursive: true, force: true });
+    if (LOST_GUARD_RACE_CODES.has(error.code)) return false;
     throw error;
   }
 }
 
+// A guard is reclaimable only once nobody can still be holding it.
+function guardIsAbandoned(path, observed) {
+  if (observed && pidAlive(Number(observed.pid))) {
+    return Date.now() - Number(observed.acquiredAt || 0) >= GUARD_ABANDONED_MS;
+  }
+  if (observed) return true;
+  // No readable owner record. Never assume that means "free": on a legacy
+  // install it can be a guard still being built. Give it the full guard TTL.
+  return directoryAgeMs(path) >= GUARD_TTL_MS;
+}
+
 function reclaimStaleGuard(path) {
   const observed = readJson(join(path, 'owner.json'));
-  const age = Date.now() - Number(observed?.acquiredAt || 0);
-  if (observed && pidAlive(Number(observed.pid)) && age < GUARD_TTL_MS) return false;
+  if (!guardIsAbandoned(path, observed)) return false;
   const tombstone = `${path}.stale.${process.pid}.${randomBytes(8).toString('hex')}`;
   try {
     renameSync(path, tombstone);
@@ -93,13 +127,35 @@ function reclaimStaleGuard(path) {
   }
   const claimed = readJson(join(tombstone, 'owner.json'));
   if (claimed?.ownerNonce !== observed?.ownerNonce) {
+    // Somebody replaced the guard between the read and the move. Put what we
+    // took back if the slot is still free, and drop it if it is not.
     try {
       renameSync(tombstone, path);
+      return false;
     } catch {}
+    rmSync(tombstone, { recursive: true, force: true });
     return false;
   }
   rmSync(tombstone, { recursive: true, force: true });
   return true;
+}
+
+// Release by moving the guard aside first, so the owner check and the removal
+// cannot be split by a reclaim landing in between.
+function releaseGuard(path, ownerNonce) {
+  const tombstone = `${path}.done.${process.pid}.${randomBytes(8).toString('hex')}`;
+  try {
+    renameSync(path, tombstone);
+  } catch {
+    return;
+  }
+  if (readJson(join(tombstone, 'owner.json'))?.ownerNonce !== ownerNonce) {
+    try {
+      renameSync(tombstone, path);
+      return;
+    } catch {}
+  }
+  rmSync(tombstone, { recursive: true, force: true });
 }
 
 function withGuard(key, action) {
@@ -111,8 +167,7 @@ function withGuard(key, action) {
       try {
         return action();
       } finally {
-        const current = readJson(join(path, 'owner.json'));
-        if (current?.ownerNonce === owner.ownerNonce) rmSync(path, { recursive: true, force: true });
+        releaseGuard(path, owner.ownerNonce);
       }
     }
     reclaimStaleGuard(path);
