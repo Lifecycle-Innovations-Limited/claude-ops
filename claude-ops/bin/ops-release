@@ -18,8 +18,15 @@
 #   6. GitHub wiki                                   counts/version synced + a Release-Notes entry
 #                                                    pushed after merge (--no-wiki)
 #
+# Before any of that it runs the PR sweep (--no-sweep to skip): every open PR
+# against main — drafts and fork PRs included — is classified, has its held fork
+# workflow runs approved, is reviewed by a background agent that may undraft it
+# and fix its checks, and is merged only when the agent blessed it AND every
+# required check is green. Anything else is reported and left open, and the
+# release is cut without it. See scripts/lib/release-pr-sweep.sh.
+#
 # Flow:
-#   fetch → isolated worktree off origin/main → bump version files → AI changelog
+#   sweep open PRs → fetch → isolated worktree off origin/main → bump version files → AI changelog
 #   → ops-sync-docs → commit → push → PR to main → (optional) wait for CI + squash-merge
 #   → (optional) tag vX.Y.Z → (optional) wiki sync
 #
@@ -27,6 +34,7 @@
 #   ops-release [--type patch|minor|major] [--version X.Y.Z]
 #               [--notes "markdown body for the changelog"]
 #               [--no-ai] [--no-docs] [--no-wiki]
+#               [--no-sweep] [--sweep-only]
 #               [--no-merge] [--no-tag] [--dry-run] [-h|--help]
 #
 # Defaults: --type patch, doc-count sync, auto squash-merge, tag, and wiki
@@ -39,6 +47,8 @@
 #   ops-release --notes "..."          # hand-written fallback when Unreleased is empty
 #   ops-release --no-ai --no-wiki      # commit-subject changelog, no wiki push
 #   ops-release --no-merge             # open the PR, leave it for review
+#   ops-release --no-sweep             # cut the release without sweeping open PRs
+#   ops-release --sweep-only           # sweep open PRs and stop; cut nothing
 #   ops-release --dry-run              # show what would change (incl. AI changelog), touch nothing
 #
 # After a release lands, refresh the local install:
@@ -57,6 +67,10 @@ PLUGIN_NAME="ops"                                   # name in marketplace.json .
 GH_REPO="Lifecycle-Innovations-Limited/claude-ops"
 # shellcheck source=../scripts/lib/release-changelog.sh
 . "$PLUGIN_DIR/scripts/lib/release-changelog.sh"
+# shellcheck source=../scripts/lib/release-pr-sweep.sh
+. "$PLUGIN_DIR/scripts/lib/release-pr-sweep.sh"
+# shellcheck source=../scripts/lib/claude-invoke.sh
+. "$PLUGIN_DIR/scripts/lib/claude-invoke.sh" 2>/dev/null || true
 
 # package.json may live under claude-ops/ (current layout) or at the repo root.
 # Record its path RELATIVE to the repo root so we can reapply it inside a worktree.
@@ -66,9 +80,11 @@ for cand in "claude-ops/package.json" "package.json"; do
 done
 
 bump_type="patch"; explicit_ver=""; notes=""; do_merge=1; do_tag=1; dry_run=0
-do_ai=1; do_docs=1; do_wiki=1
+do_ai=1; do_docs=1; do_wiki=1; do_sweep=1; sweep_only=0
 while [ $# -gt 0 ]; do
   case "$1" in
+    --no-sweep)   do_sweep=0; shift ;;
+    --sweep-only) sweep_only=1; shift ;;
     --type)    bump_type="$2"; shift 2 ;;
     --version) explicit_ver="$2"; shift 2 ;;
     --notes)   notes="$2"; shift 2 ;;
@@ -78,7 +94,7 @@ while [ $# -gt 0 ]; do
     --no-docs)  do_docs=0; shift ;;
     --no-wiki)  do_wiki=0; shift ;;
     --dry-run)  dry_run=1; shift ;;
-    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
     *) echo "ops-release: unknown arg '$1'" >&2; exit 2 ;;
   esac
 done
@@ -240,6 +256,22 @@ wait_for_release_ci() {
   echo "ops-release: timed out waiting for CI; release PR left open: $pr_url" >&2
   return 1
 }
+
+# ----- pre-release PR sweep -----
+# Land everything that can land BEFORE the bump, so the changelog and the tag
+# cover it. A PR that cannot be made good and green is reported and left open;
+# the release goes ahead without it. Merging something bad is far worse than
+# skipping it, so anything short of a clear yes is a skip.
+if [ "$do_sweep" -eq 1 ] && [ "$dry_run" -eq 0 ]; then
+  echo "ops-release: sweeping open pull requests (--no-sweep to skip)…"
+  release_pr_sweep "$GH_REPO" || echo "ops-release: sweep did not run — continuing" >&2
+elif [ "$do_sweep" -eq 1 ]; then
+  echo "ops-release: --dry-run: skipping the PR sweep (it merges for real)"
+fi
+if [ "$sweep_only" -eq 1 ]; then
+  echo "ops-release: --sweep-only: stopping before the version bump"
+  exit 0
+fi
 
 # ----- version base -----
 # Bump from what is PUBLISHED, never from whatever this checkout happens to

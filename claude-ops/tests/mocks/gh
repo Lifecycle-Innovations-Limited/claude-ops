@@ -45,6 +45,51 @@ case "$sub" in
       fi
     }
 
+    # ---- ops-release PR sweep fixtures -------------------------------------
+    # Only active when MOCK_GH_SWEEP_DIR points at a fixture directory, so no
+    # existing suite changes behaviour. Files served, all optional:
+    #   pulls.json                 GET repos/*/pulls?state=open&base=main
+    #   pr-<n>.json                GET repos/*/pulls/<n>
+    #   checkruns-<sha>.json       GET repos/*/commits/<sha>/check-runs
+    #   checkruns-<sha>.after.json same, served once <sha> has had a run approved
+    #   runs-<sha>.json            GET repos/*/actions/runs?head_sha=<sha>
+    # Approving a run writes approved-<sha> and appends to approvals.log.
+    if [ -n "${MOCK_GH_SWEEP_DIR:-}" ]; then
+      _bare="${path%%\?*}"
+      case "$_bare" in
+        */actions/runs/*/approve)
+          _rest="${_bare#*/actions/runs/}"; _rid="${_rest%%/*}"
+          echo "approve $_rid" >> "$MOCK_GH_SWEEP_DIR/approvals.log"
+          _sha="$(cat "$MOCK_GH_SWEEP_DIR/run-$_rid.sha" 2>/dev/null || true)"
+          [ -n "$_sha" ] && : > "$MOCK_GH_SWEEP_DIR/approved-$_sha"
+          exit "${MOCK_GH_SWEEP_APPROVE_RC:-0}"
+          ;;
+        */actions/runs)
+          _sha="${path##*head_sha=}"; _sha="${_sha%%&*}"
+          emit "$(cat "$MOCK_GH_SWEEP_DIR/runs-$_sha.json" 2>/dev/null || echo '{"workflow_runs":[]}')"
+          exit 0
+          ;;
+        */check-runs)
+          _sha="${_bare%/check-runs}"; _sha="${_sha##*/}"
+          _f="$MOCK_GH_SWEEP_DIR/checkruns-$_sha.json"
+          if [ -f "$MOCK_GH_SWEEP_DIR/approved-$_sha" ] && [ -f "$MOCK_GH_SWEEP_DIR/checkruns-$_sha.after.json" ]; then
+            _f="$MOCK_GH_SWEEP_DIR/checkruns-$_sha.after.json"
+          fi
+          emit "$(cat "$_f" 2>/dev/null || echo '{"check_runs":[]}')"
+          exit 0
+          ;;
+        */pulls)
+          emit "$(cat "$MOCK_GH_SWEEP_DIR/pulls.json" 2>/dev/null || echo '[]')"
+          exit 0
+          ;;
+        */pulls/[0-9]*)
+          _n="${_bare##*/}"
+          emit "$(cat "$MOCK_GH_SWEEP_DIR/pr-$_n.json" 2>/dev/null || echo '{}')"
+          exit 0
+          ;;
+      esac
+    fi
+
     case "$path" in
       rate_limit|/rate_limit)
         # MOCK_GH_RATE_DROP_AFTER lets a test keep the bucket healthy for the
@@ -107,6 +152,19 @@ case "$sub" in
         # Single-quoted default: ${VAR:-...} cannot nest raw `}` in the default value.
         _default='{"baseRefName":"dev","mergeCommit":{"oid":"abcdef1234567890"},"state":"MERGED"}'
         echo "${MOCK_GH_PR_VIEW_JSON:-$_default}"
+        exit 0
+        ;;
+      merge)
+        # Sweep tests: record the merge (number + argv) and honour a forced rc.
+        if [ -n "${MOCK_GH_SWEEP_DIR:-}" ]; then
+          echo "merge $*" >> "$MOCK_GH_SWEEP_DIR/merges.log"
+        fi
+        exit "${MOCK_GH_PR_MERGE_RC:-0}"
+        ;;
+      ready)
+        if [ -n "${MOCK_GH_SWEEP_DIR:-}" ]; then
+          echo "ready $*" >> "$MOCK_GH_SWEEP_DIR/ready.log"
+        fi
         exit 0
         ;;
     esac
