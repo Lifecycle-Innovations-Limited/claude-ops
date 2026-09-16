@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# ops-pii-scan — one PII gate for every surface that is NOT a tracked file.
+#
+# `pii-gate` (tests/test-no-secrets.sh) scans file CONTENT. That left commit
+# messages, branch names, PR titles and bodies, release notes, issue and PR
+# comments, and the repo wiki completely ungated — and a personal name reached
+# a public commit message and a public PR body while the gate reported success.
+#
+# Every mode below reads the same rules from tests/lib/pii-patterns.sh, so the
+# local hooks and CI cannot disagree about what is forbidden.
+#
+# Exit: 0 clean (warnings may have printed), 1 a BLOCK rule matched, 2 usage.
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+PLUGIN_ROOT="$(cd "$SELF_DIR/.." && pwd -P)"
+# shellcheck source=../tests/lib/pii-patterns.sh
+. "$PLUGIN_ROOT/tests/lib/pii-patterns.sh"
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PLUGIN_ROOT/..")"
+CONSTANTS="$PLUGIN_ROOT/tests/known-public-constants.txt"
+OVERRIDE_LOG="${OPS_PII_GATE_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/claude-ops/pii-gate-overrides.log}"
+
+RED=$'\033[0;31m'; YELLOW=$'\033[0;33m'; GREEN=$'\033[0;32m'; NC=$'\033[0m'
+[[ -t 1 ]] || { RED=""; YELLOW=""; GREEN=""; NC=""; }
+
+usage() {
+  cat <<'EOF'
+ops-pii-scan — PII gate for commit messages, branch names, PR/issue text,
+releases, the wiki, and the plugin manifests.
+
+  --staged                  added lines in the staged diff
+  --commit-msg-file FILE    one commit message (the commit-msg hook)
+  --commit-range A..B       every commit message in a range
+  --branch NAME             a branch name
+  --text-file FILE          arbitrary text; pair with --origin
+  --origin LABEL            what to call the text in the report (default: text)
+  --manifests               .claude-plugin/marketplace.json + plugin.json
+  --wiki-dir DIR            a checked-out repo wiki
+  --github REPO             releases + issue comments + PR comments via gh api
+  --digest TERM             print the salted digest of TERM and exit
+
+  --warn-only               never exit 1 (for the scheduled audit's own report)
+  --downgrade A,B           report these rules as WARN instead of BLOCK. Only
+                            for the comment surfaces, where review bots quote
+                            diffs; see the note above apply_downgrade.
+
+Override a genuine false positive by setting a REASON, which is logged:
+  OPS_PII_GATE_OVERRIDE="npm scope, not a person" git commit ...
+EOF
+}
+
+# ---- reporting ---------------------------------------------------------------
+BLOCKS=0
+WARNS=0
+WARN_ONLY=0
+
+# Filter out UUID findings whose value is a documented public vendor constant.
+# The rule file cannot do this: it does not know where the checkout is.
+drop_documented_uuids() {
+  if [[ ! -f "$CONSTANTS" ]]; then cat; return; fi
+  local allow
+  allow="$(grep -E '^uuid:' "$CONSTANTS" 2>/dev/null | sed 's/^uuid://' | grep -v '^$' || true)"
+  if [[ -z "$allow" ]]; then cat; return; fi
+  awk -F'\t' -v OFS='\t' 'NR==FNR { ok[tolower($0)]=1; next }
+                          $2=="uuid-literal" && ok[tolower($3)] { next }
+                          { print }' <(printf '%s\n' "$allow") -
+}
+
+# Downgrade named rules from BLOCK to WARN.
+#
+# This exists for ONE surface: issue and PR comments. A scan of this repo's
+# comment history returns 2090 `uuid-literal` hits and 47 of everything else.
+# The 2090 are review bots quoting a diff that legitimately contained a UUID —
+# the bot is reporting the leak, not committing one. A gate that is red for a
+# reason nobody can act on gets muted, and then the 47 findings that ARE real
+# go unseen with it. So the noisy rule is demoted on that surface only, and the
+# high-signal rules (personal email, home path, AWS account id, operator
+# identity) still fail the job.
+#
+# Never used on the PR path. There, a UUID in a commit message is exactly the
+# thing being gated.
+DOWNGRADE=""
+apply_downgrade() {
+  [[ -n "$DOWNGRADE" ]] || { cat; return; }
+  awk -F'\t' -v OFS='\t' -v list="$DOWNGRADE" '
+    BEGIN { n = split(list, a, ","); for (i = 1; i <= n; i++) down[a[i]] = 1 }
+    $1 == "BLOCK" && ($2 in down) { $1 = "WARN" }
+    { print }'
+}
+
+report() {
+  local sev label term origin text
+  while IFS=$'\t' read -r sev label term origin text; do
+    [[ -n "$sev" ]] || continue
+    if [[ "$sev" == BLOCK ]]; then
+      printf '%sBLOCKED%s [%s] %s\n' "$RED" "$NC" "$label" "$term"
+    else
+      printf '%swarn%s    [%s] %s\n' "$YELLOW" "$NC" "$label" "$term"
+    fi
+    printf '        in %s\n' "$origin"
+    printf '        %s\n' "$(printf '%s' "$text" | cut -c1-160)"
+  done
+}
+
+# ---- collectors --------------------------------------------------------------
+# Each prints "<origin>\t<text>" lines. One line per source line, always, so a
+# report can name the line and not just the blob.
+
+collect_staged() {
+  # Only ADDED lines, and never the four files whose job is to quote the shapes
+  # they forbid — the same exemption the pre-commit hook already uses, by exact
+  # path rather than by directory.
+  local exempt='^claude-ops/tests/(test-no-secrets\.sh|known-public-constants\.txt|test-pii-gate-fires\.sh|test-pre-commit-hook-blocks\.sh|pii-term-digests\.txt)$'
+  local f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    [[ "$f" =~ $exempt ]] && continue
+    git diff --cached -U0 -- "$f" 2>/dev/null \
+      | grep '^+' | grep -v '^+++' \
+      | sed "s|^+|$f\t|"
+  done < <(git diff --cached --name-only 2>/dev/null)
+}
+
+collect_commit_msg_file() {
+  # Comment lines are stripped by git before the message is stored, so they
+  # cannot leak — scanning them would block on the diff git itself pastes in
+  # under `commit --verbose`.
+  grep -v '^#' "$1" 2>/dev/null | sed "s|^|commit message\t|"
+}
+
+collect_commit_range() {
+  local sha
+  # $1 is a rev-list SPEC, not a single ref: pre-push passes
+  # "<sha> --not --remotes" for a brand-new branch. Splitting is the point.
+  # shellcheck disable=SC2086
+  while IFS= read -r sha; do
+    [[ -n "$sha" ]] || continue
+    git log -1 --format='%B%n%an%n%ae' "$sha" 2>/dev/null \
+      | sed "s|^|commit ${sha:0:12}\t|"
+  done < <(git rev-list $1 2>/dev/null)
+}
+
+collect_manifests() {
+  # Manifests carry owner/author name and email. The company identity is the
+  # intended public value and is allowlisted in pii-patterns.sh; a PERSONAL
+  # name or address in those fields is what this catches.
+  local m
+  for m in "$REPO_ROOT/.claude-plugin/marketplace.json" \
+           "$REPO_ROOT/claude-ops/.claude-plugin/plugin.json"; do
+    [[ -f "$m" ]] || continue
+    grep -nE '"(name|author|owner|email|url|homepage|repository)"' "$m" 2>/dev/null \
+      | sed "s|^|${m#"$REPO_ROOT"/}:|" \
+      | sed 's|^\([^:]*:[0-9]*\):|\1\t|'
+  done
+}
+
+collect_wiki_dir() {
+  local d="$1" f
+  [[ -d "$d" ]] || { echo "no wiki checkout at $d" >&2; return 0; }
+  while IFS= read -r f; do
+    grep -nIE '.' "$f" 2>/dev/null | sed "s|^|wiki/$(basename "$f"):|" \
+      | sed 's|^\([^:]*:[0-9]*\):|\1\t|'
+  done < <(find "$d" -maxdepth 2 -type f \( -name '*.md' -o -name '*.markdown' \) -not -path '*/.git/*' 2>/dev/null)
+}
+
+collect_github() {
+  local repo="$1"
+  command -v gh >/dev/null 2>&1 || { echo "gh not available" >&2; return 0; }
+  # Releases: ops-release writes these on every release, outside any PR.
+  # Newlines are squashed inside each record on purpose: the scan contract is
+  # one "<origin>\tTEXT" per line, and a release body with a blank line in it
+  # would otherwise arrive as untagged text with no origin attached.
+  gh api --paginate "repos/$repo/releases" \
+    --jq '.[] | "release \(.tag_name)\t\((.name // "") + " " + (.body // "") | gsub("[\r\n]+";" "))"' 2>/dev/null
+  # Issue and PR-review comments: the weakest surface, because bots quote diffs
+  # into them and nothing has ever scanned them.
+  gh api --paginate "repos/$repo/issues/comments?per_page=100" \
+    --jq '.[] | "issue comment \(.id)\t\(.body // "" | gsub("[\r\n]+";" "))"' 2>/dev/null
+  gh api --paginate "repos/$repo/pulls/comments?per_page=100" \
+    --jq '.[] | "pr comment \(.id)\t\(.body // "" | gsub("[\r\n]+";" "))"' 2>/dev/null
+}
+
+# ---- argument handling -------------------------------------------------------
+ORIGIN="text"
+MODES=0
+run_mode() { MODES=$((MODES + 1)); }
+
+collected="$(mktemp -t ops-pii-scan.XXXXXX)"
+findings="$(mktemp -t ops-pii-find.XXXXXX)"
+trap 'rm -f "$collected" "$findings"' EXIT
+: > "$collected"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --staged)            run_mode; collect_staged >> "$collected" ;;
+    --commit-msg-file)   run_mode; collect_commit_msg_file "$2" >> "$collected"; shift ;;
+    --commit-range)      run_mode; collect_commit_range "$2" >> "$collected"; shift ;;
+    --branch)            run_mode; printf 'branch name\t%s\n' "$2" >> "$collected"; shift ;;
+    --text-file)         run_mode; sed "s|^|$ORIGIN\t|" "$2" >> "$collected"; shift ;;
+    --origin)            ORIGIN="$2"; shift ;;
+    --manifests)         run_mode; collect_manifests >> "$collected" ;;
+    --wiki-dir)          run_mode; collect_wiki_dir "$2" >> "$collected"; shift ;;
+    --github)            run_mode; collect_github "$2" >> "$collected"; shift ;;
+    --warn-only)         WARN_ONLY=1 ;;
+    --downgrade)         DOWNGRADE="$2"; shift ;;
+    --digest)            pii_digest_of "$2"; exit 0 ;;
+    -h|--help)           usage; exit 0 ;;
+    *)                   echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [[ "$MODES" -eq 0 ]]; then usage >&2; exit 2; fi
+
+if [[ ! -s "$collected" ]]; then
+  echo "${GREEN}PII metadata scan: nothing to scan${NC}"
+  exit 0
+fi
+
+# The scan runs OUTSIDE the reporting pipeline on purpose. A counter
+# incremented in the last stage of a pipe lives in a subshell and is gone by
+# the time the exit code is decided — a gate that prints BLOCKED and then
+# exits 0 is the precise failure this whole file exists to prevent.
+pii_scan < "$collected" | drop_documented_uuids | apply_downgrade > "$findings"
+report < "$findings"
+BLOCKS=$(awk -F'\t' '$1 == "BLOCK"' "$findings" | grep -c . || true)
+WARNS=$(awk -F'\t' '$1 == "WARN"' "$findings" | grep -c . || true)
+
+echo ""
+echo "PII metadata scan: $BLOCKS blocked, $WARNS warning(s)"
+
+if [[ "$BLOCKS" -eq 0 || "$WARN_ONLY" -eq 1 ]]; then
+  exit 0
+fi
+
+# An override is a real need — an npm scope that happens to read like a name,
+# a vendor id that genuinely is public. It has to be deliberate and it has to
+# leave a trace, otherwise it is just --no-verify with extra steps.
+if [[ -n "${OPS_PII_GATE_OVERRIDE:-}" ]]; then
+  mkdir -p "$(dirname "$OVERRIDE_LOG")" 2>/dev/null || true
+  printf '%s\t%s\t%s\tblocks=%s\treason=%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${USER:-unknown}" "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '-')" \
+    "$BLOCKS" "$OPS_PII_GATE_OVERRIDE" >> "$OVERRIDE_LOG" 2>/dev/null || true
+  echo "${YELLOW}OVERRIDDEN${NC} by OPS_PII_GATE_OVERRIDE — logged to $OVERRIDE_LOG"
+  exit 0
+fi
+
+echo ""
+echo "${RED}This is a PUBLIC repo. Remove the value above, or rewrite it as a placeholder.${NC}"
+echo "Genuine false positive? Re-run with a reason, which is logged:"
+echo "  OPS_PII_GATE_OVERRIDE='why this is not personal data' <your command>"
+exit 1
