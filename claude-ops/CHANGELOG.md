@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [3.10.19] - 2026-09-16
+
+### Fixed
+
+- Inbox scan now tells a deliberate, read-and-archived thread apart from a bulk sweep, so intentionally archived mail no longer skews the open-work count.
+
+
 ## [3.10.18] - 2026-09-16
 
 ### Fixed
