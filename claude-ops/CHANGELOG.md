@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## [3.10.19] - 2026-09-16
+
+### Added
+- The plugin now notices its own staleness. `bin/ops-update-check` only ever ran
+  from the daemon's daily cron and wrote a verdict to a state file that nothing
+  read, so a box whose daemon was never installed could sit months behind
+  without a word — one install surfaced this at 3.4.3 while 3.10.18 was
+  published, 144 releases back. A new `PreToolUse` hook on `^Skill$`
+  (`bin/ops-pretool-skill-update`) re-uses that same throttled check whenever an
+  ops skill is invoked, so the first skill call of the day reports what the cron
+  would have reported. `auto_update` in `preferences.json` picks the response:
+  `off`, `notify` (default, just says so) or `auto`, which additionally runs
+  `bin/ops-update` detached behind a lock and asks for a reload. `auto` is
+  opt-in precisely because detection and application are otherwise kept apart;
+  the running session keeps its old version until it reloads. The hook cannot
+  block the skill it fired on — it exits 0 on every path, including a failing
+  version check — and only fires for skills that belong to this plugin.
+  Guard: `tests/test-skill-update-gate.sh` (10 cases).
+
+### Fixed
+- `ops-update` no longer deletes the tree it is running from. Step 5 pruned
+  every cache version except the target, including the one the executing script
+  lived in; bash reads a script incrementally, so that could truncate the update
+  mid-run, and any session rooted in that version lost its hooks and scripts
+  underneath it. The running version is now kept, with a note that the next run
+  prunes it — by which time the live root has moved on. Guard: two cases in
+  `tests/test-ops-update-downgrade-guard.sh`, mutation proven red.
+
+
 ## [3.10.18] - 2026-09-16
 
 ### Fixed

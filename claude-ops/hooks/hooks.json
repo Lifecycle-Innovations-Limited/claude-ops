@@ -71,6 +71,16 @@
         ]
       },
       {
+        "matcher": "^Skill$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-skill-update 2>/dev/null || true",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "*",
         "hooks": [
           {
