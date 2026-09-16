@@ -231,6 +231,27 @@ else
   fail "cross-digit tag check flags 3.9.20 catalogue behind v3.10.0 (rc=$RC, got: $(head -c 400 <<<"$out10"))"
 fi
 
+# ── 11. The running tree survives its own prune.
+#    Step 5 used to delete every cache dir except the target, including the one
+#    ops-update itself was executing from. bash reads a script incrementally,
+#    so that can truncate the update mid-run, and any session rooted there
+#    loses its hooks. The next run prunes it, once the live root has moved.
+b11="$tmpdir/self-prune"
+make_fixture "$b11" 3.10.17 "v3.10.17" 3.10.15,3.10.16 >/dev/null
+CLAUDE_PLUGIN_ROOT="$b11/cfg/plugins/cache/ops-marketplace/ops/3.10.15" \
+  run_update "$b11" --dry-run
+out11="$OUT"
+if grep -qF "kept cache 3.10.15: this update is running from it" <<<"$out11"; then
+  pass "does not prune the cache dir it is running from"
+else
+  fail "does not prune the cache dir it is running from (rc=$RC, got: $(head -c 400 <<<"$out11"))"
+fi
+if grep -qF "pruned cache 3.10.16" <<<"$out11"; then
+  pass "still prunes the other superseded caches"
+else
+  fail "still prunes the other superseded caches (got: $(head -c 400 <<<"$out11"))"
+fi
+
 echo ""
 echo "test-ops-update-downgrade-guard.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
