@@ -437,6 +437,8 @@ if [ "$DO_EMAIL" = 1 ]; then
   ACCT_ARGS=()
   if ops_gog_ready; then
     ACCT_ARGS=(-a "$OPS_GOG_ACCOUNT")
+    # The python pass keys sweep watermarks on the mailbox actually read.
+    export OPS_GOG_ACCOUNT
   else
     GMAIL_ERR="$OPS_GOG_NOTE"
   fi
@@ -1152,6 +1154,22 @@ def _msg_when(m):
     return m.get("internalDateIso") or m.get("date") or ""
 
 
+# Machine senders, by address only — never by subject keyword, which would risk
+# hiding a real human. Deliberately wider than the inbox pass: the debt sweep
+# reads ARCHIVED mail, where transactional traffic dominates. Bare support@ /
+# info@ mailers, ticket robots, DMARC reporters, OTP senders and calendar
+# plumbing otherwise drown the handful of humans actually waiting — measured
+# 2026-09-16: 47 raw rows, 12 real conversations. Anything genuinely human
+# writing from such an address still reaches Sam through the inbox pass.
+MACHINE_SENDER_RE = re.compile(
+    r"(no[-_.]?reply|do[-_.]?not[-_.]?reply|notifications?@|notifications?_at_|alerts?@|"
+    r"mailer-daemon|postmaster@|@.*\.amazonses\.com|bounce|"
+    r"^support@|@.*\.atlassian\.net|automation@|billing@|invoice|receipts?@|"
+    r"dmarc|newsletter|marketing@|welcome@|techcomms@|via google|"
+    r"@mail\.notion\.so|flyingblue|klm_royal|@notifications\.|@.*\.ikosresorts\.com)",
+    re.IGNORECASE)
+
+
 def _answered_threads():
     """Thread ids where OUR newest message is newer than THEIR newest.
 
@@ -1180,6 +1198,58 @@ def _answered_threads():
             last_in[tid] = when
     return {tid: when for tid, when in last_out.items()
             if when > last_in.get(tid, "")}
+
+
+def _when_epoch(s):
+    """ISO-ish timestamp -> epoch seconds, or None.
+
+    Gmail hands back "2026-09-16T10:00:00+00:00" while the sweep watermark is
+    written as "2026-09-16 10:00:00+00:00". Comparing those as STRINGS silently
+    always favours the Gmail one ("T" sorts after " "), so every swept thread
+    read as "they wrote after the sweep" and came straight back. Compare real
+    instants, never text.
+    """
+    if not s:
+        return None
+    t = str(s).strip().replace("Z", "+00:00")
+    if len(t) > 10 and t[10] == " ":
+        t = t[:10] + "T" + t[11:]
+    for cand in (t, re.sub(r"\.\d+", "", t)):
+        try:
+            dt = datetime.fromisoformat(cand)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def _email_watermarks():
+    """When did WE deliberately archive each thread? Written by ops-inbox-archive-set.
+
+    Without this the forgotten-debt pass re-opens everything a sweep just filed,
+    because "archived + they spoke last" is true for every thread we close out.
+    On 2026-09-16 that turned a genuinely empty inbox into 47 items, all of them
+    mail archived minutes earlier. A watermark separates "Gmail filed this away
+    on its own" (real debt) from "we dealt with this at 12:05" (not debt, unless
+    they wrote again AFTER that).
+    """
+    base = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+    # Key on the mailbox actually READ, not the one requested. --gmail-account
+    # names Sam's alias (sam@healify.ai), but every alias forwards into one real
+    # mailbox and lib/gog-account.sh resolves the query to that account. Keying
+    # on the alias wrote watermarks nobody ever reads back, so a swept thread
+    # came straight back on the next scan of that alias.
+    read_acct = os.environ.get("OPS_GOG_ACCOUNT") or ACCT or "default"
+    safe = re.sub(r"[^a-z0-9._-]+", "_", read_acct.lower())
+    path = os.path.join(base, "state", "ops-email-sweep-watermarks-%s.json" % safe)
+    try:
+        with open(path) as fh:
+            loaded = json.load(fh)
+        return {k: str(v) for k, v in loaded.items()} if isinstance(loaded, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def forgotten_email_threads():
@@ -1211,11 +1281,31 @@ def forgotten_email_threads():
             continue
         if when > last_out.get(tid, ""):
             last_out[tid] = when
+    # Threads the owner has ever written into are real conversations, not
+    # one-way blasts. Used as a confidence signal, never as a filter: a first
+    # approach from a new human is still debt.
+    participated = set(last_out)
     self_addr = (ACCT or "").lower()
+    swept = _email_watermarks()
     items = []
     for tid, when in last_in.items():
         if when <= last_out.get(tid, ""):
             continue  # we answered after them: not debt
+        # We archived this on purpose. Only real if they wrote again AFTER that.
+        #
+        # EXCEPTION, and it matters: a watermark closes ONE-WAY mail, never a
+        # conversation Sam is actually in. A bulk sweep stamps hundreds of
+        # threads in one second (1007 on 2026-09-16) without a human reading any
+        # of them, and that wiped all 12 genuine two-way threads — Believe,
+        # PingPong, Ace, Ikos — from the result. Archiving is a filing decision;
+        # it is not evidence that a reply was sent. So a thread Sam has written
+        # into survives its watermark and is demoted only by the direction test
+        # above (we answered after them), which is the honest signal.
+        mark = _when_epoch(swept.get(tid))
+        inbound_at = _when_epoch(when)
+        if (mark is not None and inbound_at is not None and inbound_at <= mark
+                and tid not in participated):
+            continue
         m = newest[tid]
         frm = (m.get("from") or "").lower()
         if self_addr and self_addr == from_email_addr(frm):
@@ -1224,8 +1314,7 @@ def forgotten_email_threads():
         if any(l in labels for l in ("CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL",
                                      "CATEGORY_UPDATES", "CATEGORY_FORUMS")):
             continue
-        if re.search(r"(no[-_.]?reply|do[-_.]?not[-_.]?reply|notifications?@|alerts?@|"
-                     r"mailer-daemon|postmaster@|@.*\.amazonses\.com|bounce)", frm):
+        if MACHINE_SENDER_RE.search(frm):
             continue
         items.append({
             "who": m.get("from") or "(unknown)",
@@ -1234,11 +1323,15 @@ def forgotten_email_threads():
             "date": m.get("date"),
             "labels": labels,
             "forgotten": True,
+            "sam_participated": tid in participated,
             "note": ("KEEP — archived/filtered out of the inbox but they still "
                      "spoke last inside the %d-day debt window; deep-read before "
                      "drafting" % DEBT_DAYS),
         })
-    items.sort(key=lambda x: last_in.get(x["threadId"], ""), reverse=True)
+    # Threads the owner already joined rank first: those are live conversations
+    # someone is actively waiting on. Recency breaks ties inside each group.
+    items.sort(key=lambda x: (x["sam_participated"], last_in.get(x["threadId"], "")),
+               reverse=True)
     return items
 
 
