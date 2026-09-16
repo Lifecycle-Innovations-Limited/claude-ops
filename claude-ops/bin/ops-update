@@ -297,7 +297,7 @@ step "5/11  Prune old cache versions"
 if [[ "$PRUNE" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-prune)${c_rst}"
 else
-  pruned=0; kept_newer=""
+  pruned=0; kept_newer=""; kept_running=""
   for d in "$CACHE_ROOT"/*/; do
     [[ -d "$d" ]] || continue
     v="$(basename "$d")"
@@ -309,10 +309,19 @@ else
     if semver_lt "$NEW" "$v" && [[ "$ALLOW_DOWNGRADE" -eq 0 ]]; then
       kept_newer="$kept_newer $v"; continue
     fi
+    # Never delete the tree this very script is running from. bash reads a
+    # script incrementally, so rm -rf'ing it mid-run can truncate the rest of
+    # the update — and any session currently rooted there loses its hooks and
+    # scripts under its feet. The next run prunes it, by which time the live
+    # root is the new version (or `current/`, which is refreshed in step 7).
+    if [[ "$d" == "$THIS_ROOT"/ || "$THIS_ROOT" == "$d"* ]]; then
+      kept_running="$v"; continue
+    fi
     run "rm -rf \"$d\""
     ok "pruned cache $v"; pruned=$((pruned+1))
   done
   [[ -n "$kept_newer" ]] && warn "kept cache(s) newer than $NEW:${kept_newer} (pass --allow-downgrade to prune them)"
+  [[ -n "$kept_running" ]] && warn "kept cache $kept_running: this update is running from it (the next run prunes it)"
   [[ "$pruned" -eq 0 ]] && say "  ${c_dim}no old cache versions to prune${c_rst}"
 fi
 
