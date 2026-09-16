@@ -36,7 +36,12 @@ sed 's/[[:space:]]*#.*$//' "$SCAN" >"$CODE"
 
 grep -q 'EMAIL_QUERY="in:inbox"' "$CODE" \
   || fail "email working set must default to the whole inbox"
-grep -q 'newer_than' "$CODE" \
+# EMAIL_QUERY itself must carry no recency slice. `newer_than` is legitimate
+# elsewhere in the script: the forgotten-debt sweep is deliberately bounded by
+# --debt-days, exactly like the WhatsApp one. Scope the ban to the inbox query.
+grep -q 'EMAIL_QUERY="[^"]*newer_than' "$CODE" \
+  && fail "email query must not be sliced by a recency window"
+grep -q 'EMAIL_QUERY="\$EMAIL_QUERY newer_than' "$CODE" \
   && fail "email query must not be sliced by a recency window"
 grep -q 'WHERE {done_pred} OR' "$CODE" \
   || fail "whatsapp working set must be a done-flag predicate, not a recency slice"

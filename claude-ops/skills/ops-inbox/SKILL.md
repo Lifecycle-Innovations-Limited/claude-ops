@@ -146,7 +146,7 @@ Every run, in order:
    Before drafting to any person, load `relations` for their brief and open
    commitments.
 1. Resolve WhatsApp accounts (`ops-wa-accounts` — never hardcode a port). Scan every agent-enabled number.
-2. Freshness: `~/bin/wa-inbox-fresh.sh` (blocking, bounded). Then `bin/ops-inbox-scan` (defaults to every enabled account, `--debt-days 90`). Never an unread listing: unread is a display state and is empty for every thread already opened on a phone. Forgotten unanswered asks (archived/read, still their ball, inside 90 days) come back tagged `forgotten`.
+2. Freshness: `~/bin/wa-inbox-fresh.sh` (blocking, bounded). Then `bin/ops-inbox-scan` (defaults to every enabled account, `--debt-days 90`). Never an unread listing: unread is a display state and is empty for every thread already opened on a phone. Forgotten unanswered asks (archived/read, still their ball, inside 90 days) come back tagged `forgotten` — on WhatsApp AND on email, where a Gmail filter or category can hide a live thread from `in:inbox` entirely.
 2b. **Every other channel in the same pass, in parallel:** iMessage/SMS (`$HERMES_HOME/bin/imessage-inbox-scan --days 30` — copies `-wal`/`-shm` first or recent messages are invisible; alphanumeric shortcodes and OTP bodies are `fyi`, never `needs_reply`). Slack (`conversations_unreads`, DMs first). Telegram user dialogs if configured. Email is already in the scan. A miss on one channel is not absence on another.
 3. **All-context sweep** (Rule 9 + `references/details.md` "ALL CONTEXT SOURCES"): query every configured calendar, mailbox, and messaging channel before any schedule claim or NEEDS_REPLY draft. Google Calendar alone is not enough — Notion show/calendar databases count when Notion is configured.
 4. `bin/ops-inbox-archive-set` report-only. Present KEEP vs ARCHIVE; `--apply` only after explicit OK.
@@ -203,6 +203,27 @@ an inbox.
 who reads on a phone leaves every real thread at zero unread, so an unread-only sweep
 reports inbox zero over a mailbox full of unanswered asks. The working set is what has not
 been DEALT WITH (`handled=0`, falling back to `archived=0`), never what has not been seen.
+
+**AND NEVER SUBSTITUTE A LABEL FOR A CONVERSATION — measured 2026-09-16, email.** The same
+defect has a second shape: `in:inbox` is a LABEL, not a state of the conversation. A Gmail
+filter, a category (Promotions/Updates/Social/Forums), a mute, or one stray archive strips
+INBOX from a live thread, and an inbox-only query then reports the mailbox clean while a
+counterparty waits. Real miss: Salim Jawad at Believe delivered the finished UGC fan videos
+on the `MRT Gen AI Videos` thread; Gmail had filed that thread out of the inbox, so three
+consecutive scans said email was handled and nobody answered him. `ops-inbox-scan` now runs
+a second email pass (`--debt-days`, default 90) over archived, non-promo, human mail and
+reopens every thread whose NEWEST message is inbound and never answered; those rows arrive
+in `email.needs_reply` tagged `forgotten: true` with a `forgotten_count` and a note. The
+rule to carry into any channel you add: **debt is DIRECTION, not label or unread state.**
+The honest test is always "whose message is last in this thread, and did we answer after
+it" — never "is it still in the inbox".
+
+**Slack is an unread listing, so it inherits the same blind spot.**
+`conversations_unreads` only sees what Sam has not opened; a DM he read on his phone and
+never answered is invisible to it. When a Slack answer matters, confirm direction with
+`conversations_history` on the DMs that matter rather than trusting an empty unreads
+result. An empty unreads result means "nothing new was left unseen", never "nobody is
+waiting".
 
 **ON SAM'S BOX THE WHATSAPP ZERO IS ALWAYS A LIE — measured 2026-09-06.** Every chat in
 both stores is archived and `handled` is maintained on 3 of 1808 rows, so the scan prints
@@ -313,12 +334,16 @@ classification (and _better_ — it merges each person's lid↔phone chats into 
 conversation and resolves real names from `contacts`) for free. Reserve agent fan-out for
 genuine reasoning, not for reading a database.
 
-`ops-inbox-scan` JSON always includes `whatsapp` / `email` buckets (`needs_reply`, `waiting`, `groups`, `fyi`) plus `whatsapp_account` and `counts`. Partial failure still emits valid JSON.
+`ops-inbox-scan` JSON always includes `whatsapp` / `email` buckets (`needs_reply`, `waiting`, `groups`, `fyi`) plus `whatsapp_account` and `counts`. Partial failure still emits valid JSON. Email rows carrying `forgotten: true` were archived or filtered out of the inbox but still owe a reply (see `forgotten_count` and the matching note) — treat them exactly like inbox rows.
 
 **What the script does NOT do — and what you do next, in the MAIN session (no subagents):**
 
 1. **Slack** — one `mcp__slack__conversations_unreads {include_messages:true}` call. One
    round-trip; a subagent is pure overhead. Skip entirely if prefs show 0 workspaces.
+   Remember what this call can and cannot see: it is an UNREAD listing, so a DM Sam read on
+   his phone and never answered does not appear. Empty unreads is not "nobody is waiting".
+   For any workspace where a real answer is owed, check direction with
+   `mcp__slack__conversations_history` on the DMs that matter.
 2. **Telegram** — one `mcp__plugin_ops_telegram__list_dialogs` call (skip the
    Pocket ops bot dialog — that's automation). Skip if unconfigured.
 3. **FULL-THREAD AWARENESS GATE on the few NEEDS_REPLY candidates** — the script's WhatsApp
