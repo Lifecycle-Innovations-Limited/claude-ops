@@ -22,6 +22,14 @@
 #   - Codex:  needs nothing here. Its ops-* skills are symlinks straight into
 #             Claude Code's own cache/.../ops/current/ directory, which
 #             ops-post-update-migrate already keeps current.
+#   - Hermes: added 2026-09-16. Hermes was the one harness with a real ops
+#             plugin in this repo (hermes-plugin/) and NO path here, so
+#             `ops-update` — including the auto-update that #986 now fires on
+#             any skill call — left every Hermes install pinned at whatever
+#             version it was first installed with, silently and forever.
+#             Hermes plugins are per-home, so the target is
+#             $HERMES_HOME/plugins/ops (default ~/.hermes), and HERMES_HOME
+#             genuinely differs per machine, so it is never assumed.
 #
 # Every step below is best-effort and non-fatal: a CLI that isn't installed,
 # or whose update fails, is logged and skipped — this must never block or
@@ -49,6 +57,12 @@ warn() { printf '  %s!%s %s\n' "$c_ylw" "$c_rst" "$*"; }
 say() { printf '  %s\n' "$*"; }
 
 MARKETPLACE_GIT_URL="https://github.com/Lifecycle-Innovations-Limited/claude-ops"
+
+# scripts/ -> the plugin root. pwd -P, not pwd: ops-update runs this out of a
+# versioned cache directory that is often reached through a `current` symlink,
+# and a logical path would resolve hermes-plugin/ to whatever `current` pointed
+# at when the shell started rather than to this script's own version.
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 # ── Grok ─────────────────────────────────────────────────────────────────
 sync_grok() {
@@ -125,7 +139,12 @@ sync_cursor() {
 	mkdir -p "$cache_root"
 	dst="$cache_root/$hash"
 	mkdir -p "$dst"
-	if rsync -a --delete --exclude=".git" "$src/" "$dst/" 2>/dev/null; then
+	# --checksum for the same reason as the Hermes sync below: rsync's default
+	# size+mtime quick check silently skips a same-size file written in the
+	# same second, and exits 0 while doing it. Cursor's cache is keyed by
+	# commit hash so this bites less often, but a same-size edit between two
+	# commits would still land as a no-op that reports success.
+	if rsync -a --delete --checksum --exclude=".git" "$src/" "$dst/" 2>/dev/null; then
 		ok "cursor: content cache synced -> $hash"
 	else
 		warn "cursor: rsync to $dst failed (non-fatal)"
@@ -157,6 +176,67 @@ report_codex() {
 	fi
 }
 
+# ── Hermes ───────────────────────────────────────────────────────────────
+# Hermes has no plugin-manager command to call, so this copies the freshly
+# updated hermes-plugin/ out of THIS script's own plugin root. That root is
+# already the new version: ops-update swaps the cache and then runs the new
+# copy of this script, so $PLUGIN_ROOT/hermes-plugin is what we just installed.
+sync_hermes() {
+	local hermes_home="${HERMES_HOME:-$HOME/.hermes}"
+	local src="$PLUGIN_ROOT/hermes-plugin"
+	local dst="$hermes_home/plugins/ops"
+
+	[[ -d "$hermes_home/plugins" ]] || {
+		say "${c_dim}hermes: no $hermes_home/plugins (skipped)${c_rst}"
+		return 0
+	}
+	[[ -d "$src" ]] || {
+		warn "hermes: no hermes-plugin/ in $PLUGIN_ROOT (skipped)"
+		return 0
+	}
+
+	# A SYMLINK is a developer pointing Hermes at a live checkout. rsyncing
+	# over it would either clobber their working tree or replace the link with
+	# a stale copy — and in both cases they would stop getting their own edits.
+	# Same reasoning as Codex: something else already keeps it current.
+	if [[ -L "$dst" ]]; then
+		say "${c_dim}hermes: ops is a symlink to a live checkout (no action needed)${c_rst}"
+		return 0
+	fi
+
+	if [[ "$DRY" -eq 1 ]]; then
+		say "${c_dim}[dry-run] rsync $src/ -> $dst/${c_rst}"
+		return 0
+	fi
+
+	mkdir -p "$dst" 2>/dev/null || {
+		warn "hermes: cannot create $dst (skipped)"
+		return 0
+	}
+	# --delete so a file dropped upstream does not linger and keep being
+	# loaded. __pycache__ is excluded: it is build output, and a stale .pyc
+	# next to a newer .py is exactly how an "updated" plugin runs old code.
+	#
+	# --checksum is NOT optional here, and this is not paranoia. rsync's
+	# default quick check is size + mtime, and macOS ships openrsync, which
+	# applies it strictly: a file whose size is unchanged and whose mtime lands
+	# in the same second is skipped, and rsync still exits 0. A version bump
+	# from x.y.19 to x.y.20 is byte-identical in LENGTH, so the single most
+	# likely real-world change to plugin.yaml is exactly the one the quick
+	# check cannot see — the sync would report success and copy nothing.
+	# Proven against /usr/bin/rsync (openrsync protocol 29). These directories
+	# are a handful of small files, so hashing them costs nothing.
+	if rsync -a --delete --checksum --exclude '__pycache__' "$src/" "$dst/" 2>/dev/null; then
+		local v
+		v="$(sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
+			"$dst/plugin.yaml" 2>/dev/null | head -1)"
+		ok "hermes: ops plugin synced${v:+ (v$v)}"
+	else
+		warn "hermes: rsync into $dst failed (skipped)"
+	fi
+}
+
 sync_grok
 sync_cursor
 report_codex
+sync_hermes
