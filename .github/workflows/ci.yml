@@ -89,6 +89,53 @@ jobs:
       - name: PII / personal-data scan
         run: bash claude-ops/tests/test-no-secrets.sh
 
+  # The companion to `pii-gate`, for everything that is NOT a file.
+  #
+  # `pii-gate` scans tracked file content. On 2026-09-16 a personal name reached
+  # a public commit message AND a public pull-request body, and `pii-gate`
+  # passed every time, because neither of those is a file. This job closes that:
+  # commit messages in the PR range, the PR title and body, the head branch
+  # name, and the plugin manifests' owner/author fields.
+  #
+  # No `needs:`, for the same reason `pii-gate` has none — it must run on every
+  # PR regardless of the optimizer's verdict.
+  #
+  # FORK-SAFE BY CONSTRUCTION: it reads the `pull_request` event payload and the
+  # git history that checkout already fetched. No gh api call, no secret, so it
+  # behaves identically on a fork PR, where secrets are unavailable.
+  pii-gate-metadata:
+    name: pii-gate-metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The PR range needs both endpoints, so the shallow default will not
+          # do. `fetch-depth: 0` is the honest way to say "we need history".
+          fetch-depth: 0
+      - name: Commit messages in the PR range
+        if: github.event_name == 'pull_request'
+        run: |
+          bash claude-ops/bin/ops-pii-scan \
+            --commit-range "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+      - name: PR title and body
+        if: github.event_name == 'pull_request'
+        # Passed through env, never interpolated into the shell: a PR title is
+        # attacker-controlled text and `${{ }}` inside `run:` is a command
+        # injection, not a variable.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" > /tmp/pr-text.txt
+          bash claude-ops/bin/ops-pii-scan --origin "PR title/body" --text-file /tmp/pr-text.txt
+      - name: Head branch name
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: bash claude-ops/bin/ops-pii-scan --branch "$HEAD_REF"
+      - name: Plugin and marketplace manifests
+        run: bash claude-ops/bin/ops-pii-scan --manifests
+
   test-suite:
     if: always() && needs.lint-and-check.result == 'success' && (github.event_name != 'pull_request' || needs.optimize-ci.outputs.skip == 'false')
     runs-on: ${{ matrix.os }}

@@ -1,0 +1,14 @@
+# Salted SHA-256 digests of terms that are REPORTED but never block.
+#
+# A GitHub handle is public by construction: every commit is authored under it,
+# every diff quote repeats it, and the release and comment bots paste it into
+# code snippets. Blocking it would fail this repo's own audit on its own
+# evidence, and a gate that cries wolf gets switched off.
+#
+# It is still worth printing, because a handle beside a home path or an account
+# id is how a set of harmless facts becomes an identification.
+#
+# Same rules as pii-term-digests.txt: add with
+#   claude-ops/bin/ops-pii-scan --digest 'the term' >> <this file>
+# and never paste the term itself.
+d87321ceb3357b9fbcf96c5bd84903b1fa2b63913f0f2afc1deaefaa20ab31a6

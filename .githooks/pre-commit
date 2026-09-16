@@ -19,7 +19,19 @@ echo "Running pre-commit security checks..."
 # forbidden value and prove the gate refuses it. Any other file, including any
 # other test, is scanned. The exemption is per path, never per directory:
 # tests/ as a whole was already the one place a client id could sit unseen.
-EXEMPT_RE='^claude-ops/tests/(test-no-secrets\.sh|known-public-constants\.txt|test-pii-gate-fires\.sh|test-pre-commit-hook-blocks\.sh)$'
+# Three files joined the list on 2026-09-16, for the same reason as the
+# original four and no other. `pii-patterns.sh` IS the rule source: it has to
+# spell out the shapes it forbids, including the reserved phone range and the
+# lowercase API path that documents a real case-sensitivity bug.
+# `test-pii-metadata-gate.sh` is a negative control whose whole job is to plant
+# a forbidden value and prove the gate refuses it. The digest files hold
+# hashes, never terms.
+#
+# Note what is NOT exempted: `bin/ops-pii-scan` reads the shared list and still
+# scans every one of these files. That is deliberate — the shared pass caught a
+# real forbidden bigram in the negative control while this hook was blocked on
+# a placeholder phone number. Two passes, different jobs.
+EXEMPT_RE='^claude-ops/tests/(test-no-secrets\.sh|known-public-constants\.txt|test-pii-gate-fires\.sh|test-pre-commit-hook-blocks\.sh|test-pii-metadata-gate\.sh|pii-term-digests\.txt|pii-term-digests-warn\.txt|lib/pii-patterns\.sh)$'
 DIFF_ADDED=""
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
@@ -176,6 +188,16 @@ if [[ $FAILED -eq 1 ]]; then
   echo "Use generic placeholders: user@example.com, yourstore.myshopify.com, <YOUR_TOKEN>"
   echo "Bypass with --no-verify (emergency only)."
   exit 1
+fi
+
+# === Shared pattern source (claude-ops/tests/lib/pii-patterns.sh) ============
+# The checks above are this hook's own copy of the rules, kept because they are
+# tested and because they name the staged line precisely. This pass adds the
+# SHARED list — the same one commit-msg, pre-push and the CI job read — so a
+# pattern added in one place can never be missing here. Overlap is fine; a
+# double report costs a line of output, a gap costs a public leak.
+if [[ -x "claude-ops/bin/ops-pii-scan" ]]; then
+  claude-ops/bin/ops-pii-scan --staged || exit 1
 fi
 
 # Run test suite secrets scanner if available

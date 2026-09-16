@@ -1,0 +1,36 @@
+# Salted SHA-256 digests of the operator identity terms this PUBLIC repo must
+# never publish: personal names, personal handles, brand domains, an AWS
+# account id, a phone number, a cloud budget UUID.
+#
+# WHY DIGESTS AND NOT THE TERMS
+#
+# A denylist of personal terms in a public repo IS the leak. That is why the
+# cleartext list lives out of the tree (.pii-denylist, $OPS_PII_DENYLIST).
+#
+# But an out-of-tree file does not exist in CI, so the identity check SKIPped
+# there — and a skip is why a personal name reached a public commit message and
+# a public PR body while `pii-gate` reported success run after run. Hashing lets
+# CI refuse a term it is not allowed to know.
+#
+# This is obscurity, not secrecy. A 12-digit account id has little entropy and a
+# reader with a wordlist can recover it. That is an acceptable trade: the goal is
+# to keep this data off a public, search-indexed surface, not to hide it from
+# someone who already has it.
+#
+# ADDING A TERM — never paste the term itself:
+#   claude-ops/bin/ops-pii-scan --digest 'the term' >> claude-ops/tests/pii-term-digests.txt
+#
+# Matching is whole-token (and adjacent-word-pair, for "first last" names), so a
+# term cannot fire in the middle of an unrelated identifier.
+a76cb6498f1f22dddf15614708303b875529763273acf390cf155e26424782e0
+8e2205aab2e35fa815c001965e10bf93cdfd6a8e2d1dffc5b16b0d5485d90072
+358dc1d7a1a6183e077d0ba276ac69fcd5e6a54a823300a5bc129b0c853d933e
+cc32a7b8e8a07e6faf6076b64d66ab83865abc5ee06522cbe7257bd947895daf
+b8891e4d3630c86a8e62f77eea092a9cd7f445e453c5f95aa38f7865f61c1d6b
+dee698164eb68b1d92e8d4b7d7652e2f9d6e7fb5bb6afe643b8dc696e9a9e0fa
+f905f7a661da87a4e8f8d715eedf7484d52fecfcb5c4a1eb9596b66266696434
+9edadf174a4e25e3d7224fe35342b108ada2c93eef4f03e2544f64ab654e533d
+a0d1a8730688d430e2b9a134e282c064b09e86b554f5382889667e20f1378e90
+eaea10efea05f4e792a13fb0cddf5197dbf66856d20f1d1a7dcf795acf02f190
+b2e15feb3932a835af042c9809d44f7ab5b6b2c4774abbc6fcf1367a71552af6
+9dddd683e8c5dc182991793a7982edfdd73a0399148c122ba2d1efcb71492277
