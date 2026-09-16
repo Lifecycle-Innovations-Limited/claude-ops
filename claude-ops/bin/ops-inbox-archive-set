@@ -358,6 +358,53 @@ def write_sweep_watermarks(archived_jids, store_paths):
             print("  watermark write failed (%s): %s" % (path, exc), file=sys.stderr)
 
 
+def email_watermark_path(account):
+    """Where the per-thread email sweep watermarks live for this account.
+
+    Mirrors write_sweep_watermarks() for WhatsApp. Gmail's archive is the same
+    trap: removing the INBOX label says "dealt with as of now", it does not say
+    "nobody may ever owe a reply here again". The scan's forgotten-debt pass
+    reopens archived threads where they spoke last, which is right for a thread
+    Gmail filed away on its own, and wrong for one we just swept on purpose.
+    A timestamp per thread is the only thing that separates the two.
+    """
+    base = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+    d = os.path.join(base, "state")
+    # Same key the scan reads back: the mailbox actually queried, not the alias
+    # asked for. Every Sam alias forwards into one real Gmail account, so keying
+    # on the alias writes a file nobody reads and the sweep never sticks.
+    read_acct = os.environ.get("OPS_GOG_ACCOUNT") or account or "default"
+    safe = re.sub(r"[^a-z0-9._-]+", "_", read_acct.lower())
+    return os.path.join(d, "ops-email-sweep-watermarks-%s.json" % safe)
+
+
+def write_email_watermarks(thread_ids, account):
+    """Record WHEN each email thread was archived. Best-effort, never fatal."""
+    thread_ids = [t for t in thread_ids if t]
+    if not thread_ids:
+        return
+    path = email_watermark_path(account)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S+00:00")
+    marks = {}
+    try:
+        with open(path) as fh:
+            loaded = json.load(fh)
+        if isinstance(loaded, dict):
+            marks = loaded
+    except (OSError, ValueError):
+        marks = {}
+    for tid in thread_ids:
+        marks[tid] = stamp
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(marks, fh, indent=1, sort_keys=True)
+        os.replace(tmp, path)
+    except OSError as exc:                           # noqa: BLE001 - never fatal
+        print("  email watermark write failed (%s): %s" % (path, exc), file=sys.stderr)
+
+
 def archive_email(rows, account, dry):
     ids = [r["threadId"] for r in rows if r.get("threadId")]
     if not ids or dry:
@@ -373,6 +420,7 @@ def archive_email(rows, account, dry):
     if res.returncode != 0:
         print("  gmail archive failed: %s" % (res.stderr or "")[-300:], file=sys.stderr)
         return 0, len(ids)
+    write_email_watermarks(ids, account)
     return len(ids), 0
 
 

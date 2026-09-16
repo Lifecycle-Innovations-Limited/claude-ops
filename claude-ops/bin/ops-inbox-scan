@@ -437,6 +437,8 @@ if [ "$DO_EMAIL" = 1 ]; then
   ACCT_ARGS=()
   if ops_gog_ready; then
     ACCT_ARGS=(-a "$OPS_GOG_ACCOUNT")
+    # The python pass keys sweep watermarks on the mailbox actually read.
+    export OPS_GOG_ACCOUNT
   else
     GMAIL_ERR="$OPS_GOG_NOTE"
   fi
@@ -460,6 +462,32 @@ if [ "$DO_EMAIL" = 1 ]; then
     GMAIL_OK=1
   fi
   rm -f "${GMAIL_JSON_FILE}.err" 2>/dev/null || true
+
+  # FORGOTTEN EMAIL DEBT. The inbox query above only sees threads that still
+  # carry the INBOX label. A filter, a Gmail category, a mute, or one stray
+  # archive removes that label while the other person is still waiting for an
+  # answer — and every later scan then reports the mailbox as handled. That is
+  # exactly how a Believe thread ("MRT Gen AI Videos") sat unanswered across
+  # several clean runs: Gmail had filed the thread out of the inbox, so the
+  # scan never saw it, three times in a row.
+  #
+  # This mirrors the WhatsApp forgotten-debt sweep: pull archived inbound mail
+  # (never from Sam) plus his own sent mail over --debt-days, and let python
+  # keep only the threads whose LAST message is inbound. Conversation debt is
+  # direction, not label state.
+  if [ "$GMAIL_OK" = 1 ] && [ ${#ACCT_ARGS[@]} -gt 0 ]; then
+    GMAIL_DEBT_IN_FILE="$(mktemp "${TMPDIR:-/tmp}/ois-gmail-debt-in.XXXXXX")"
+    GMAIL_DEBT_OUT_FILE="$(mktemp "${TMPDIR:-/tmp}/ois-gmail-debt-out.XXXXXX")"
+    gog gmail messages search "${ACCT_ARGS[@]}" -j --max "$EMAIL_MAX" -- \
+      "-in:inbox -in:chats -in:spam -in:trash -from:me newer_than:${DEBT_DAYS}d" \
+      >"$GMAIL_DEBT_IN_FILE" 2>/dev/null || : >"$GMAIL_DEBT_IN_FILE"
+    gog gmail messages search "${ACCT_ARGS[@]}" -j --max "$EMAIL_MAX" -- \
+      "in:sent newer_than:${DEBT_DAYS}d" \
+      >"$GMAIL_DEBT_OUT_FILE" 2>/dev/null || : >"$GMAIL_DEBT_OUT_FILE"
+    export OIS_GMAIL_DEBT_IN_FILE="$GMAIL_DEBT_IN_FILE" \
+           OIS_GMAIL_DEBT_OUT_FILE="$GMAIL_DEBT_OUT_FILE"
+    trap 'rm -f "$GMAIL_JSON_FILE" "${OIS_SENDLOG_FILE:-}" "${GMAIL_DEBT_IN_FILE:-}" "${GMAIL_DEBT_OUT_FILE:-}"' EXIT
+  fi
 fi
 export OIS_GMAIL_JSON_FILE="$GMAIL_JSON_FILE" OIS_GMAIL_ERR="$GMAIL_ERR" OIS_GMAIL_OK="$GMAIL_OK"
 
@@ -478,6 +506,8 @@ PRETTY    = os.environ.get("OIS_PRETTY") == "1"
 GMAIL_F   = os.environ.get("OIS_GMAIL_JSON_FILE", "")
 GMAIL_ERR = os.environ.get("OIS_GMAIL_ERR", "")
 GMAIL_OK  = os.environ.get("OIS_GMAIL_OK") == "1"
+GMAIL_DEBT_IN  = os.environ.get("OIS_GMAIL_DEBT_IN_FILE", "")
+GMAIL_DEBT_OUT = os.environ.get("OIS_GMAIL_DEBT_OUT_FILE", "")
 SENDLOG_F = os.environ.get("OIS_SENDLOG_FILE", "")
 PEER_STORES = [p for p in os.environ.get("OIS_PEER_STORES", "").split(":") if p]
 
@@ -1106,7 +1136,238 @@ def from_email_addr(header):
     m = re.search(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", header.lower())
     return m.group(0) if m else header.lower().strip()
 
+def _load_msg_list(path):
+    """Read a `gog gmail messages search -j` dump -> list of message dicts."""
+    if not path or not os.path.exists(path) or os.path.getsize(path) == 0:
+        return []
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return []
+    if isinstance(data, dict):
+        return data.get("messages") or data.get("results") or []
+    return data if isinstance(data, list) else []
+
+
+def _msg_when(m):
+    return m.get("internalDateIso") or m.get("date") or ""
+
+
+# Machine senders, by address only — never by subject keyword, which would risk
+# hiding a real human. Deliberately wider than the inbox pass: the debt sweep
+# reads ARCHIVED mail, where transactional traffic dominates. Bare support@ /
+# info@ mailers, ticket robots, DMARC reporters, OTP senders and calendar
+# plumbing otherwise drown the handful of humans actually waiting — measured
+# 2026-09-16: 47 raw rows, 12 real conversations. Anything genuinely human
+# writing from such an address still reaches Sam through the inbox pass.
+MACHINE_SENDER_RE = re.compile(
+    r"(no[-_.]?reply|do[-_.]?not[-_.]?reply|notifications?@|notifications?_at_|alerts?@|"
+    r"mailer-daemon|postmaster@|@.*\.amazonses\.com|bounce|"
+    r"^support@|@.*\.atlassian\.net|automation@|billing@|invoice|receipts?@|"
+    r"dmarc|newsletter|marketing@|welcome@|techcomms@|via google|"
+    r"@mail\.notion\.so|flyingblue|klm_royal|@notifications\.|@.*\.ikosresorts\.com)",
+    re.IGNORECASE)
+
+
+def _answered_threads():
+    """Thread ids where OUR newest message is newer than THEIR newest.
+
+    Gmail keeps the INBOX label on a thread after you reply from another client
+    (phone, web, a different alias). The envelope pass only sees the last
+    *inbound* message and calls that debt, so a thread Sam answered himself
+    minutes ago still reads as "waiting for Sam". That happened on 2026-09-16:
+    he replied to Tjark at 11:03, the scan still listed it, and he had to catch
+    it. Debt is direction, not label state, so build the set of threads we
+    already answered and let the inbox pass demote them.
+    """
+    outbound = _load_msg_list(GMAIL_DEBT_OUT)
+    if not outbound:
+        return {}
+    inbound = _load_msg_list(GMAIL_DEBT_IN)
+    last_out, last_in = {}, {}
+    for m in outbound:
+        tid = m.get("threadId") or m.get("id")
+        when = _msg_when(m)
+        if tid and when and when > last_out.get(tid, ""):
+            last_out[tid] = when
+    for m in inbound:
+        tid = m.get("threadId") or m.get("id")
+        when = _msg_when(m)
+        if tid and when and when > last_in.get(tid, ""):
+            last_in[tid] = when
+    return {tid: when for tid, when in last_out.items()
+            if when > last_in.get(tid, "")}
+
+
+def _when_epoch(s):
+    """ISO-ish timestamp -> epoch seconds, or None.
+
+    Gmail hands back "2026-09-16T10:00:00+00:00" while the sweep watermark is
+    written as "2026-09-16 10:00:00+00:00". Comparing those as STRINGS silently
+    always favours the Gmail one ("T" sorts after " "), so every swept thread
+    read as "they wrote after the sweep" and came straight back. Compare real
+    instants, never text.
+    """
+    if not s:
+        return None
+    t = str(s).strip().replace("Z", "+00:00")
+    if len(t) > 10 and t[10] == " ":
+        t = t[:10] + "T" + t[11:]
+    for cand in (t, re.sub(r"\.\d+", "", t)):
+        try:
+            dt = datetime.fromisoformat(cand)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def _email_watermarks():
+    """When did WE deliberately archive each thread? Written by ops-inbox-archive-set.
+
+    Without this the forgotten-debt pass re-opens everything a sweep just filed,
+    because "archived + they spoke last" is true for every thread we close out.
+    On 2026-09-16 that turned a genuinely empty inbox into 47 items, all of them
+    mail archived minutes earlier. A watermark separates "Gmail filed this away
+    on its own" (real debt) from "we dealt with this at 12:05" (not debt, unless
+    they wrote again AFTER that).
+    """
+    base = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+    # Key on the mailbox actually READ, not the one requested. --gmail-account
+    # names Sam's alias (sam@healify.ai), but every alias forwards into one real
+    # mailbox and lib/gog-account.sh resolves the query to that account. Keying
+    # on the alias wrote watermarks nobody ever reads back, so a swept thread
+    # came straight back on the next scan of that alias.
+    read_acct = os.environ.get("OPS_GOG_ACCOUNT") or ACCT or "default"
+    safe = re.sub(r"[^a-z0-9._-]+", "_", read_acct.lower())
+    path = os.path.join(base, "state", "ops-email-sweep-watermarks-%s.json" % safe)
+    try:
+        with open(path) as fh:
+            loaded = json.load(fh)
+        return {k: str(v) for k, v in loaded.items()} if isinstance(loaded, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def forgotten_email_threads():
+    """Archived mail where THEY spoke last and we never answered.
+
+    Label state is not conversation state: a Gmail filter, a category, a mute
+    or one stray archive strips INBOX from a live thread, and an inbox-only
+    scan then calls the mailbox clean while someone waits. Direction is the
+    only honest test, so compare the newest inbound message per thread against
+    the newest message we sent in that same thread.
+    """
+    inbound = _load_msg_list(GMAIL_DEBT_IN)
+    if not inbound:
+        return []
+    outbound = _load_msg_list(GMAIL_DEBT_OUT)
+    last_in, last_out, newest = {}, {}, {}
+    for m in inbound:
+        tid = m.get("threadId") or m.get("id")
+        when = _msg_when(m)
+        if not tid or not when:
+            continue
+        if when > last_in.get(tid, ""):
+            last_in[tid] = when
+            newest[tid] = m
+    for m in outbound:
+        tid = m.get("threadId") or m.get("id")
+        when = _msg_when(m)
+        if not tid or not when:
+            continue
+        if when > last_out.get(tid, ""):
+            last_out[tid] = when
+    # Threads the owner has ever written into are real conversations, not
+    # one-way blasts. Used as a confidence signal, never as a filter: a first
+    # approach from a new human is still debt.
+    participated = set(last_out)
+    self_addr = (ACCT or "").lower()
+    swept = _email_watermarks()
+    items = []
+    for tid, when in last_in.items():
+        if when <= last_out.get(tid, ""):
+            continue  # we answered after them: not debt
+        # We archived this on purpose. Only real if they wrote again AFTER that.
+        #
+        # EXCEPTION, and it matters: a watermark closes ONE-WAY mail, never a
+        # conversation Sam is actually in. A bulk sweep stamps hundreds of
+        # threads in one second (1007 on 2026-09-16) without a human reading any
+        # of them, and that wiped all 12 genuine two-way threads — Believe,
+        # PingPong, Ace, Ikos — from the result. Archiving is a filing decision;
+        # it is not evidence that a reply was sent. So a thread Sam has written
+        # into survives its watermark and is demoted only by the direction test
+        # above (we answered after them), which is the honest signal.
+        mark = _when_epoch(swept.get(tid))
+        inbound_at = _when_epoch(when)
+        if (mark is not None and inbound_at is not None and inbound_at <= mark
+                and tid not in participated):
+            continue
+        m = newest[tid]
+        frm = (m.get("from") or "").lower()
+        if self_addr and self_addr == from_email_addr(frm):
+            continue
+        labels = [str(l).upper() for l in (m.get("labels") or m.get("labelIds") or [])]
+        if any(l in labels for l in ("CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL",
+                                     "CATEGORY_UPDATES", "CATEGORY_FORUMS")):
+            continue
+        if MACHINE_SENDER_RE.search(frm):
+            continue
+        items.append({
+            "who": m.get("from") or "(unknown)",
+            "subject": trunc(m.get("subject") or "(no subject)", 120),
+            "threadId": tid,
+            "date": m.get("date"),
+            "labels": labels,
+            "forgotten": True,
+            "sam_participated": tid in participated,
+            "note": ("KEEP — archived/filtered out of the inbox but they still "
+                     "spoke last inside the %d-day debt window; deep-read before "
+                     "drafting" % DEBT_DAYS),
+        })
+    # Threads the owner already joined rank first: those are live conversations
+    # someone is actively waiting on. Recency breaks ties inside each group.
+    items.sort(key=lambda x: (x["sam_participated"], last_in.get(x["threadId"], "")),
+               reverse=True)
+    return items
+
+
+def _merge_forgotten(res):
+    """Add archived-but-unanswered threads to needs_reply, without duplicates."""
+    try:
+        extra = forgotten_email_threads()
+    except Exception as exc:  # never let the sweep break the whole scan
+        res.setdefault("notes", []).append("email forgotten-debt check failed (%s)" % exc)
+        return res
+    if not extra:
+        return res
+    seen = {i.get("threadId") for bucket in ("needs_reply", "waiting", "fyi")
+            for i in res.get(bucket, [])}
+    added = [i for i in extra if i.get("threadId") not in seen]
+    if not added:
+        return res
+    res["needs_reply"].extend(added)
+    res["forgotten_count"] = len(added)
+    res.setdefault("notes", []).append(
+        "email: %d archived/filtered thread(s) reopened — they spoke last inside "
+        "the %d-day debt window, so the INBOX label was hiding real debt"
+        % (len(added), DEBT_DAYS))
+    if res.pop("empty", None):
+        res["note"] = ("inbox label is empty, but %d archived/filtered thread(s) "
+                       "still owe a reply" % len(added))
+    return res
+
+
 def scan_email():
+    # Two passes, one answer: the INBOX-labelled working set, plus the archived
+    # threads that still owe a reply. A thread Gmail filed away is still debt.
+    return _merge_forgotten(_scan_email_inbox())
+
+
+def _scan_email_inbox():
     res = {"account": ACCT or "(gog default account)",
            "needs_reply": [], "waiting": [], "fyi": [], "reachable": True}
     if not GMAIL_F or not os.path.exists(GMAIL_F) or os.path.getsize(GMAIL_F) == 0:
@@ -1126,6 +1387,7 @@ def scan_email():
         res["note"] = f"gmail result unparseable: {e}"
         return res
     rows = data if isinstance(data, list) else data.get("results", data.get("threads", []))
+    ANSWERED = _answered_threads()
     if not rows:
         # Parsed fine, zero hits. That is inbox zero, and it must never read the
         # same as a call that failed — an agent cannot act on an ambiguous empty.
@@ -1156,6 +1418,16 @@ def scan_email():
             res["needs_reply"].append(item)  # surface as actionable, never FYI/archive
             continue
         is_sent_last = ("SENT" in labels) or (self_addr and self_addr == from_email_addr(frm))
+        # Did we already answer this THREAD? The envelope row is the last
+        # inbound message, which stays visible after a reply sent from Sam's
+        # phone or another alias. Without this the scan hands him back work he
+        # finished himself.
+        if not is_sent_last and tid and tid in ANSWERED:
+            item["note"] = ("KEEP OUT OF NEEDS-REPLY — we already replied in this "
+                            "thread at %s; ball is with them" % ANSWERED[tid])
+            item["answered_by_us"] = True
+            res["waiting"].append(item)
+            continue
         promo = any(l in labels for l in ("CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL",
                                           "CATEGORY_UPDATES", "CATEGORY_FORUMS"))
         # Conservative no-reply / automated-sender heuristic: route obvious
