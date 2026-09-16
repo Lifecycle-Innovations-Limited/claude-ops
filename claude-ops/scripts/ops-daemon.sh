@@ -143,6 +143,22 @@ print(val if val is not None else '')
 " 2>/dev/null || true
 }
 
+# Emit a service's `args` array as one shell-quoted string ("" when absent).
+# Env vars inside each arg are expanded the same way `command` is, so entries
+# like "${CLAUDE_PLUGIN_ROOT}/scripts/foo.mjs" resolve.
+get_service_args() {
+  local service="$1"
+  python3 -c "
+import json, os, shlex
+data = json.load(open('$SERVICES_CONFIG'))
+svc = data.get('services', {}).get('$service', {})
+args = svc.get('args') or []
+if isinstance(args, str):
+    args = [args]
+print(' '.join(shlex.quote(os.path.expandvars(str(a))) for a in args))
+" 2>/dev/null || true
+}
+
 get_enabled_services() {
   python3 -c "
 import json
@@ -255,13 +271,24 @@ start_service() {
   # Expand env vars in command path (e.g. ${CLAUDE_PLUGIN_ROOT}/scripts/...)
   cmd=$(eval echo "$cmd")
 
+  # Append the optional `args` array, shell-quoted. Services that run through
+  # an interpreter (command "node" + args ["…/daemon.mjs"]) carry the script
+  # path here; without this the args were silently dropped.
+  local args
+  args=$(get_service_args "$name")
+  [[ -n "$args" ]] && cmd="$cmd $args"
+
   log "START: launching $name — $cmd"
   # Export daemon identity so child scripts can detect they're managed
   export OPS_DAEMON_PID=$$
   export OPS_DAEMON_MANAGED=1
 
   rotate_service_log "$LOG_DIR/${name}.log"
-  bash "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
+  # Use `bash -c`, like run_cron_service, so cmd can contain inline env vars
+  # and multi-word args. Plain `bash "$cmd"` treats the whole string as a
+  # single file path, which makes a binary interpreter such as `node` fail
+  # with "cannot execute binary file".
+  bash -c "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
   local pid=$!
   SERVICE_PIDS["$name"]=$pid
   SERVICE_STATUS["$name"]="running"
