@@ -3,6 +3,24 @@
 ## Unreleased
 
 ### Fixed
+- The inbox scan no longer reports "email is handled" while people are still
+  waiting. Its email half only asked Gmail for `in:inbox`, but that is a LABEL,
+  not the state of the conversation: a filter, a category, a mute or one stray
+  archive strips INBOX from a live thread. A Believe thread carrying finished
+  video deliverables sat unanswered across three consecutive clean runs because
+  Gmail had filed it away. `ops-inbox-scan` now runs a second email pass over
+  archived, non-promotional, human mail within `--debt-days` (default 90) and
+  reopens every thread whose newest message is inbound and never answered;
+  those rows arrive in `email.needs_reply` tagged `forgotten: true` alongside a
+  `forgotten_count` and an explaining note.
+- An archive watermark can no longer bury a conversation. The sweep watermark
+  that keeps deliberately-filed mail closed was stamping hundreds of threads in
+  a single second, which silenced all twelve genuine two-way threads in one
+  live run. Archiving is a filing decision, never evidence that a reply was
+  sent, so a thread the owner has written into now survives its watermark and
+  is closed only by the direction test. One-way pitches stay filed. Guard:
+  `tests/test-ops-inbox-email-forgotten-debt.sh` (9 cases, two mutations
+  proven red).
 - `ops-dash` now converts every CALENDAR event into one display zone before
   printing it, instead of showing the raw clock half of each timestamp. Events
   from a calendar in a different zone previously rendered at that calendar's
