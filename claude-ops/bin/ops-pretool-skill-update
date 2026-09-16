@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# ops-pretool-skill-update — PreToolUse(Skill) hook: notice a newer published
+# version when an ops skill is invoked, and (opt-in) install it in the
+# background so the box stops drifting versions behind.
+#
+# Without this, `bin/ops-update-check` only ever runs from the daemon's 09:17
+# cron and writes a state file nobody reads, so a box whose daemon is not
+# installed (Linux, or launchd never set up) can sit months behind and never
+# hear about it.
+#
+# Usage: invoked by hooks.json on PreToolUse matcher ^Skill$, stdin = hook JSON.
+#
+#   auto_update = off     do nothing
+#                 notify  (default) tell the session an update is available
+#                 auto    also run `ops-update` in the background, then tell
+#                         the session to reload
+#
+#   Set in preferences.json ("auto_update": "auto") or via the environment
+#   (OPS_AUTO_UPDATE / CLAUDE_PLUGIN_OPTION_AUTO_UPDATE).
+#
+# Exit codes: always 0 — a hook must never block the skill it fired on.
+#
+# Public repo: no personal data. All paths derive from $HOME / env. (Rule 0)
+
+# No `set -e`: a failure anywhere here must not take the Skill call with it.
+set -uo pipefail
+
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+STATE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/ops-update"
+LOG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/ops"
+LOCK_DIR="$STATE_DIR/.auto-update.lock"
+
+# shellcheck source=/dev/null
+. "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh" 2>/dev/null || { config() { echo "${2:-}"; }; }
+
+MODE="${OPS_AUTO_UPDATE:-$(config auto_update notify)}"
+[ "$MODE" = "off" ] && exit 0
+
+command -v jq >/dev/null 2>&1 || exit 0
+
+INPUT=$(cat 2>/dev/null || true)
+skill=$(printf '%s' "$INPUT" | jq -r '.tool_input.skill // ""' 2>/dev/null)
+[ -n "$skill" ] || exit 0
+
+# Only fire for skills that belong to THIS plugin. Skills arrive either bare
+# ("ops-status") or plugin-qualified ("ops:ops-status"); the directory is the
+# authority, so an unrelated plugin's skill can never trigger a self-update.
+[ -d "$PLUGIN_ROOT/skills/${skill##*:}" ] || exit 0
+
+# Detect. ops-update-check throttles itself (24h by default), so the common
+# case costs one file read and no network.
+"$PLUGIN_ROOT/bin/ops-update-check" --quiet >/dev/null 2>&1
+rc=$?
+[ "$rc" -eq 3 ] || exit 0 # 0 = already current, 1 = undeterminable
+
+published=$(jq -r '.published // ""' "$STATE_DIR/update-available.json" 2>/dev/null)
+installed=$(jq -r '.installed // ""' "$STATE_DIR/update-available.json" 2>/dev/null)
+[ -n "$published" ] || exit 0
+
+emit() {
+  python3 -c '
+import json, sys
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": sys.argv[1],
+    },
+    "suppressOutput": True,
+}))' "$1" 2>/dev/null
+}
+
+if [ "$MODE" != "auto" ]; then
+  emit "claude-ops ${installed:-?} is behind published ${published}. Run /ops:ops-update to upgrade."
+  exit 0
+fi
+
+# ── auto ──────────────────────────────────────────────────────────────────
+# One updater at a time. mkdir is the atomic test-and-set; a stale lock older
+# than an hour is reclaimed so a killed updater cannot wedge this forever.
+mkdir -p "$STATE_DIR" "$LOG_DIR" 2>/dev/null
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  if [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
+    rmdir "$LOCK_DIR" 2>/dev/null && mkdir "$LOCK_DIR" 2>/dev/null || exit 0
+  else
+    exit 0 # an update is already running
+  fi
+fi
+
+# Detached: the skill this hook fired on must not wait for a plugin upgrade.
+# The updater releases the lock itself, including on failure.
+(
+  {
+    printf '[%s] auto-update %s → %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${installed:-?}" "$published"
+    OPS_UPDATE_IN_SESSION=1 bash "$PLUGIN_ROOT/bin/ops-update"
+    printf '[%s] exit=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$?"
+  } >>"$LOG_DIR/auto-update.log" 2>&1
+  rmdir "$LOCK_DIR" 2>/dev/null
+) </dev/null >/dev/null 2>&1 &
+
+emit "claude-ops ${installed:-?} is behind published ${published}; upgrading in the background (log: ~/.claude/logs/ops/auto-update.log). Run /reload-plugins, or restart, once it finishes — this session keeps running the old version until then."
+exit 0

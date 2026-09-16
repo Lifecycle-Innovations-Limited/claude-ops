@@ -40,6 +40,28 @@ Then a single `AskUserQuestion`: `[Update now]` `[Show what changed]` `[Not now]
 Only on `Update now` do you run `bin/ops-update`. Never chain the two, and never
 apply an update the user has not just agreed to in that exchange.
 
+## Checking on every skill call
+
+The daily cron is the only thing that ever ran the check, so a box without the
+daemon (Linux, or launchd never set up) heard about a new version exactly never.
+`bin/ops-pretool-skill-update` closes that: a `PreToolUse` hook on `^Skill$`
+re-uses the same throttled check whenever an ops skill is invoked, so the first
+skill call of the day says what the daily cron would have said.
+
+Behaviour is set by `auto_update` in `preferences.json` (or `$OPS_AUTO_UPDATE`):
+
+| Mode                 | What happens on a stale install                                          |
+| -------------------- | ------------------------------------------------------------------------ |
+| `off`                | nothing                                                                  |
+| `notify` _(default)_ | the session is told it is behind, and to run `/ops:ops-update`           |
+| `auto`               | also runs `bin/ops-update` in the background, then asks for a reload     |
+
+`auto` is the one exception to the split above, and it stays opt-in for the
+reason stated there: the running session keeps the old version until it reloads,
+so the upgrade lands detached, behind a lock, and never prunes the tree the
+session is rooted in. Turning it on is the user's decision, not yours — never
+switch a box to `auto` on your own initiative.
+
 Flags: `--json` (verdict on stdout), `--no-fetch` (compare against the catalogue
 already on disk, no network), `--force` (ignore the once-a-day throttle),
 `--quiet` (write state, print nothing — how the daemon runs it). Override the
