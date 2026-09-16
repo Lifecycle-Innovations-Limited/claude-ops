@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [3.10.19] - 2026-09-16
+
 ### Added
 - The plugin now notices its own staleness. `bin/ops-update-check` only ever ran
   from the daemon's daily cron and wrote a verdict to a state file that nothing
@@ -27,6 +29,7 @@
   underneath it. The running version is now kept, with a note that the next run
   prunes it — by which time the live root has moved on. Guard: two cases in
   `tests/test-ops-update-downgrade-guard.sh`, mutation proven red.
+
 
 ## [3.10.18] - 2026-09-16
 
