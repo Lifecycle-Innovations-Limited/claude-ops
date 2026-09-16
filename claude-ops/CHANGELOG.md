@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [3.10.18] - 2026-09-16
+
 ### Fixed
 - The inbox scan no longer reports "email is handled" while people are still
   waiting. Its email half only asked Gmail for `in:inbox`, but that is a LABEL,
@@ -41,6 +43,7 @@
   `--to` — unless the new `--allow-downgrade` flag is given. Step 5 never
   prunes a cache newer than the target without that flag and lists what it
   kept. Guard: `tests/test-ops-update-downgrade-guard.sh` (15 cases).
+
 
 ## [3.10.17] - 2026-09-13
 
