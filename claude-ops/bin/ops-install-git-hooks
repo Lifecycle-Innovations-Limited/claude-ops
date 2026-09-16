@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Wire this repo's .githooks/ into git so the pre-commit PII gate actually runs.
+# Wire this repo's .githooks/ into git so the PII gates actually run.
 #
-# Without this, .githooks/pre-commit is dead code: git only runs hooks from
+# Without this, .githooks/* is dead code: git only runs hooks from
 # core.hooksPath (or .git/hooks), and nothing set either. The hook was present,
 # executable, and never invoked — a gate that exists but does not gate.
+#
+# Three hooks, three surfaces:
+#   pre-commit  the staged diff        (file content)
+#   commit-msg  the commit message     (added 2026-09-16; a name went public
+#                                       in one of these while pii-gate passed)
+#   pre-push    every commit message in the pushed range, plus the branch name
 #
 # Safe to run repeatedly. Works from the primary checkout or any worktree.
 set -euo pipefail

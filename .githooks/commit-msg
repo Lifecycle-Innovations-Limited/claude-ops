@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# commit-msg hook — THIS IS THE ONE THAT WAS MISSING.
+#
+# `pre-commit` scans the staged diff and `pii-gate` scans tracked files. A
+# commit MESSAGE is neither, so it was never scanned at all — and on
+# 2026-09-16 a personal name went out in one, to a public repo, with every
+# gate green. A message is as public as any line of code and is harder to
+# remove afterwards, because rewriting it rewrites history.
+#
+# Patterns come from claude-ops/tests/lib/pii-patterns.sh, the single source
+# the pre-push hook and the CI job also read.
+set -uo pipefail
+
+MSG_FILE="${1:-}"
+[[ -n "$MSG_FILE" && -f "$MSG_FILE" ]] || exit 0
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+SCAN="$ROOT/claude-ops/bin/ops-pii-scan"
+
+# A missing scanner is not a pass. Say so, loudly, and let the commit through:
+# a hook that hard-fails on a partial checkout teaches people to use
+# --no-verify, and then nothing is gated at all.
+if [[ -z "$ROOT" || ! -x "$SCAN" ]]; then
+  echo "WARNING: ops-pii-scan not found — the commit message was NOT scanned." >&2
+  exit 0
+fi
+
+exec "$SCAN" --commit-msg-file "$MSG_FILE"
