@@ -1287,6 +1287,14 @@ def forgotten_email_threads():
     participated = set(last_out)
     self_addr = (ACCT or "").lower()
     swept = _email_watermarks()
+    # Timestamps shared by many threads = a bulk sweep, not a human decision.
+    _mc = {}
+    for _v in swept.values():
+        _mc[_v] = _mc.get(_v, 0) + 1
+    # >=2 threads sharing one timestamp is already a sweep, not a human
+    # deciding thread by thread. Deliberate one-off stamps are unique.
+    BULK_MARKS = {_when_epoch(k) for k, c in _mc.items() if c >= 2}
+    BULK_MARKS.discard(None)
     items = []
     for tid, when in last_in.items():
         if when <= last_out.get(tid, ""):
@@ -1303,9 +1311,14 @@ def forgotten_email_threads():
         # above (we answered after them), which is the honest signal.
         mark = _when_epoch(swept.get(tid))
         inbound_at = _when_epoch(when)
-        if (mark is not None and inbound_at is not None and inbound_at <= mark
-                and tid not in participated):
-            continue
+        if mark is not None and inbound_at is not None and inbound_at <= mark:
+            # A BULK stamp (hundreds in one second) is a filing decision, not
+            # proof anyone read the thread, so it may not silence a conversation
+            # Sam is actually in. A stamp we set alone, deliberately, after
+            # reading it, may. `bulk` marks the timestamps shared by many
+            # threads at once.
+            if tid not in participated or mark not in BULK_MARKS:
+                continue
         m = newest[tid]
         frm = (m.get("from") or "").lower()
         if self_addr and self_addr == from_email_addr(frm):
