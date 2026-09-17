@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed
+- Unread status can no longer be used as an inbox-triage filter on WhatsApp,
+  Slack, or Gmail. A message Sam opened and navigated away from without
+  replying still owed a reply, so any scan step that relied on read/unread
+  state to decide what needs him is wrong by design. `ops-inbox`, `ops-rules`,
+  and the scan tooling now classify every open item by who spoke last, never
+  by read state. A new `unread-filter-guard.py` hook hard-blocks the unread
+  scan calls (`whatsapp_unread`, `mcp__slack__conversations_unreads`, and any
+  `is:unread`/`unread_count`/`unread=1` filter passed to a terminal or code
+  tool), wired into every box's pre-tool dispatcher. `tests/test-unread-filter-guard.sh`
+  proves the block and allow shapes.
+
 ### Added
 - `ops-release` now sweeps open pull requests before it cuts anything. Twice in
   one day a release went out while reviewed, good external PRs sat open, and
