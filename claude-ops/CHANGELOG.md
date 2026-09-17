@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [3.10.20] - 2026-09-17
+
 ### Fixed
 - Unread status can no longer be used as an inbox-triage filter on WhatsApp,
   Slack, or Gmail. A message Sam opened and navigated away from without
@@ -37,6 +39,7 @@
   required checks never started and `mergeable_state` stayed `blocked` forever.
   The sweep approves those held runs, which is what unblocked both stalled
   external contributions.
+
 
 ## [3.10.19] - 2026-09-16
 
