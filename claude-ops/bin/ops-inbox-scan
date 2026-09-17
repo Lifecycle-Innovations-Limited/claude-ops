@@ -17,8 +17,10 @@
 #                 only for the handful of NEEDS_REPLY candidates before drafting.
 #
 # DOES NOT COVER (left to the skill as single, light inline MCP calls — NOT
-# subagents): Slack (one conversations_unreads call) and Telegram (one
-# list_dialogs call). Those are one round-trip each; a subagent is overkill.
+# subagents): Slack (channels_me + conversations_history per DM, never
+# conversations_unreads — unread is never a filter, Sam 2026-09-17) and
+# Telegram (one list_dialogs call). Those are one/few round-trips; a subagent
+# is overkill.
 #
 # OUTPUT: one JSON object on stdout. Always valid JSON, even on partial failure.
 # READ-ONLY: opens every sqlite db in immutable/read-only mode; never sends,
@@ -1489,8 +1491,9 @@ result["counts"] = {
     "email":    {b: cnt("email", b) for b in ("needs_reply", "waiting", "fyi")} if DO_EMAIL else None,
 }
 result["notes"].append(
-    "Slack + Telegram NOT scanned here — the skill does one light inline MCP call each "
-    "(conversations_unreads / list_dialogs), no subagent."
+    "Slack + Telegram NOT scanned here — the skill does channels_me + "
+    "conversations_history per DM for Slack (never conversations_unreads) "
+    "and one list_dialogs call for Telegram, no subagent."
 )
 result["notes"].append(
     "WhatsApp store may lag phone-sent messages; confirm 'did I already reply?' with the human "

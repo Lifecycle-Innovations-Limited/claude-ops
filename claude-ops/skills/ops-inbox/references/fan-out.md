@@ -67,8 +67,8 @@ Workflow({
     {
       key: 'slack',
       select:
-        'select:mcp__slack__conversations_unreads,mcp__slack__channels_list,mcp__slack__conversations_history,mcp__slack__conversations_replies',
-      steps: 'conversations_unreads to find unread DMs/channels; read latest via history/replies.',
+        'select:mcp__slack__channels_me,mcp__slack__conversations_history,mcp__slack__conversations_replies',
+      steps: 'channels_me {channel_types:"im,mpim"} for human DMs (and public/private channels from your allowlist); conversations_history per id to find who spoke last. Never conversations_unreads — unread is never a filter (Sam, 2026-09-17); a guard hard-blocks the call.',
     },
     {
       key: 'whatsapp',
