@@ -53,9 +53,19 @@ err()  { log "${C_R}  ✗ $*${C_N}"; }
 AWS() { command aws "${PROFILE_ARG[@]}" --no-cli-pager "$@"; }
 AWSR(){ local r="$1"; shift; command aws "${PROFILE_ARG[@]}" --region "$r" --no-cli-pager "$@"; }
 
-# epoch helper: ISO8601 -> epoch seconds (GNU date)
-epoch() { date -d "$1" +%s 2>/dev/null || echo 0; }
-NOW=$(date +%s)
+# epoch helper: ISO8601 -> epoch seconds. GNU date (-d) on Linux; BSD date (-j -f) on macOS.
+# Prefer gdate if present (coreutils), else fall back to BSD date -j.
+if command -v gdate >/dev/null 2>&1; then
+  epoch() { gdate -d "$1" +%s 2>/dev/null || echo 0; }
+else
+  epoch() {
+    local v e
+    v=$(date -d "$1" +%s 2>/dev/null) && { echo "$v"; return; }
+    e=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s 2>/dev/null) && { echo "$e"; return; }
+    echo 0
+  }
+fi
+NOW=$(command -v gdate >/dev/null 2>&1 && gdate +%s || date +%s)
 age_days() { echo $(( (NOW - $(epoch "$1")) / 86400 )); }
 
 # finding SEV SERVICE REGION RESOURCE ISSUE RECOMMENDATION [EST_MONTHLY_USD]
