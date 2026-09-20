@@ -1,0 +1,36 @@
+name: AWS OIDC production smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: aws-oidc-production-smoke
+  cancel-in-progress: false
+
+jobs:
+  log-query:
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assume the Claude Ops AWS role
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::410126241301:role/ClaudeOpsGitHubActionsRole
+          role-session-name: claude-ops-production-smoke
+          aws-region: us-east-1
+
+      - name: Verify caller and production log access
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity --query Arn --output text
+          START_TIME=$(( $(date +%s) - 3600 ))000
+          aws logs filter-log-events \
+            --log-group-name /ecs/healify-api-prod \
+            --start-time "$START_TIME" \
+            --limit 1 \
+            --query '{events:length(events),searchedLogStreams:length(searchedLogStreams)}' \
+            --output json
