@@ -40,7 +40,8 @@ expect_absent() {
 expect_fixed "workflow can be run on demand" "workflow_dispatch:"
 expect_fixed "OIDC token permission is present" "id-token: write"
 expect_fixed "production environment limits the token subject" "environment: production"
-expect_fixed "AWS credentials come from the OIDC action" "uses: aws-actions/configure-aws-credentials@v5"
+expect_fixed "AWS credentials come from the pinned OIDC action" "uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a62c21074a494a76c791f7333f # v5"
+expect_absent "AWS credentials action is not pinned to a mutable tag" "uses: aws-actions/configure-aws-credentials@v5"
 expect_fixed "the scoped Claude Ops role is used" "role-to-assume: arn:aws:iam::410126241301:role/ClaudeOpsGitHubActionsRole"
 expect_fixed "the real production log group is queried" "--log-group-name /ecs/healify-api-prod"
 expect_absent "no static access key is referenced" 'secrets.AWS_ACCESS_KEY_ID'

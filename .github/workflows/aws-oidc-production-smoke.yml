@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Assume the Claude Ops AWS role
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a62c21074a494a76c791f7333f # v5
         with:
           role-to-assume: arn:aws:iam::410126241301:role/ClaudeOpsGitHubActionsRole
           role-session-name: claude-ops-production-smoke
