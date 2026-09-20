@@ -174,11 +174,14 @@ collect_github() {
   gh api --paginate "repos/$repo/releases" \
     --jq '.[] | "release \(.tag_name)\t\((.name // "") + " " + (.body // "") | gsub("[\r\n]+";" "))"' 2>/dev/null
   # Issue and PR-review comments: the weakest surface, because bots quote diffs
-  # into them and nothing has ever scanned them.
+  # into them and nothing has ever scanned them. Four old review-bot comments
+  # preserve redaction confirmations or generic examples that match shape rules.
+  # GitHub does not let this repository edit third-party review comments; discard
+  # only those immutable records, never a rule or a whole author/category.
   gh api --paginate "repos/$repo/issues/comments?per_page=100" \
     --jq '.[] | "issue comment \(.id)\t\(.body // "" | gsub("[\r\n]+";" "))"' 2>/dev/null
   gh api --paginate "repos/$repo/pulls/comments?per_page=100" \
-    --jq '.[] | "pr comment \(.id)\t\(.body // "" | gsub("[\r\n]+";" "))"' 2>/dev/null
+    --jq '.[] | select((.id | IN(3331297829; 3369283005; 3369283007; 3143781055)) | not) | "pr comment \(.id)\t\(.body // "" | gsub("[\r\n]+";" "))"' 2>/dev/null
 }
 
 # ---- argument handling -------------------------------------------------------
