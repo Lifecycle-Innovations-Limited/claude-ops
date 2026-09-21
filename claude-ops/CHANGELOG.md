@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+- `/ops:ops-inbox` no longer forks the whole skill into a background agent.
+  Drafting now starts in the parent session on the slash command itself, so
+  the owner does not have to type "continue drafting". Scanners still fan
+  out; sends stay in the parent (Rule 6). Guard:
+  `tests/test-ops-inbox-parent-autodraft.sh`.
+
 ## [3.10.20] - 2026-09-17
 
 ### Fixed
