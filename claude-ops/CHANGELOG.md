@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [3.10.21] - 2026-09-21
+
 ### Fixed
 - `/ops:ops-inbox` no longer forks the whole skill into a background agent.
   Drafting now starts in the parent session on the slash command itself, so
@@ -13,6 +15,7 @@
   `INBOX HEARTBEAT` line so the parent prints it and relaunches; scanners
   `SendMessage` on the same cadence. Guard:
   `tests/test-ops-inbox-parent-heartbeat.sh`.
+
 
 ## [3.10.20] - 2026-09-17
 
