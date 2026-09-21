@@ -33,6 +33,11 @@ volume is more than a glance.
   the per-channel checks in "Channel availability + fallback". Never spawn a scanner for an
   unconfigured / unreachable channel — it burns a turn and produces a misleading
   "unreachable" row. Build the workflow's channel list from the channels you confirmed up.
+- **Always report to the main agent by default.** Workers never address the
+  owner. No `AskUserQuestion`, no numbered options, no "what should I send?".
+  Return structured KEEP + draft text. The parent presents and gates sends.
+  At least every 30 seconds, `SendMessage` the parent one line
+  (`channel=… keep=… drafting=…`). Default, not opt-in.
 - **No `AskUserQuestion` inside the workflow.** Presentation, reply drafting, approval,
   archive, and the Cron offer all happen back in the main session _after_ the workflow
   returns. Workflow agents cannot gate sends, so they must never try.

@@ -58,6 +58,12 @@ else
   err "body does not mention continue drafting"
 fi
 
+if grep -q 'Always report to the main agent by default' "$SKILL"; then
+  ok "body reports to the parent by default"
+else
+  err "body missing report-to-parent default"
+fi
+
 echo ""
 echo "Results: $pass passed, $fail failed"
 if (( fail > 0 )); then

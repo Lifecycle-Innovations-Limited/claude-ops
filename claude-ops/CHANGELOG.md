@@ -8,6 +8,11 @@
   the owner does not have to type "continue drafting". Scanners still fan
   out; sends stay in the parent (Rule 6). Guard:
   `tests/test-ops-inbox-parent-autodraft.sh`.
+- Inbox workers report to the parent every 30 seconds by default. A
+  heartbeat script (`bin/ops-inbox-parent-heartbeat.sh`) exits with one
+  `INBOX HEARTBEAT` line so the parent prints it and relaunches; scanners
+  `SendMessage` on the same cadence. Guard:
+  `tests/test-ops-inbox-parent-heartbeat.sh`.
 
 ## [3.10.20] - 2026-09-17
 

@@ -68,6 +68,29 @@ This skill MUST run in the parent session. Never set `context: fork` — that
 parks the whole run (including drafts) in a background agent, so the parent
 idles until the owner types "continue drafting". Measured 2026-09-21.
 
+**Always report to the main agent by default.** Every Agent / Workflow /
+forked worker this skill launches returns KEEP rows, thread arcs, and draft
+text to the parent. It never `AskUserQuestion`, never numbered-options the
+owner, never waits for "continue". If this skill itself was spawned as a
+subagent, the same rule: the last message is a report for the parent, not a
+card for the owner.
+
+**30-second parent heartbeat (default).** At the start of every run, launch:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-parent-heartbeat.sh"
+```
+
+via Bash `run_in_background: true`. Default interval is 30 seconds
+(`OPS_INBOX_HEARTBEAT_SEC`). The job sleeps, prints one `INBOX HEARTBEAT`
+line, and exits. **The job's exit IS the ping to this parent session.**
+When it fires: print that line to the owner, then relaunch the same
+command. Never wait for the owner to ask for a status.
+
+Every background worker also `SendMessage`s the parent at least every 30
+seconds with one line (`channel=… keep=… drafting=…`). That is the
+default, not an opt-in.
+
 On `/ops:ops-inbox` / `/ops-inbox`, start drafting in THIS session without a
 second prompt:
 
