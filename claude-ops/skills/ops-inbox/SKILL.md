@@ -56,12 +56,53 @@ allowed-tools:
   - mcp__plugin_imessage_imessage__reply
 effort: high
 maxTurns: 60
-context: fork
 ---
 
 # OPS ► INBOX ZERO
 
 Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
+
+## Parent session: AUTO-START DRAFTING
+
+This skill MUST run in the parent session. Never set `context: fork` — that
+parks the whole run (including drafts) in a background agent, so the parent
+idles until the owner types "continue drafting". Measured 2026-09-21.
+
+**Always report to the main agent by default.** Every Agent / Workflow /
+forked worker this skill launches returns KEEP rows, thread arcs, and draft
+text to the parent. It never `AskUserQuestion`, never numbered-options the
+owner, never waits for "continue". If this skill itself was spawned as a
+subagent, the same rule: the last message is a report for the parent, not a
+card for the owner.
+
+**30-second parent heartbeat (default).** At the start of every run, launch:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-parent-heartbeat.sh"
+```
+
+via Bash `run_in_background: true`. Default interval is 30 seconds
+(`OPS_INBOX_HEARTBEAT_SEC`). The job sleeps, prints one `INBOX HEARTBEAT`
+line, and exits. **The job's exit IS the ping to this parent session.**
+When it fires: print that line to the owner, then relaunch the same
+command. Never wait for the owner to ask for a status.
+
+Every background worker also `SendMessage`s the parent at least every 30
+seconds with one line (`channel=… keep=… drafting=…`). That is the
+default, not an opt-in.
+
+On `/ops:ops-inbox` / `/ops-inbox`, start drafting in THIS session without a
+second prompt:
+
+1. Kick the cheap scan (`ops-inbox-scan`) and fan-out readers immediately.
+2. The moment the first KEEP / NEEDS_REPLY exists (scan JSON, keep.md,
+   thread_tail, or a reader returning), stage that draft. Do not wait for
+   the rest of the inbox.
+3. Queue further drafts as readers land. One draft → one approval → one send.
+4. Never wait for "continue drafting", "go", or "next?". The slash command
+   is the start signal.
+
+Scanners stay background and read-only. Sends never leave the parent.
 
 ## ⚠️ WHATSAPP TRANSPORT — MCP ONLY, NEVER `wacli`
 
@@ -150,8 +191,8 @@ Every run, in order:
 2b. **Every other channel in the same pass, in parallel:** iMessage/SMS (`$HERMES_HOME/bin/imessage-inbox-scan --days 30` — copies `-wal`/`-shm` first or recent messages are invisible; alphanumeric shortcodes and OTP bodies are `fyi`, never `needs_reply`). Slack: `channels_me {channel_types:"im,mpim"}` then `conversations_history` per human DM, never `conversations_unreads` — unread is never a filter (Sam, 2026-09-17), a DM he read on his phone and never answered stays invisible to an unread listing. Telegram user dialogs if configured. Email is already in the scan. A miss on one channel is not absence on another.
 3. **All-context sweep** (Rule 9 + `references/details.md` "ALL CONTEXT SOURCES"): query every configured calendar, mailbox, and messaging channel before any schedule claim or NEEDS_REPLY draft. Google Calendar alone is not enough — Notion show/calendar databases count when Notion is configured.
 4. `bin/ops-inbox-archive-set` report-only. Present KEEP vs ARCHIVE; `--apply` only after explicit OK.
-5. Deep-read KEEP / NEEDS_REPLY. Fan out if volume (`references/fan-out.md`). One read-only worker per channel, then one per KEEP thread-chunk. Stage the next draft the moment the previous card is answered — no "next?" pause.
-6. Stage drafts one at a time (Rule 6). Archive after a verified send.
+5. Deep-read KEEP / NEEDS_REPLY. Fan out if volume (`references/fan-out.md`). One read-only worker per channel, then one per KEEP thread-chunk. Stage the first draft as soon as one KEEP exists — do not wait for the full scan, and do not wait for "continue drafting". Stage the next draft the moment the previous card is answered — no "next?" pause.
+6. Stage drafts one at a time (Rule 6) in this parent session. Archive after a verified send.
 
 ## Every suggested send carries reasoning
 
