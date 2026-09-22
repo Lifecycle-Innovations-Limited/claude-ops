@@ -115,7 +115,7 @@ else
   [ "$b" = "waiting" ] && ok "answered-from-another-client thread lands in waiting" \
                        || bad "answered thread landed in '$b', expected waiting"
 
-  b="$(bucket_of "$OUT" "Quote for the remix")"
+  b="$(bucket_of "$OUT" "Quote for the project")"
   [ "$b" = "needs_reply" ] && ok "genuinely unanswered thread stays needs_reply" \
                            || bad "unanswered thread landed in '$b'"
 
