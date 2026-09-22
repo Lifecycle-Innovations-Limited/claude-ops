@@ -98,7 +98,10 @@ for cluster_arn in $(aws ecs list-clusters --output json --no-cli-pager 2>/dev/n
     jq --arg c "$name" '{cluster: $c, services: .clusters[0].statistics, status: .clusters[0].status}' || true
   aws ecs list-services --cluster "$name" --output json --no-cli-pager 2>/dev/null | \
     jq -r '.serviceArns[]' | while read svc; do
-    aws ecs describe-services --cluster "$name" --services "$(basename $svc)" \
+    # Pass the ARN as-is. basename strips it to the service name, and a name
+    # the shell splits on makes DescribeServices reject the whole batch with
+    # InvalidParameterException (seen 2026-09-22). The ARN is a valid identifier.
+    aws ecs describe-services --cluster "$name" --services "$svc" \
       --output json --no-cli-pager 2>/dev/null | \
       jq '.services[] | {name: .serviceName, desired: .desiredCount, running: .runningCount, pending: .pendingCount, status: .status, rolloutState: (.deployments[0].rolloutState // "STABLE"), lastEvent: (.events[0].message // "none")}' || true
   done
@@ -295,9 +298,10 @@ done
 ```bash
 jq -r '.projects[]? | select(.infra.ecs_clusters) | .infra.ecs_clusters[]' "$REGISTRY" 2>/dev/null | while read cluster; do
   aws ecs list-services --cluster "$cluster" --output text --query 'serviceArns[*]' --no-cli-pager 2>/dev/null | tr '\t' '\n' | while read svc_arn; do
-    svc=$(basename "$svc_arn")
-    aws ecs describe-services --cluster "$cluster" --services "$svc" --output json --no-cli-pager 2>/dev/null | \
-      jq --arg c "$cluster" --arg s "$svc" '{cluster: $c, service: $s, events: .services[0].events[:5]}' || true
+    # ARN, not the basename: a stripped name the shell splits on makes
+    # DescribeServices reject the call (seen 2026-09-22).
+    aws ecs describe-services --cluster "$cluster" --services "$svc_arn" --output json --no-cli-pager 2>/dev/null | \
+      jq --arg c "$cluster" --arg s "$svc_arn" '{cluster: $c, service: ($s | split("/")[-1]), events: .services[0].events[:5]}' || true
   done
 done
 ```
