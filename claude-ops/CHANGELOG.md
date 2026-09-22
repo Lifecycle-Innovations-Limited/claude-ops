@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [3.10.22] - 2026-09-22
+
+### Changed
+ops-dash: de CI-probe loopt per repo parallel met een limiet van 8 seconden, zodat het dashboard binnen de inline-grens rendert in plaats van als achtergrondtaak.
+
+
 ## [3.10.21] - 2026-09-21
 
 ### Fixed
