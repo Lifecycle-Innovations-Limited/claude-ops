@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [3.10.24] - 2026-09-22
+
+### Changed
+fix(infra-monitor): pass ECS service ARNs through instead of names, so DescribeServices no longer rejects the health check
+
+
 ## [3.10.23] - 2026-09-22
 
 ### Changed
