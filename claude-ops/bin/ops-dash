@@ -272,8 +272,13 @@ TOTAL_PROBES=13
     for repo in $REPOS; do
       CI_I=$((CI_I + 1))
       (
-        C=$(timeout 8 gh run list --repo "$repo" --limit 10 --json conclusion 2>/dev/null \
-          | jq '[.[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "0")
+        # Keep name and branch too. The fires section used to ask gh for them
+        # again, one repo at a time with no time limit, after every probe had
+        # finished. That second pass was the whole tail of the render.
+        timeout 8 gh run list --repo "$repo" --limit 10 --json conclusion,name,headBranch 2>/dev/null \
+          | jq -c --arg r "$repo" '[.[] | select(.conclusion == "failure") | {repo: $r, name, headBranch}]' 2>/dev/null \
+          > "$TMPDIR_DASH/ci_runs_$CI_I" || true
+        C=$(jq 'length' "$TMPDIR_DASH/ci_runs_$CI_I" 2>/dev/null || echo "0")
         case "$C" in ''|*[!0-9]*) C=0 ;; esac
         echo "$C" > "$TMPDIR_DASH/ci_fail_$CI_I"
       ) &
@@ -726,17 +731,11 @@ render_section_fires() {
   section_hdr "🔥" "FIRES"
   if [[ "${CI_FAILS:-0}" =~ ^[0-9]+$ ]] && [[ "${CI_FAILS:-0}" -gt 0 ]]; then
     p "  ${BRED}🚨 ${CI_FAILS} CI failure(s) detected across registered repos${RST}"
-    # Show failing runs per repo (using --repo flag, safe outside git cwd)
-    if [ -f "$REGISTRY" ] && command -v gh &>/dev/null; then
-      # Schema-tolerant: derive repo slugs from GSD .remote_url when .repos[] absent.
-      ops_registry_repos "$REGISTRY" \
-        | head -10 \
-        | while IFS= read -r repo; do
-            gh run list --repo "$repo" --limit 10 --json conclusion,name,headBranch 2>/dev/null \
-              | jq -r --arg r "$repo" \
-                '.[] | select(.conclusion == "failure") |
-                 "  🔴 \($r) · \(.name) · \(.headBranch)"' 2>/dev/null
-          done \
+    # The lines come from the probe above. Asking gh again here walked the
+    # repos in series with no time limit, so the dashboard finished after the
+    # inline window and landed as a background task instead of on screen.
+    if compgen -G "$TMPDIR_DASH/ci_runs_*" >/dev/null 2>&1; then
+      jq -r '.[] | "  🔴 \(.repo) · \(.name) · \(.headBranch)"' "$TMPDIR_DASH"/ci_runs_* 2>/dev/null \
         | head -5 \
         | while IFS= read -r line; do p "${RED}${line}${RST}"; done \
         || true
