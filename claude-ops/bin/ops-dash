@@ -258,17 +258,28 @@ TOTAL_PROBES=13
 
 # 3) CI failures (via registry repos) + merged PR sparkline (GraphQL)
 (
-  # CI fails: iterate registry repos with gh run list --repo (works outside git cwd)
+  # CI fails: one gh call per registry repo, in parallel. In series this was the
+  # slow probe (45s of a 56s render) and the dashboard never reached the screen.
+  # Each repo writes its own count; a repo that does not answer within 8s counts
+  # as 0 rather than holding the render. The count is unchanged: failures among
+  # the last 10 runs.
   FAIL_COUNT=0
   if [ -f "$REGISTRY" ] && command -v gh &>/dev/null; then
     # Schema-tolerant: GSD registry has no .repos[]; derive slugs from .remote_url.
     # `|| true` preserves set -e guard so the probe still touches done_ci on jq error.
     REPOS=$(ops_registry_repos "$REGISTRY" || true)
+    CI_I=0
     for repo in $REPOS; do
-      C=$(gh run list --repo "$repo" --limit 10 --json conclusion 2>/dev/null \
-        | jq '[.[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "0")
-      FAIL_COUNT=$((FAIL_COUNT + C))
+      CI_I=$((CI_I + 1))
+      (
+        C=$(timeout 8 gh run list --repo "$repo" --limit 10 --json conclusion 2>/dev/null \
+          | jq '[.[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "0")
+        case "$C" in ''|*[!0-9]*) C=0 ;; esac
+        echo "$C" > "$TMPDIR_DASH/ci_fail_$CI_I"
+      ) &
     done
+    wait
+    FAIL_COUNT=$(cat "$TMPDIR_DASH"/ci_fail_* 2>/dev/null | awk '{s+=$1} END {print s+0}')
   fi
   echo "$FAIL_COUNT" > "$TMPDIR_DASH/ci_fails"
 
