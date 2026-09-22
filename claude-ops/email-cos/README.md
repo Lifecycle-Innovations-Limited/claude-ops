@@ -47,7 +47,7 @@ bash claude-ops/email-cos/install.sh
 ### Prerequisites
 
 - `claude` CLI authenticated (`claude auth login`)
-- `gog` CLI authenticated for your Gmail account (`gog auth add your@gmail.com --services gmail`)
+- `gog` CLI authenticated for your Gmail account (`gog auth add your.address@gmail.com --services gmail`)
 - `python3` (3.9+) in PATH
 - `systemd --user` (Linux)
 - `once.sh` lock library at `~/.claude/scripts/lib/once.sh` (included in claude-ops)

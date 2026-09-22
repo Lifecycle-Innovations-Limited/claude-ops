@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HEA Paperclip↔Linear fix-all wave.
+"""Paperclip↔Linear fix-all wave.
 
 1) Hard-lock multi canons (description UNLINKED on non-canon)
 2) Remap dead/canceled Linear targets for open PC product issues
@@ -33,6 +33,9 @@ from alignment_lib import (  # noqa: E402
     CLIENT_TEAM_KEY,
     PC_TO_LINEAR_STATE,
     add_comment,
+    client_issue_pattern,
+    client_team_prefix,
+    linear_issue_url,
     load_env,
     now_iso,
     patch_issue,
@@ -43,10 +46,13 @@ PC_CO = os.environ.get("PAPERCLIP_CLIENT_COMPANY_ID", "")
 CLIENT_TEAM_ID = os.environ.get("LINEAR_CLIENT_TEAM_ID", "")
 AGENT = os.environ.get("LINEAR_AGENTCORE_USER_ID", "")
 LINEAR_GQL = "https://api.linear.app/graphql"
-# Positive link markers only — prose like "No linear:HEA-N" must NOT count as linked
-LINEAR_RE = re.compile(r"(?m)(?:^|\n)\s*linear:\s*(HEA-\d+)\b", re.I)
-ORIGINAL_LIN_RE = re.compile(r"Original Linear Issue:\s*\[(HEA-\d+)\]", re.I)
-THRASH_LOCK_RE = re.compile(r"\[THRASH-CANON LOCKED\]\s*linear:\s*(HEA-\d+)\b", re.I)
+# Positive link markers only — prose like "No linear:TEAM-N" must NOT count as linked.
+# The prefix is the configured client team, never a committed workspace key.
+_ISSUE = client_issue_pattern()
+_TEAM = client_team_prefix()
+LINEAR_RE = re.compile(rf"(?m)(?:^|\n)\s*linear:\s*{_ISSUE}\b", re.I)
+ORIGINAL_LIN_RE = re.compile(rf"Original Linear Issue:\s*\[{_ISSUE}\]", re.I)
+THRASH_LOCK_RE = re.compile(rf"\[THRASH-CANON LOCKED\]\s*linear:\s*{_ISSUE}\b", re.I)
 
 
 def has_positive_lin_link(desc: str | None, lin: str) -> bool:
@@ -68,10 +74,10 @@ STATE_PATH = Path.home() / ".hermes" / "state" / "linear_fix_all.json"
 
 # Shared thrash canons (single source)
 try:
-    from hea_thrash_canons import FORCE_UNLINK, MULTI_CANON, STANDING_OWN_LINEAR  # type: ignore
+    from client_thrash_canons import FORCE_UNLINK, MULTI_CANON, STANDING_OWN_LINEAR  # type: ignore
 except Exception:  # noqa: BLE001
     # No fallback canons ship with this repo: these are one client's real
-    # Linear issue ids. Supply them in an out-of-repo ``hea_thrash_canons``
+    # Linear issue ids. Supply them in an out-of-repo ``client_thrash_canons``
     # module. Empty means "no canon overrides", which is correct here.
     MULTI_CANON = {}
     FORCE_UNLINK = {}
@@ -212,15 +218,15 @@ def create_export(pc: dict, states: dict[str, str]) -> tuple[str | None, str]:
     issue = ((res.get("data") or {}).get("issueCreate") or {}).get("issue")
     if not issue:
         return None, f"FAIL create {pc_id}: {res.get('errors')}"
-    return issue["identifier"], issue.get("url") or f"https://linear.app/lifecycle-innovations/issue/{issue['identifier']}"
+    return issue["identifier"], issue.get("url") or linear_issue_url(issue["identifier"])
 
 
 def force_unlink(pc: str, bad_lin: str, canon: str | None, events: list[str]) -> None:
     desc = q(f"SELECT coalesce(description,'') FROM issues WHERE identifier='{pc}'")
     new = re.sub(rf"linear:\s*{re.escape(bad_lin)}\b", "linear:UNLINKED", desc, flags=re.I)
     new = re.sub(rf"Original Linear Issue:\s*\[{re.escape(bad_lin)}\]\([^)]*\)", "", new, flags=re.I)
-    # strip any remaining HEA linear markers that equal bad_lin
-    new = re.sub(r"linear:\s*HEA-\d+\b", "linear:UNLINKED", new, flags=re.I)
+    # strip any remaining client-team linear markers that equal bad_lin
+    new = re.sub(rf"linear:\s*{client_issue_pattern(group=False)}\b", "linear:UNLINKED", new, flags=re.I)
     banner = f"[UNLINKED from linear:{bad_lin}; canonical is {canon or 'none'}↔{bad_lin}]\n"
     if not new.lstrip().startswith("[UNLINKED"):
         new = banner + new
@@ -241,11 +247,11 @@ def force_link(pc: str, lin: str, url: str, events: list[str]) -> None:
     # remove UNLINKED banners and false markers for this re-link
     new = re.sub(r"^\[UNLINKED from linear:[^\]]+\]\n?", "", (desc or "").lstrip())
     new = re.sub(r"linear:\s*UNLINKED\b", "", new, flags=re.I)
-    # neutralize other linear:HEA markers
+    # neutralize other linear:<TEAM> markers
     def _keep(m: re.Match) -> str:
         return m.group(0) if m.group(1).upper() == lin.upper() else ""
 
-    new = re.sub(r"linear:\s*(HEA-\d+)\b", _keep, new, flags=re.I)
+    new = re.sub(rf"linear:\s*{_ISSUE}\b", _keep, new, flags=re.I)
     if f"linear:{lin}" not in new or not has_positive_lin_link(new, lin):
         # strip any stale prose-only mentions of this lin before writing authoritative footer
         new = re.sub(rf"(?m)^\s*linear:\s*{re.escape(lin)}\s*$", "", new, flags=re.I)
@@ -275,7 +281,7 @@ def extract_lin_from_pc(pc: str) -> str | None:
     ):
         # Positive re-link only if linear:HEA appears AFTER an explicit re-link section
         m_pos = re.search(
-            r"(?:fix-all: confirmed canonical link |Exported to Linear |paperclip-export:linked|THRASH-CANON LOCKED)[\s\S]{0,200}?linear:\s*(HEA-\d+)",
+            rf"(?:fix-all: confirmed canonical link |Exported to Linear |paperclip-export:linked|THRASH-CANON LOCKED)[\s\S]{{0,200}}?linear:\s*{_ISSUE}",
             desc or "",
             re.I,
         )
@@ -312,13 +318,13 @@ def extract_lin_from_pc(pc: str) -> str | None:
     bodies = q(
         f"""SELECT string_agg(left(body,400), E'\\n') FROM (
               SELECT body FROM issue_comments c JOIN issues i ON i.id=c.issue_id
-              WHERE i.identifier='{pc}' AND c.body ~* 'linear:\\s*HEA-'
+              WHERE i.identifier='{pc}' AND c.body ~* 'linear:\\s*{_TEAM}-'
                 AND c.body NOT ILIKE '%false-linear:%' AND c.body NOT ILIKE '%linear:UNLINKED%'
                 AND c.body NOT ILIKE '%cleanup-%' AND c.body NOT ILIKE '%fix-all:%'
                 AND c.body NOT ILIKE '%**Linear comment**%'
                 AND (c.body ILIKE '%Exported to Linear%' OR c.body ILIKE '%mirror:linear%'
                      OR c.body ILIKE '%paperclip-export:linked%' OR c.body ILIKE '%Original Linear Issue:%'
-                     OR (length(c.body) < 220 AND c.body ~* 'linear:\\s*HEA-'))
+                     OR (length(c.body) < 220 AND c.body ~* 'linear:\\s*{_TEAM}-'))
               ORDER BY c.created_at DESC LIMIT 10
             ) t"""
     )
@@ -327,7 +333,7 @@ def extract_lin_from_pc(pc: str) -> str | None:
 
 
 def find_existing_export(pc: str, *, include_terminal: bool = True) -> str | None:
-    """Find Linear issue titled [Paperclip HEA-N] … (reuse, don't re-create).
+    """Find Linear issue titled [Paperclip <team>-N] … (reuse, don't re-create).
 
     Prefer live/open hits. If include_terminal, fall back to Duplicate/Canceled/
     Production mirrors so fix-all does not mint open clones of closed work.
@@ -408,12 +414,12 @@ def main() -> int:
             force_unlink(pc, bad, MULTI_CANON.get(bad), events)
             own = extract_lin_from_pc(pc) or find_existing_export(pc)
             if own and own != bad:
-                force_link(pc, own, f"https://linear.app/lifecycle-innovations/issue/{own}", events)
+                force_link(pc, own, linear_issue_url(own), events)
                 events.append(f"standing restore own {pc}→{own}")
             elif remapped < args.max_remap:
                 found = find_existing_export(pc)
                 if found:
-                    force_link(pc, found, f"https://linear.app/lifecycle-innovations/issue/{found}", events)
+                    force_link(pc, found, linear_issue_url(found), events)
                     events.append(f"standing reuse {pc}→{found}")
                 else:
                     row = json.loads(
@@ -433,7 +439,7 @@ def main() -> int:
                         else:
                             events.append(url_or_err)
         elif own and own != bad and f"linear:{own}" not in (desc or ""):
-            force_link(pc, own, f"https://linear.app/lifecycle-innovations/issue/{own}", events)
+            force_link(pc, own, linear_issue_url(own), events)
             events.append(f"standing keep own {pc}→{own}")
         else:
             events.append(f"standing ok {pc}")
@@ -441,10 +447,10 @@ def main() -> int:
     # multi canons
     for lin, canon in MULTI_CANON.items():
         if not dry:
-            # only re-link if missing (positive markers only — ignore prose "No linear:HEA-N")
+            # only re-link if missing (positive markers only — ignore prose "No linear:TEAM-N")
             cdesc = q(f"SELECT coalesce(description,'') FROM issues WHERE identifier='{canon}'")
             if not has_positive_lin_link(cdesc, lin):
-                force_link(canon, lin, f"https://linear.app/lifecycle-innovations/issue/{lin}", events)
+                force_link(canon, lin, linear_issue_url(lin), events)
             else:
                 events.append(f"canon ok {canon}→{lin}")
         else:
@@ -486,12 +492,12 @@ WHERE company_id='{PC_CO}' AND status NOT IN ('cancelled','canceled')
                 continue
             existing = extract_lin_from_pc(p) or find_existing_export(p)
             if existing and existing != lin:
-                force_link(p, existing, f"https://linear.app/lifecycle-innovations/issue/{existing}", events)
+                force_link(p, existing, linear_issue_url(existing), events)
                 events.append(f"skip re-export {p}: keep existing {existing}")
                 continue
             found = find_existing_export(p)
             if found:
-                force_link(p, found, f"https://linear.app/lifecycle-innovations/issue/{found}", events)
+                force_link(p, found, linear_issue_url(found), events)
                 events.append(f"reuse export {p}→{found}")
                 continue
             new_lin, url_or_err = create_export(row, states)
@@ -538,7 +544,7 @@ SELECT json_agg(row_to_json(t)) FROM (
                 continue
             found = find_existing_export(pc)
             if found:
-                force_link(pc, found, f"https://linear.app/lifecycle-innovations/issue/{found}", events)
+                force_link(pc, found, linear_issue_url(found), events)
                 remapped += 1
                 events.append(f"export-reuse missing {pc}→{found}")
                 continue
@@ -561,7 +567,7 @@ SELECT json_agg(row_to_json(t)) FROM (
             force_unlink(pc, lin, None, events)
             found = find_existing_export(pc)
             if found:
-                force_link(pc, found, f"https://linear.app/lifecycle-innovations/issue/{found}", events)
+                force_link(pc, found, linear_issue_url(found), events)
                 remapped += 1
                 events.append(f"remap missing-reuse {pc}: {lin}→{found}")
             else:
@@ -590,7 +596,7 @@ SELECT json_agg(row_to_json(t)) FROM (
             found = find_existing_export(pc, include_terminal=True)
             if found and found != lin:
                 # Prefer a live open sibling if one already exists; else keep terminal.
-                force_link(pc, found, f"https://linear.app/lifecycle-innovations/issue/{found}", events)
+                force_link(pc, found, linear_issue_url(found), events)
                 remapped += 1
                 events.append(f"remap canceled-reuse {pc}: {lin}→{found}")
             else:
@@ -607,7 +613,7 @@ SELECT json_agg(row_to_json(t)) FROM (
                 continue
             found = find_existing_export(pc, include_terminal=False)
             if found and found != lin:
-                force_link(pc, found, f"https://linear.app/lifecycle-innovations/issue/{found}", events)
+                force_link(pc, found, linear_issue_url(found), events)
                 remapped += 1
                 events.append(f"remap production-reuse {pc}: {lin}→{found}")
             else:

@@ -179,7 +179,7 @@ ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
 ```
 
 If `in_progress` or `done` exists, skip — another session or Perplexity already
-acted on this issue. Surface `awaiting_sam` entries as "update already staged."
+acted on this issue. Surface `awaiting_user` entries as "update already staged."
 
 ### Claim + resolve
 

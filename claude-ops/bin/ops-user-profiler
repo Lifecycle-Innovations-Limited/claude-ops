@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ops-user-profiler — surface-scrape the machine to pre-identify the user so the
-# setup wizard can CONFIRM ("Hey Sam, you're in Amsterdam — right?") instead of
+# setup wizard can CONFIRM ("Hey, you're in your home city — right?") instead of
 # interrogating. Writes a compact profile + a best-guess prefilled preferences
 # patch to the plugin data dir. Cross-OS, read-only, token-frugal (NO file dumps).
 #

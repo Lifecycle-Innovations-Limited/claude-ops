@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Paperclip ↔ Linear mirror (Paperclip is SSOT).
 
-Outbound: Paperclip issues with `mirror:linear` or `linear:HEA-N` → update Linear state/comment.
+Outbound: Paperclip issues with `mirror:linear` or `linear:<TEAM>-N` → update Linear state/comment.
 Inbound: configured client-team Linear issues labeled `agent-work` (or filter) → create Paperclip if missing.
 
 Never reverse SSOT. Idempotent. State: ~/.hermes/state/paperclip_linear_mirror.json
@@ -245,7 +245,7 @@ def run_outbound(state: dict, dry_run: bool, limit: int) -> list[str]:
     events: list[str] = []
     rows = outbound_candidates_sql(limit)
     if not rows:
-        events.append("outbound: no candidates (mirror:linear / linear:HEA-*)")
+        events.append(f"outbound: no candidates (mirror:linear / linear:{CLIENT_TEAM_KEY}-*)")
         return events
     # Cache Linear team workflow states per team key (HEA vs MES vs DUTCH …)
     states_by_team: dict[str, list[dict]] = {}
@@ -301,7 +301,7 @@ def run_outbound(state: dict, dry_run: bool, limit: int) -> list[str]:
             # optional mirror marker. Do not treat those as broken mappings.
             if re.search(r"mirror:\s*linear\s*#\s*optional", blob, re.I):
                 continue
-            events.append(f"outbound {ident}: no explicit linear: link (refusing bare [HEA-N] parent titles)")
+            events.append(f"outbound {ident}: no explicit linear: link (refusing bare [{CLIENT_TEAM_KEY}-N] parent titles)")
             continue
         pc_status = (issue.get("status") or "").lower()
         # The local state file is only an audit trail, not proof of remote state.

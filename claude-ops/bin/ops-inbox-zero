@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ops-inbox-zero.sh — one-shot /ops:inbox pass for Argo (Hermes port of claude-ops).
 #
-# PURPOSE (Sam 2026-07-21 — "wire all of what you just did into a single script
+# PURPOSE (the operator 2026-07-21 — "wire all of what you just did into a single script
 # so next run is one call"). Replaces the ~30 tool calls the agent has to make
 # each /ops:inbox session with a deterministic shell pipeline that:
 #
@@ -18,12 +18,12 @@
 #      not reachable.
 #   6. Deep-reads each WA needs-reply via sqlite (phone + lid JIDs merged) and
 #      applies the demote matrix:
-#         - "Thx Sam!" / "Top!" / "Thanks" / ack after Sam already answered the
+#         - "Thx the operator!" / "Top!" / "Thanks" / ack after the operator already answered the
 #           same ask → archive (handled, ball external)
 #         - holiday / "we'll look into it" / soft social → archive
 #         - creative hold ("going to have a listen" / "ik luister") → KEEP
 #         - crisis/personal surface (per operator env) → KEEP
-#         - "asking a question" with ball on Sam → KEEP
+#         - "asking a question" with ball on the operator → KEEP
 #   7. Deep-reads each email needs-reply (gmail get / thread get) and applies
 #      the same demote matrix + Rule-6 SENT/Cc cross-thread verify (5b).
 #   8. WA archive pass: for every demoted / WAITING / soft-social / newsletter /
@@ -41,7 +41,7 @@
 #
 # EXIT CODES:
 #   0  scan/report pass succeeded; requested archive pass also succeeded
-#   2  bridge unreachable — DO NOT trust the WA store, agent must ask Sam
+#   2  bridge unreachable — DO NOT trust the WA store, agent must ask the operator
 #   3  ops-inbox-scan failure — agent must fall back to per-channel scans
 #
 # FLAGS:
@@ -230,7 +230,7 @@ CREATIVE_HOLD_PHRASES = [
 ]
 ME_ANSWERED_PHRASES = [
     "Haha negeer", "Haha negeer dat laatste",
-    "Thanks!", "Top!", "Thx Sam!", "Thanks👍🏻",
+    "Thanks!", "Top!", "Thx!", "Thanks👍🏻",
     "Mooi man", "👍", "🙏", "❤️",
 ]
 # Crisis lane is configured per-deployment via the OPS_INBOX_CRISIS_JIDS env var.
@@ -276,19 +276,19 @@ def classify_wa(who, jid, alt_jids, msgs):
     for crisis_jid in crisis_map:
         if crisis_jid in jids:
             return ("keep", f"crisis lane ({crisis_map[crisis_jid]})", "")
-    # Creative hold: Sam said "going to have a listen" — KEEP
+    # Creative hold: the operator said "going to have a listen" — KEEP
     if any(p.lower() in text_blob for p in CREATIVE_HOLD_PHRASES):
-        return ("keep", "creative hold (Sam still owes listen)", "")
-    # Already-answered: last Sam reply non-question + ack from them → archive
+        return ("keep", "creative hold (the operator still owes listen)", "")
+    # Already-answered: last the operator reply non-question + ack from them → archive
     if last_from_me:
-        return ("archive", "last from Sam, ball external", "")
+        return ("archive", "last from the operator, ball external", "")
     # Holiday / "we'll look into it" → archive
     if re.search(r"we'll look into it|will look into it|holiday|on holiday|vakantie", text_blob):
         return ("archive", "waiting external (holiday)", "")
-    # Need-decision question from them (ends with ?, no Sam reply) → KEEP
+    # Need-decision question from them (ends with ?, no the operator reply) → KEEP
     latest_text = (msgs[0][2] or "").strip()
     if not last_from_me and ("?" in latest_text or "even" in latest_text.lower() or "graag" in latest_text.lower()):
-        return ("keep", "question with ball on Sam", latest_text[:120])
+        return ("keep", "question with ball on the operator", latest_text[:120])
     return ("unsure", "rule-ambiguous", latest_text[:120])
 
 if do_wa and scan.get("whatsapp"):
@@ -307,7 +307,7 @@ if do_wa and scan.get("whatsapp"):
             "reason": reason,
             "draft_hint": draft,
         })
-    # GROUPS: rule = archive unless @mention of Sam in latest
+    # GROUPS: rule = archive unless @mention of the operator in latest
     for g in scan["whatsapp"].get("groups", []):
         keep["groups"].append({
             "channel": "wa-group",
@@ -360,7 +360,7 @@ if do_email and Path(gmail_path).exists():
 # Slack: parse the slack_reply_triage.py output. Format:
 #   AUTH: {...}
 #   UNREAD (raw, pre-filter): channels=N ims=N mpims=N
-#   === HUMAN DMs awaiting Sam (bots/stale/invites dropped) ===
+#   === HUMAN DMs awaiting the operator (bots/stale/invites dropped) ===
 #     [1.2d] person: preview
 #     ...
 if slack_path and Path(slack_path).exists():
@@ -373,7 +373,7 @@ if slack_path and Path(slack_path).exists():
             "auth": auth_ok,
             "auth_line": auth_line,
             "verdict": "keep" if auth_ok else "unsure",
-            "reason": "slack auth ok" if auth_ok else "slack auth failed — surface to Sam for re-auth",
+            "reason": "slack auth ok" if auth_ok else "slack auth failed — surface to the operator for re-auth",
         })
         in_human_dms = False
         for line in slack_text.splitlines():
@@ -394,7 +394,7 @@ if slack_path and Path(slack_path).exists():
                         "age": age,
                         "preview": preview,
                         "verdict": "keep",
-                        "reason": "human DM awaiting Sam (no Slack post without Rule-6)",
+                        "reason": "human DM awaiting the operator (no Slack post without Rule-6)",
                     })
     except Exception as e:
         keep["slack"].append({"error": str(e)})

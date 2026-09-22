@@ -469,7 +469,7 @@ ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
 ```
 
 Skip any message/thread where a `done` or `in_progress` entry exists. Surface
-`awaiting_sam` entries as "draft already staged — resend or edit?"
+`awaiting_user` entries as "draft already staged — resend or edit?"
 
 ### Claim + resolve
 

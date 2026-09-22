@@ -347,7 +347,7 @@ unread. A sweep filtered on unread reports inbox zero while read and
 archived threads still hold open questions. Unread is NEVER a valid
 triage filter on any channel: a message opened and navigated away from
 without a reply still owes one. `unread-filter-guard.py` (wired into
-`pre-tool-dispatcher.py` on hub/Mac/HYPEST) hard-blocks `whatsapp_unread`,
+`pre-tool-dispatcher.py`) hard-blocks `whatsapp_unread`,
 `mcp__slack__conversations_unreads`, and any `is:unread` / `unread_count`
 / `unread=1` filter passed to `terminal`/`execute_code`.
 

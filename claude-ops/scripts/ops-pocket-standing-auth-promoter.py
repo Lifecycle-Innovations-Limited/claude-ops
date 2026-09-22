@@ -3,7 +3,7 @@
 
 the owner's 2026-05-25 directive: "you may always auto nudge agents without my
 permission thats your mission" + "babysit pocket workers + nudge stalls. so
-sam has to do nothing but leave pocket notes".
+the operator has to do nothing but leave pocket notes".
 
 When pocket-triage classifies a task as ASK (high-stakes / ambiguous), this
 script post-processes review.jsonl: if the task matches one of the standing

@@ -69,7 +69,7 @@ build_tracked_list() {
     | grep -vE "(^|/)($filter)/" \
     | while IFS= read -r rel; do
         case "$root_git/$rel" in
-          "$PLUGIN_ROOT"/*) printf '%s\n' "$root_git/$rel" ;;
+          "$PLUGIN_ROOT"/*|"$root_git/.github/"*) printf '%s\n' "$root_git/$rel" ;;
         esac
       done > "$TRACKED_FILE"
   [[ -s "$TRACKED_FILE" ]]
@@ -99,7 +99,7 @@ build_tracked_all_list() {
     | grep -vE '(^|/)tests/(test-no-secrets\.sh|known-public-constants\.txt|test-pii-gate-fires\.sh|test-pre-commit-hook-blocks\.sh)$' \
     | while IFS= read -r rel; do
         case "$root_git/$rel" in
-          "$PLUGIN_ROOT"/*) printf '%s\n' "$root_git/$rel" ;;
+          "$PLUGIN_ROOT"/*|"$root_git/.github/"*) printf '%s\n' "$root_git/$rel" ;;
         esac
       done > "$TRACKED_ALL_FILE"
   [[ -s "$TRACKED_ALL_FILE" ]]

@@ -18,7 +18,7 @@
 #
 # DOES NOT COVER (left to the skill as single, light inline MCP calls — NOT
 # subagents): Slack (channels_me + conversations_history per DM, never
-# conversations_unreads — unread is never a filter, Sam 2026-09-17) and
+# conversations_unreads — unread is never a filter, the operator 2026-09-17) and
 # Telegram (one list_dialogs call). Those are one/few round-trips; a subagent
 # is overkill.
 #
@@ -474,7 +474,7 @@ if [ "$DO_EMAIL" = 1 ]; then
   # scan never saw it, three times in a row.
   #
   # This mirrors the WhatsApp forgotten-debt sweep: pull archived inbound mail
-  # (never from Sam) plus his own sent mail over --debt-days, and let python
+  # (never from the operator) plus his own sent mail over --debt-days, and let python
   # keep only the threads whose LAST message is inbound. Conversation debt is
   # direction, not label state.
   if [ "$GMAIL_OK" = 1 ] && [ ${#ACCT_ARGS[@]} -gt 0 ]; then
@@ -1162,7 +1162,7 @@ def _msg_when(m):
 # info@ mailers, ticket robots, DMARC reporters, OTP senders and calendar
 # plumbing otherwise drown the handful of humans actually waiting — measured
 # 2026-09-16: 47 raw rows, 12 real conversations. Anything genuinely human
-# writing from such an address still reaches Sam through the inbox pass.
+# writing from such an address still reaches the operator through the inbox pass.
 MACHINE_SENDER_RE = re.compile(
     r"(no[-_.]?reply|do[-_.]?not[-_.]?reply|notifications?@|notifications?_at_|alerts?@|"
     r"mailer-daemon|postmaster@|@.*\.amazonses\.com|bounce|"
@@ -1177,8 +1177,8 @@ def _answered_threads():
 
     Gmail keeps the INBOX label on a thread after you reply from another client
     (phone, web, a different alias). The envelope pass only sees the last
-    *inbound* message and calls that debt, so a thread Sam answered himself
-    minutes ago still reads as "waiting for Sam". That happened on 2026-09-16:
+    *inbound* message and calls that debt, so a thread the operator answered himself
+    minutes ago still reads as "waiting for the operator". That happened on 2026-09-16:
     he replied to Tjark at 11:03, the scan still listed it, and he had to catch
     it. Debt is direction, not label state, so build the set of threads we
     already answered and let the inbox pass demote them.
@@ -1239,10 +1239,10 @@ def _email_watermarks():
     """
     base = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
     # Key on the mailbox actually READ, not the one requested. --gmail-account
-    # names Sam's alias (sam@healify.ai), but every alias forwards into one real
-    # mailbox and lib/gog-account.sh resolves the query to that account. Keying
-    # on the alias wrote watermarks nobody ever reads back, so a swept thread
-    # came straight back on the next scan of that alias.
+    # may name an alias, but every alias forwards into one real mailbox and
+    # lib/gog-account.sh resolves the query to that account. Keying on the
+    # alias wrote watermarks nobody ever reads back, so a swept thread came
+    # straight back on the next scan of that alias.
     read_acct = os.environ.get("OPS_GOG_ACCOUNT") or ACCT or "default"
     safe = re.sub(r"[^a-z0-9._-]+", "_", read_acct.lower())
     path = os.path.join(base, "state", "ops-email-sweep-watermarks-%s.json" % safe)
@@ -1304,11 +1304,11 @@ def forgotten_email_threads():
         # We archived this on purpose. Only real if they wrote again AFTER that.
         #
         # EXCEPTION, and it matters: a watermark closes ONE-WAY mail, never a
-        # conversation Sam is actually in. A bulk sweep stamps hundreds of
+        # conversation the operator is actually in. A bulk sweep stamps hundreds of
         # threads in one second (1007 on 2026-09-16) without a human reading any
         # of them, and that wiped all 12 genuine two-way threads — Believe,
         # PingPong, Ace, Ikos — from the result. Archiving is a filing decision;
-        # it is not evidence that a reply was sent. So a thread Sam has written
+        # it is not evidence that a reply was sent. So a thread the operator has written
         # into survives its watermark and is demoted only by the direction test
         # above (we answered after them), which is the honest signal.
         mark = _when_epoch(swept.get(tid))
@@ -1316,7 +1316,7 @@ def forgotten_email_threads():
         if mark is not None and inbound_at is not None and inbound_at <= mark:
             # A BULK stamp (hundreds in one second) is a filing decision, not
             # proof anyone read the thread, so it may not silence a conversation
-            # Sam is actually in. A stamp we set alone, deliberately, after
+            # the operator is actually in. A stamp we set alone, deliberately, after
             # reading it, may. `bulk` marks the timestamps shared by many
             # threads at once.
             if tid not in participated or mark not in BULK_MARKS:
@@ -1338,14 +1338,14 @@ def forgotten_email_threads():
             "date": m.get("date"),
             "labels": labels,
             "forgotten": True,
-            "sam_participated": tid in participated,
+            "operator_participated": tid in participated,
             "note": ("KEEP — archived/filtered out of the inbox but they still "
                      "spoke last inside the %d-day debt window; deep-read before "
                      "drafting" % DEBT_DAYS),
         })
     # Threads the owner already joined rank first: those are live conversations
     # someone is actively waiting on. Recency breaks ties inside each group.
-    items.sort(key=lambda x: (x["sam_participated"], last_in.get(x["threadId"], "")),
+    items.sort(key=lambda x: (x["operator_participated"], last_in.get(x["threadId"], "")),
                reverse=True)
     return items
 
@@ -1434,7 +1434,7 @@ def _scan_email_inbox():
             continue
         is_sent_last = ("SENT" in labels) or (self_addr and self_addr == from_email_addr(frm))
         # Did we already answer this THREAD? The envelope row is the last
-        # inbound message, which stays visible after a reply sent from Sam's
+        # inbound message, which stays visible after a reply sent from the operator's
         # phone or another alias. Without this the scan hands him back work he
         # finished himself.
         if not is_sent_last and tid and tid in ANSWERED:

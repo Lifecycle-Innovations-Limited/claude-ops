@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# test-ops-inbox-answered-thread.sh — a thread Sam already answered is not debt.
+# test-ops-inbox-answered-thread.sh — a thread the operator already answered is not debt.
 #
-# 2026-09-16, caught by Sam: "Hebben tjark toch al terug gemaild?" The scan
-# listed a Wave Wave thread as needing his reply while he had answered it at
-# 11:03 that same morning from another client. Gmail keeps the INBOX label on
-# the thread after such a reply, and the envelope pass only reads the last
-# INBOUND message, so it read as debt.
+# 2026-09-16: the scan listed a thread as needing a reply after the operator had
+# already answered it that morning from another client. Gmail keeps the INBOX
+# label on the thread after such a reply, and the envelope pass only reads the
+# last INBOUND message, so it read as debt.
 #
 # Debt is direction, not label state. If our newest message in a thread is
 # newer than theirs, the ball is with them: it belongs in waiting, never in
@@ -29,8 +28,8 @@ trap 'rm -rf "$TMP"' EXIT
 # ------------------------------------------------------------------ fixtures --
 # Three Gmail threads, written straight into the files the scan reads. The
 # shapes are the ones that actually occur:
-#   t-answered : they wrote, WE replied later. Same shape as the Wave Wave
-#                thread Sam answered from his phone. Must NOT be needs_reply.
+#   t-answered : they wrote, WE replied later. Same shape as a thread the
+#                operator answered from another client. Must NOT be needs_reply.
 #   t-open     : they wrote, we never replied. Must stay needs_reply.
 #   t-stale    : we replied, THEN they wrote again. Ball is back with us.
 python3 - "$TMP" <<'PY'
@@ -49,11 +48,11 @@ def msg(mid, tid, frm, subj, when, labels):
 # What the INBOX query returns: the last INBOUND message of each thread.
 # All three still carry INBOX, which is exactly why label state cannot decide.
 inbox = [
-    msg("m1", "t-answered", "Tjark <tjark@example.com>", "Re: First version",
+    msg("m1", "t-answered", "Alex <alex@example.com>", "Re: First version",
         ts(days=1), ["INBOX"]),
-    msg("m2", "t-open", "Nina <nina@example.com>", "Quote for the remix",
+    msg("m2", "t-open", "Blake <blake@example.com>", "Quote for the project",
         ts(days=2), ["INBOX"]),
-    msg("m3", "t-stale", "Pim <pim@example.com>", "Re: Contract",
+    msg("m3", "t-stale", "Casey <casey@example.com>", "Re: Contract",
         ts(hours=2), ["INBOX"]),
 ]
 
@@ -62,11 +61,11 @@ debt_in = list(inbox)
 
 # Our own sent mail over the debt window.
 sent = [
-    # Answered AFTER Tjark wrote: this is the fix under test.
-    msg("s1", "t-answered", "Sam <sam@example.com>", "Re: First version",
+    # Answered AFTER Alex wrote: this is the fix under test.
+    msg("s1", "t-answered", "User <user@example.com>", "Re: First version",
         ts(hours=3), ["SENT"]),
-    # Answered BEFORE Pim wrote again: still our turn.
-    msg("s2", "t-stale", "Sam <sam@example.com>", "Re: Contract",
+    # Answered BEFORE Casey wrote again: still our turn.
+    msg("s2", "t-stale", "User <user@example.com>", "Re: Contract",
         ts(days=3), ["SENT"]),
 ]
 
@@ -81,7 +80,7 @@ PY
 # exercises the shipped classifier and not a copy of it.
 run_scan() {
   OIS_DAYS=7 OIS_DEBT_DAYS=90 OIS_DO_WA=0 OIS_DO_EMAIL=1 \
-  OIS_GMAIL_ACCOUNT="sam@example.com" \
+  OIS_GMAIL_ACCOUNT="user@example.com" \
   OIS_GMAIL_JSON_FILE="$TMP/inbox.json" OIS_GMAIL_OK=1 \
   OIS_GMAIL_DEBT_IN_FILE="$TMP/debt-in.json" \
   OIS_GMAIL_DEBT_OUT_FILE="$TMP/sent.json" \

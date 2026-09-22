@@ -16,20 +16,37 @@ jobs:
     environment: production
     runs-on: ubuntu-latest
     steps:
+      - name: Require repository variables
+        env:
+          AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          AWS_SMOKE_LOG_GROUP: ${{ vars.AWS_SMOKE_LOG_GROUP }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AWS_ROLE_TO_ASSUME}" ]; then
+            echo "Set repository variable AWS_ROLE_TO_ASSUME to the role ARN" >&2
+            exit 1
+          fi
+          if [ -z "${AWS_SMOKE_LOG_GROUP}" ]; then
+            echo "Set repository variable AWS_SMOKE_LOG_GROUP to the log group" >&2
+            exit 1
+          fi
+
       - name: Assume the Claude Ops AWS role
         uses: aws-actions/configure-aws-credentials@a03048d87541d1d9fcf2ecf528a4a65ba9bd7838 # v5.0.0
         with:
-          role-to-assume: arn:aws:iam::410126241301:role/ClaudeOpsGitHubActionsRole
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           role-session-name: claude-ops-production-smoke
           aws-region: us-east-1
 
       - name: Verify caller and production log access
+        env:
+          AWS_SMOKE_LOG_GROUP: ${{ vars.AWS_SMOKE_LOG_GROUP }}
         run: |
           set -euo pipefail
           aws sts get-caller-identity --query Arn --output text
           START_TIME=$(( $(date +%s) - 3600 ))000
           aws logs filter-log-events \
-            --log-group-name /ecs/healify-api-prod \
+            --log-group-name "$AWS_SMOKE_LOG_GROUP" \
             --start-time "$START_TIME" \
             --limit 1 \
             --query '{events:length(events),searchedLogStreams:length(searchedLogStreams)}' \

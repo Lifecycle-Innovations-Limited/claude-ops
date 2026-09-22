@@ -55,7 +55,7 @@ Usage:
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
       -provider claude -email user@example.com -validate-only -skip-canary
 
-  # Resume from a hCaptcha checkpoint (after Sam solved the captcha)
+  # Resume from a hCaptcha checkpoint (after the operator solved the captcha)
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
       -provider claude -email user@example.com -checkpoint-resume
 
@@ -1122,7 +1122,7 @@ def write_checkpoint(session_id: str, run_id: str, browser_session_id: str,
                      callback_port: int):
     """Write checkpoint state to a file for human captcha solving.
 
-    The checkpoint file contains the full live_view_url (needed by Sam to
+    The checkpoint file contains the full live_view_url (needed by the operator to
     access the browser), the session_id (for follow-up runs), and metadata
     about the reauth attempt.  The file is world-readable so the
     orchestrator can read it without sudo.
@@ -1182,7 +1182,7 @@ def handle_captcha_checkpoint(client: BrowserUseClient, run_id: str,
     """Handle the human captcha checkpoint flow.
 
     1. Get live_view_url from the run's browser.ready event.
-    2. Emit the URL to stdout (full URL for Sam, sanitized for logs).
+    2. Emit the URL to stdout (full URL for the operator, sanitized for logs).
     3. Keep the browser session alive (do NOT stop it).
     4. Write a checkpoint file with session state.
     5. Wait for a file-based trigger (sudo -u crsproxy touch /opt/crsproxy/state/bu_reauth_checkpoint_trigger).
@@ -1190,7 +1190,7 @@ def handle_captcha_checkpoint(client: BrowserUseClient, run_id: str,
        Authorize with JS interception and capture the callback URL.
     7. Return (callback_url, session_id) or (None, session_id) on failure.
 
-    The browser session is kept alive during the wait so Sam can interact
+    The browser session is kept alive during the wait so the operator can interact
     with it via the live_view_url.  After the follow-up run completes,
     the browser is released for normal cleanup.
     """
@@ -1215,9 +1215,9 @@ def handle_captcha_checkpoint(client: BrowserUseClient, run_id: str,
         pass
 
     # --- 2. Emit the live_view_url to stdout ---
-    # The live_view_url is a browser-use.com URL for Sam to access the
+    # The live_view_url is a browser-use.com URL for the operator to access the
     # browser session.  It is NOT an OAuth URL and does not contain OAuth
-    # tokens or callback codes.  Emit the full URL so Sam can open it.
+    # tokens or callback codes.  Emit the full URL so the operator can open it.
     # Also emit a sanitized version for log monitoring.
     log(f"[CAPTCHA_CHECKPOINT] live_view_url={live_url}")
     log(f"[CAPTCHA_CHECKPOINT] Sanitized: {sanitize_url(live_url)}")

@@ -15,7 +15,7 @@ design:
    `consume(recipient, body)` would debit that count for ANY recipient and ANY
    body. Session A's approved draft could be spent by session B on a different
    message to a different person. Fixed: `mint()` now takes the exact set of
-   fingerprints Sam is approving — sha256(recipient|normalized body) — and
+   fingerprints the operator is approving — sha256(recipient|normalized body) — and
    `consume()` only allows a send whose fingerprint is in that approved set.
 2. A sent message became free to resend. The old "spent" dict let a second
    guard see the same fingerprint and pass for free, correctly avoiding a
@@ -25,7 +25,7 @@ design:
    text later — a byte-identical resend inside the window went through free
    even with zero approval remaining. Fixed: split into two mechanisms.
      a. A short-lived in-flight set keyed on fingerprint + tool name (still
-        120s, per Sam's instruction to keep the existing TTL) — this is the
+        120s, per the operator's instruction to keep the existing TTL) — this is the
         "two guards, one call" free pass, nothing more.
      b. A PERMANENT append-only ledger at ~/.claude/state/outbound-sent.jsonl.
         Once a fingerprint is in the ledger, every future consume() for it is
@@ -87,7 +87,7 @@ LEDGER = os.environ.get("OUTBOUND_GUARD_LEDGER") or os.path.expanduser("~/.claud
 
 # Same single call crossing two guards (this Python PreToolUse hook and the
 # Node mcp-proxy layer) for the SAME not-yet-dispatched message. Kept at the
-# value Sam asked to preserve. This is intentionally narrow: it forgives a
+# value the operator asked to preserve. This is intentionally narrow: it forgives a
 # second GUARD checking the identical (fingerprint, tool) pair, not a second
 # SEND. Once the ledger has the fingerprint, a request outside this window —
 # including from a different tool, a different session, or after the window
@@ -100,7 +100,7 @@ INFLIGHT_TTL_SEC = 120
 # only if this hook is the last gate. It is not. The MCP outbound guard
 # (~/.claude/mcp-proxy/outbound-guard-proxy.mjs) runs AFTER every PreToolUse
 # hook and independently demands a per-call owner approval id. When it refuses,
-# nothing is sent -- but Sam's approval is already burnt and the draft is gone
+# nothing is sent -- but the operator's approval is already burnt and the draft is gone
 # from the queue, so the retry needs a fresh `ok`, which is burnt the same way.
 # An unbreakable loop. Live on 2026-09-11: fp 1d3023ffa1b26deb731bde199aef6c41
 # is AUTHORIZED and ledgered at 07:21:30Z for a WhatsApp message that never
@@ -122,9 +122,9 @@ INFLIGHT_TTL_SEC = 120
 RESERVATION_TTL_SEC = int(os.environ.get("OUTBOUND_RESERVATION_TTL") or 180)
 
 # Oude bestanden. Blijven werken zolang niet elke CLI over is, maar de canonieke
-# toestand hierboven wint als die er is. Dit pad blijft ONGEWIJZIGD: Sam's eigen
-# `! ok` (touch /tmp/.claude-send-ok, buiten het model om) is de noodrem en mag
-# niet worden aangeraakt.
+# The canonical state above wins when it exists. This path stays unchanged: the operator's own
+# `! ok` (touch /tmp/.claude-send-ok, outside the model) is the emergency brake and must
+# not be touched.
 LEGACY_SINGLE = "/tmp/.claude-send-ok"
 LEGACY_SINGLE_TTL = 120
 
@@ -189,7 +189,7 @@ def fingerprint(recipient: str, body: str) -> str:
 # (recipient/chat_jid only; text before message; no `payload`). Two lists means
 # two fingerprints for one message, and a fingerprint the other side has never
 # seen can never be matched -- which is precisely how the proxy came to demand
-# its own second approval for a message Sam had already approved. One list, one
+# its own second approval for a message the operator had already approved. One list, one
 # derivation, both gates.
 IDENT_RECIPIENT_KEYS = ("recipient", "jid", "chat_jid", "chat_id", "to", "channel_id")
 IDENT_BODY_KEYS = ("message", "text", "body", "payload", "content")
@@ -326,10 +326,10 @@ def _drain_pending(fp: str) -> None:
     of them were written. consume() removed the fingerprint from `approved` and
     appended it to the ledger, but the DRAFT stayed in
     ~/.claude/state/outbound-pending/<session>.json as though it still had to
-    go. Sam's next approval word re-derived that record, found it valid, and
+    go. the operator's next approval word re-derived that record, found it valid, and
     minted a fresh approval for a body that was already in the recipient's inbox.
     The ledger check in consume() then refused the second send -- so nothing
-    duplicated -- but Sam had been shown an armed approval for delivered text,
+    duplicated -- but the operator had been shown an armed approval for delivered text,
     which is a lie about the state of the world and exactly the kind of thing
     that makes him stop trusting the gate.
 
@@ -482,7 +482,7 @@ def claim_reservation(recipient: str = "", body: str = "", guard: str = "",
     gate 1 already spent for it? True only if gate 1 holds a live reservation
     for this exact (recipient, body) and this guard has not ridden it before.
 
-    WHY THIS EXISTS (Sam, 2026-09-11). Sam's outbound gate is the primary lock.
+    WHY THIS EXISTS (the operator, 2026-09-11). the operator's outbound gate is the primary lock.
     The MCP outbound guard used to be a second, independent lock demanding its
     own per-call owner approval id, and after the two-phase commit landed the
     two locks deadlocked: gate 1's consume() RESERVES the fingerprint, and
@@ -490,7 +490,7 @@ def claim_reservation(recipient: str = "", body: str = "", guard: str = "",
     send of an approval still being spent). The proxy calls consume() under a
     different tool label, so it misses the "two guards, one call" in-flight
     window keyed on fp|tool, lands on the reservation branch, and mints a fresh
-    approval id for a message Sam had already approved. Reproduced in a sandbox:
+    approval id for a message the operator had already approved. Reproduced in a sandbox:
     mint, gate-1 reserve, then the proxy answers outbound_guard_approval_required.
 
     This does NOT grant anything. It reports that gate 1 already granted, and it
@@ -511,7 +511,7 @@ def claim_reservation(recipient: str = "", body: str = "", guard: str = "",
 
     commit() and release() both pop the whole reservation, so `guard_claims`
     dies with it. A retry after a downstream block therefore gets a fresh
-    reservation off Sam's restored approval and a fresh claim, which is what
+    reservation off the operator's restored approval and a fresh claim, which is what
     makes one `ok` cover the retry.
 
     Nothing here is written to ~/.claude/state/outbound-approvals.json, and no
@@ -621,7 +621,7 @@ def commit(fp: str, session_id: str = "", tool: str = "", result: str = "ok") ->
 
 
 def release(fp: str, session_id: str = "", tool: str = "", reason: str = "") -> bool:
-    """Phase two, failure: nothing went out, so Sam's approval stands.
+    """Phase two, failure: nothing went out, so the operator's approval stands.
 
     The approval goes back into `approved` with its ORIGINAL timestamp and TTL.
     A release is not a re-approval and must not extend his clock: if the window
@@ -684,9 +684,9 @@ def mint(fingerprints: dict[str, dict] | list[str] | set[str], ttl: int) -> dict
     oude count-based mint.
 
     `fingerprints` is either a dict {fp: meta} (meta may carry a human-readable
-    "recipient"/"preview" for the confirmation Sam sees) or a plain iterable of
+    "recipient"/"preview" for the confirmation the operator sees) or a plain iterable of
     fingerprints, in which case meta is empty. Returns the approved dict that
-    was written, so a caller can print it back to Sam for a last visual check
+    was written, so a caller can print it back to the operator for a last visual check
     against what he read."""
     if isinstance(fingerprints, dict):
         approved = {
@@ -696,7 +696,7 @@ def mint(fingerprints: dict[str, dict] | list[str] | set[str], ttl: int) -> dict
                 "preview": (meta or {}).get("preview", ""),
                 # Consent evidence, carried through to the audit line at spend
                 # time. `shown_at` is when the body was written to the pending
-                # queue, which is before it was printed to Sam, so it dates the
+                # queue, which is before it was printed to the operator, so it dates the
                 # moment he was shown this exact text. `route` is how he said
                 # yes. Neither is used to decide anything -- the fingerprint
                 # does that -- they exist so the send can be PROVEN afterwards.
@@ -714,7 +714,7 @@ def mint(fingerprints: dict[str, dict] | list[str] | set[str], ttl: int) -> dict
     # Each approval carries its own clock. Before 2026-09-05 this wrote the
     # approved set wholesale and consume() judged everything against one batch
     # clock, so on a machine running many sessions at once (11 pending queues is
-    # normal here) one session's `ok` silently erased another's approvals. Sam
+    # normal here) one session's `ok` silently erased another's approvals. the operator
     # approved three emails and a parallel session's WhatsApp approval wiped all
     # three seconds later; consume() then refused them with no explanation. A
     # gate that says no to the approved case is the kind operators route around.
@@ -801,7 +801,7 @@ def consume(recipient: str = "", body: str = "", session_id: str = "", tool: str
         d = _read()
         if d is None:
             # Geen canonieke toestand: val terug op het losse eenmalige kaartje,
-            # ONGEWIJZIGD — Sam's `! ok` noodrem buiten het model om.
+            # ONGEWIJZIGD — the operator's `! ok` noodrem buiten het model om.
             try:
                 st = os.stat(LEGACY_SINGLE)
             except OSError:
@@ -910,7 +910,7 @@ def consume(recipient: str = "", body: str = "", session_id: str = "", tool: str
         _persist(d)
         # THE EVIDENCE LINE for phase one. This is still the single choke point
         # where a body-bound approval leaves the approved set, so it is the only
-        # place that can honestly assert "Sam saw this exact body and approved
+        # place that can honestly assert "the operator saw this exact body and approved
         # this send". What it no longer asserts is that the send happened --
         # that claim belongs to commit(), which is the only thing that can know
         # it. RESERVED, AUTHORIZED and RELEASED on one fingerprint therefore

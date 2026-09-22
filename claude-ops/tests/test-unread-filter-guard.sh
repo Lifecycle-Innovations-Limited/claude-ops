@@ -2,7 +2,7 @@
 # test-unread-filter-guard.sh — proves unread-filter-guard.py blocks the
 # forbidden unread-as-triage-filter shapes and allows normal inbox scans.
 #
-# Standing rule (Sam, 2026-09-17): "Unreads mag nooit een filter zijn."
+# Standing rule (2026-09-17): unread is never a filter.
 set -euo pipefail
 
 GUARD="${HERMES_HOME:-$HOME/.hermes}/agent-hooks/unread-filter-guard.py"

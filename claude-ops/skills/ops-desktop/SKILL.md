@@ -197,7 +197,7 @@ On non-Linux platforms, prefer Kapture (`mcp__kapture__*`) or Playwright for bro
 /ops:desktop list                               # pool state
 /ops:desktop release abcd1234                   # free session
 /ops:desktop open the AWS ECS console and screenshot the my-project-api cluster
-/ops:desktop launch Firefox and navigate to https://finops.lifecycleinnovations.limited
+/ops:desktop launch Firefox and navigate to https://example.com
 ```
 
 ## $ARGUMENTS

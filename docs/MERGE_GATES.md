@@ -15,7 +15,7 @@ When required green + no conflicts:
 gh pr merge <N> --admin --squash --delete-branch
 ```
 
-Do **not** ask Sam for merge approval.
+Do **not** ask the operator for merge approval.
 
 ## Not required
 

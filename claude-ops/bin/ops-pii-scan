@@ -38,6 +38,7 @@ releases, the wiki, and the plugin manifests.
   --manifests               .claude-plugin/marketplace.json + plugin.json
   --wiki-dir DIR            a checked-out repo wiki
   --github REPO             releases + issue comments + PR comments via gh api
+  --tracked                 every tracked file in the checkout (identity gate)
   --digest TERM             print the salted digest of TERM and exit
 
   --warn-only               never exit 1 (for the scheduled audit's own report)
@@ -164,6 +165,24 @@ collect_wiki_dir() {
   done < <(find "$d" -maxdepth 2 -type f \( -name '*.md' -o -name '*.markdown' \) -not -path '*/.git/*' 2>/dev/null)
 }
 
+collect_tracked() {
+  # The file-content CI job used to skip hashed identity terms: no denylist
+  # exists on a runner, so a bare name already in the tree never failed a
+  # build. This walks every tracked file, repo root included.
+  local exempt='^claude-ops/tests/(test-no-secrets\.sh|known-public-constants\.txt|test-pii-gate-fires\.sh|test-pre-commit-hook-blocks\.sh|pii-term-digests(-warn)?\.txt)$'
+  local f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    [[ "$f" =~ $exempt ]] && continue
+    [[ -f "$REPO_ROOT/$f" ]] || continue
+    # grep -I treats a NUL in the file as binary and matches nothing. A NUL
+    # cannot be passed as a grep pattern: the shell turns it into an empty
+    # string, and an empty pattern matches every line.
+    grep -I -q . "$REPO_ROOT/$f" 2>/dev/null || continue
+    awk -v path="$f" 'NF { printf "%s:%d\t%s\n", path, NR, $0 }' "$REPO_ROOT/$f"
+  done < <(git -C "$REPO_ROOT" ls-files)
+}
+
 collect_github() {
   local repo="$1"
   command -v gh >/dev/null 2>&1 || { echo "gh not available" >&2; return 0; }
@@ -205,6 +224,7 @@ while [[ $# -gt 0 ]]; do
     --manifests)         run_mode; collect_manifests >> "$collected" ;;
     --wiki-dir)          run_mode; collect_wiki_dir "$2" >> "$collected"; shift ;;
     --github)            run_mode; collect_github "$2" >> "$collected"; shift ;;
+    --tracked)           run_mode; collect_tracked >> "$collected" ;;
     --warn-only)         WARN_ONLY=1 ;;
     --downgrade)         DOWNGRADE="$2"; shift ;;
     --digest)            pii_digest_of "$2"; exit 0 ;;

@@ -200,7 +200,7 @@ export function pickAccountForSession(sessionId, config, state) {
   let bestLeaseCount = Infinity;
   let bestUtil = Infinity;
   const SORT_WEIGHT_PCT = 2; // Anti-dogpiling weight per active lease for selection sorting only
-  const MAX_CONCURRENT_PER_ACCOUNT = 4; // Sam 2026-07-20: raised from 2 to 4 to maximize fleet throughput. Real ceiling is the Anthropic API quota-reached response, not a soft heuristic.
+  const MAX_CONCURRENT_PER_ACCOUNT = 4; // the operator 2026-07-20: raised from 2 to 4 to maximize fleet throughput. Real ceiling is the Anthropic API quota-reached response, not a soft heuristic.
 
   for (const a of config.accounts) {
     if (a.disabled === true) continue;
@@ -225,7 +225,7 @@ export function pickAccountForSession(sessionId, config, state) {
       // on fewest-leases first, so a 97%-but-0-lease account beat a 0%-but-1-lease
       // account → sessions were leased onto near-exhausted accounts and 429'd
       // almost immediately even while cooler accounts sat idle. The strict
-      // MAX_CONCURRENT_PER_ACCOUNT cap above still bounds dogpiling. (Sam 2026-06-13)
+      // MAX_CONCURRENT_PER_ACCOUNT cap above still bounds dogpiling. (the operator 2026-06-13)
       const sortedUtil = util + leasesCount * SORT_WEIGHT_PCT;
       if (sortedUtil < bestUtil) {
         bestUtil = sortedUtil;

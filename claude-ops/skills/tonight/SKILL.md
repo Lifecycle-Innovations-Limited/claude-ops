@@ -24,7 +24,7 @@ The "before-bed brief." Counterpart to `/ops:go` (morning).
 3. **Overdue outreach** — anyone whose `next_nudge_due <= tomorrow`. Top 3 only.
 4. **Top 3 priorities for tomorrow** — pulled from Linear (assignee=me, priority<=High,
    updated last 7d, not Done).
-5. **Unresolved from today** — ledger entries with `status=awaiting_sam` still open.
+5. **Unresolved from today** — ledger entries with `status=awaiting_user` still open.
 
 ## Behavior
 

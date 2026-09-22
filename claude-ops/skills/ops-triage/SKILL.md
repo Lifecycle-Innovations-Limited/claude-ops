@@ -257,7 +257,7 @@ CLAIM_KEY="sentry:issue:<short_id>"   # adjust per issue type
 ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
 ```
 
-Skip issues with `in_progress` or `done`. Present `awaiting_sam` issues at the
+Skip issues with `in_progress` or `done`. Present `awaiting_user` issues at the
 top of the triage board as "needs your decision."
 
 ### Claim + resolve

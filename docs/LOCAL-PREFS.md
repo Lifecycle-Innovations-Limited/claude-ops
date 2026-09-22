@@ -28,10 +28,11 @@ are read from the environment and have no committed default:
 | `LINEAR_TEAM_MAP_JSON` | `{"KEY": {"company": "<uuid>", "team": "<uuid>"}}` for every client team |
 | `LINEAR_CLIENT_TEAM_KEY` | the client's Linear team key (defaults to `TEAM`) |
 | `LINEAR_CLIENT_TEAM_ID`, `PAPERCLIP_CLIENT_COMPANY_ID` | the primary client's ids |
+| `LINEAR_WORKSPACE_SLUG` | Linear workspace slug used only when an issue has no API url |
 | `OPS_TZ` | the operator's timezone; unset means the host's own zone |
 
 Client-specific issue-id tables (`FORCE_UNLINK`, `MULTI_CANON`,
-`STANDING_OWN_LINEAR`) load from an out-of-repo `hea_thrash_canons` module. The
+`STANDING_OWN_LINEAR`) load from an out-of-repo `client_thrash_canons` module. The
 in-repo fallbacks are empty on purpose — empty means "no overrides", which is
 correct for anyone who is not that client.
 
