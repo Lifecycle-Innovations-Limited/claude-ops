@@ -89,7 +89,7 @@ For each non-spare agent decide ONE bucket. Verify externally before trusting a 
   to finish the last mile (push/PR/QA/deploy) and report back.
 - **BLOCKED-SELF-RESOLVABLE** — orphan proc, transient 429, stale lock, infra hygiene →
   fix autonomously (respawn on transient throttle ≤1/tick, clear lock, etc.). No owner ping.
-- **BLOCKED-SAM-GATED** — needs a human decision/approval/2FA/credential/business-or-design
+- **BLOCKED-USER-GATED** — needs a human decision/approval/2FA/credential/business-or-design
   call → collect for STEP 4. NEVER guess these.
 - **FAILED** — gave up → decide retry (corrected brief) vs escalate vs archive.
 
@@ -106,7 +106,7 @@ Keep it scannable. No walls of text.
 
 ## STEP 4 — Surface ONLY the decisions (A/B/C/D)
 
-For each BLOCKED-SAM-GATED item, present via **AskUserQuestion** as a real choice:
+For each BLOCKED-USER-GATED item, present via **AskUserQuestion** as a real choice:
 
 - A short header (the agent + what's blocked).
 - 2–4 concrete options labelled, FIRST option = your **recommendation** (mark "(Recommended)").

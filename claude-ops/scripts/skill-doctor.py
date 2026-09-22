@@ -13,7 +13,7 @@ Checks per skill:
 
 Usage:
     scripts/skill-doctor.py            # all reachable skills
-    scripts/skill-doctor.py --mine     # only Sam-owned trees (~/.claude/skills + claude-ops)
+    scripts/skill-doctor.py --mine     # only the operator-owned trees (~/.claude/skills + claude-ops)
     scripts/skill-doctor.py --json
 """
 import json

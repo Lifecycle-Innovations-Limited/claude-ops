@@ -67,7 +67,7 @@ with open(os.path.join(tmp, "sent.json"), "w") as fh:
     json.dump(sent, fh)
 os.makedirs(os.path.join(tmp, "state"), exist_ok=True)
 with open(os.path.join(tmp, "state",
-                       "ops-email-sweep-watermarks-sam_example.com.json"), "w") as fh:
+                       "ops-email-sweep-watermarks-user_example.com.json"), "w") as fh:
     json.dump(marks, fh)
 PY
 
@@ -75,7 +75,7 @@ PY
 run_scan() {
   HERMES_HOME="$TMP" \
   OIS_DAYS=7 OIS_DEBT_DAYS=90 OIS_DO_WA=0 OIS_DO_EMAIL=1 \
-  OIS_GMAIL_ACCOUNT="sam@example.com" \
+  OIS_GMAIL_ACCOUNT="user@example.com" \
   OIS_GMAIL_JSON_FILE="$TMP/inbox.json" OIS_GMAIL_OK=1 \
   OIS_GMAIL_DEBT_IN_FILE="$TMP/debt-in.json" \
   OIS_GMAIL_DEBT_OUT_FILE="$TMP/sent.json" \

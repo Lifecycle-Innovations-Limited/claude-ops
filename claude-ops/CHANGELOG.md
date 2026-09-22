@@ -39,9 +39,9 @@ ops-dash: de CI-probe loopt per repo parallel met een limiet van 8 seconden, zod
 
 ### Fixed
 - Unread status can no longer be used as an inbox-triage filter on WhatsApp,
-  Slack, or Gmail. A message Sam opened and navigated away from without
+  Slack, or Gmail. A message the operator opened and navigated away from without
   replying still owed a reply, so any scan step that relied on read/unread
-  state to decide what needs him is wrong by design. `ops-inbox`, `ops-rules`,
+  state to decide what needs a reply is wrong by design. `ops-inbox`, `ops-rules`,
   and the scan tooling now classify every open item by who spoke last, never
   by read state. A new `unread-filter-guard.py` hook hard-blocks the unread
   scan calls (`whatsapp_unread`, `mcp__slack__conversations_unreads`, and any

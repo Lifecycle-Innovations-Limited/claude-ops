@@ -154,14 +154,14 @@ that for a client.
    read from the environment three lines above the hardcoded five, so the pattern
    existed and had simply not been finished. All six now come from
    `LINEAR_TEAM_MAP_JSON`; an absent map is valid and yields an empty mapping.
-2. **A client's Linear team key**, hardcoded 43 times across six files including a
+2. **A client's Linear team key**, hardcoded across several files including a
    filename. It is now `CLIENT_TEAM_KEY` from `LINEAR_CLIENT_TEAM_KEY`, defaulting
-   to the neutral `TEAM`. `hea_linear_fix_all.py` is renamed `linear_fix_all.py`
-   and its `HEA_LINEAR_FIX_ALL_*` environment variables to `LINEAR_FIX_ALL_*`.
+   to the neutral `TEAM`. The fix-all script was renamed to `linear_fix_all.py`
+   and its environment variables to `LINEAR_FIX_ALL_*`.
 3. **A client's real Linear issue ids** as fallback "thrash canon" dictionaries in
-   two files. The canons already loaded from an out-of-repo `hea_thrash_canons`
-   module; the fallbacks are now empty, which is the correct meaning for anyone who
-   does not have that module.
+   two files. The canons already loaded from an out-of-repo canon module; the
+   fallbacks are now empty, which is the correct meaning for anyone who does not
+   have that module. The public import name is `client_thrash_canons`.
 4. **The operator's timezone**, hardcoded in ten places. The two functional sites
    read `OPS_TZ` and fall back to the host zone; the rest are documentation and now
    describe the host zone rather than one city.

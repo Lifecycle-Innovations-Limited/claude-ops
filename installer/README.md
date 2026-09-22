@@ -73,7 +73,7 @@ bin:
 
 Override per call: `--agents codex,hermes` ignores the config's `enabled` flag for this invocation.
 
-## Public-repo rule (Sam 2026-07-21)
+## Public-repo rule (the operator 2026-07-21)
 
 This package ships in a public repo (`Lifecycle-Innovations-Limited/claude-ops`). It MUST NOT contain:
 

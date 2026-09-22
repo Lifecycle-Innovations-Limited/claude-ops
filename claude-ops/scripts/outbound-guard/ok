@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Keur de wachtende concepten van DEZE sessie goed. Sam typt `! ok` in Claude
-Code; dit draait in zijn eigen shell, buiten het model om.
+"""Approve this session's pending drafts. The operator types `! ok` in Claude
+Code; this runs in their own shell, outside the model.
 
 SECURITY FIX 2026-09-02 (companion to outbound_guard.py's rewrite).
 
@@ -9,11 +9,11 @@ whatever body." outbound_guard.py's consume() now refuses that call outright
 (see its own header) because a count is not a signature on a specific message.
 `ok` has no access to the draft text itself, so it cannot compute a fingerprint
 on its own -- the fingerprint has to come from somewhere that already saw and
-committed to the exact text Sam is looking at.
+committed to the exact text the operator is looking at.
 
 The design: outbound-humanize is the one mandatory step before every send (see
 ~/.claude/rules/outbound-humanizer-gate.md). Its stdout is the exact body shown
-to Sam, and it appends a PENDING record before printing that stdout:
+to the operator, and it appends a PENDING record before printing that stdout:
 
     ~/.claude/state/outbound-pending/<session_id>.json
     [{"recipient": "...", "channel": "...", "body": "...", "fp": "...",
@@ -21,22 +21,22 @@ to Sam, and it appends a PENDING record before printing that stdout:
 
 `ok` reads that queue and mints approval for EXACTLY those fingerprints,
 nothing else. The security property this preserves: the assistant can only get
-approval for a body it has already committed to in writing before Sam ever
-runs this command. It cannot show Sam text Y and then send text X --
+approval for a body it has already committed to in writing before the operator ever
+runs this command. It cannot show the operator text Y and then send text X --
 outbound_guard.consume() hashes the actual send and refuses anything that does
 not match, one character of difference included.
 
 PER SESSION, since 2026-09-02. The file used to be one shared slot for the
 whole machine, so two sessions drafting at once overwrote each other and `! ok`
-armed whichever landed last -- not the one Sam was reading. That happened: a
+armed whichever landed last -- not the one the operator was reading. That happened: a
 WhatsApp bubble was on screen and an unrelated email got armed. Nothing wrong
-could have been *sent* (the fingerprint stops that), but showing Sam one draft
+could have been *sent* (the fingerprint stops that), but showing the operator one draft
 and arming another is its own defect. Splitting by session removes it.
 
 BATCH APPROVAL IS BACK, and safe this time. The old `ok N` minted a bare count
 -- "N sends, whatever recipient, whatever body" -- which is a bearer credit,
 not a signature. What `ok` mints now is a SET of fingerprints, each bound to
-one exact (recipient, body) that Sam saw printed above the prompt. So "doe maar
+one exact (recipient, body) that the operator saw printed above the prompt. So "doe maar
 alle vijf" costs one keystroke and still cannot approve a sixth message, a
 different recipient, or one edited character.
 
@@ -51,7 +51,7 @@ Refuses, loudly, with a reason, when the queue is:
   - malformed / missing a field    -> named explicitly, never silently ignored
   - internally inconsistent        -> an fp does not match its own body
 
-Never touches /tmp/.claude-send-ok. That file is Sam's own manual escape
+Never touches /tmp/.claude-send-ok. That file is the operator's own manual escape
 hatch (`! touch /tmp/.claude-send-ok`, typed by him, not by this script) and
 stays exactly as it was.
 """
@@ -75,7 +75,7 @@ def _session_id() -> str:
 
 
 # Per session, matching outbound-humanize. See its comment for why: one shared
-# slot meant `! ok` could arm a draft from a different session than the one Sam
+# slot meant `! ok` could arm a draft from a different session than the one the operator
 # was reading.
 PENDING_DIR = Path(
     os.environ.get("OUTBOUND_PENDING_DIR")
@@ -89,7 +89,7 @@ LEGACY_PENDING = HOME / ".claude" / "state" / "outbound-pending.json"
 # Matched to the humanizer stamp's own 30-minute life, not chosen loosely. A
 # pending record that outlives its stamp is worthless anyway: the send is
 # blocked for want of a stamp long before this window matters. The old 600s
-# was strictly tighter than the gate behind it, which only meant Sam had to
+# was strictly tighter than the gate behind it, which only meant the operator had to
 # ask for the same draft twice when he stepped away for a coffee.
 PENDING_TTL_SEC = int(os.environ.get("OUTBOUND_PENDING_TTL_SEC") or 1800)
 # Widened from 120s to 900s on 2026-09-05. What makes an approval safe is that
@@ -161,7 +161,7 @@ def _read_queue() -> list[dict]:
 
     Every entry is validated before it can be shown or approved. A malformed
     entry kills the whole call rather than being skipped: silently dropping one
-    draft out of five while approving the rest is how Sam ends up approving a
+    draft out of five while approving the rest is how the operator ends up approving a
     set he did not read."""
     try:
         st = PENDING_PATH.stat()
@@ -229,7 +229,7 @@ USAGE = (
     "  ok #2       approve only draft 2 from the list, leave the rest queued\n"
     "\n"
     "A bare number is refused on purpose: `ok 5` used to mean 'five sends' and\n"
-    "now reads as 'draft five', and guessing which one Sam meant is not a thing\n"
+    "now reads as 'draft five', and guessing which one the operator meant is not a thing\n"
     "an approval command gets to do. Write `ok #5` for the draft, `ok` for all."
 )
 
@@ -271,7 +271,7 @@ def main() -> int:
     guard = _load_guard()
 
     # Verify every record against its own stored fingerprint BEFORE minting any
-    # of them. A partially-minted set would leave Sam having approved messages
+    # of them. A partially-minted set would leave the operator having approved messages
     # he was never shown.
     for i, rec in enumerate(selected, 1):
         real_fp = guard.fingerprint(rec["recipient"], rec["body"])
@@ -299,12 +299,12 @@ def main() -> int:
         # 2026-09-09 this lane minted only recipient+preview, so an approval
         # given in the shell reached the guard with shown_at, route and channel
         # empty, and the AUTHORIZED line in the consent audit could not say when
-        # Sam was shown the text or how he said yes. The send was still bound to
+        # the operator was shown the text or how he said yes. The send was still bound to
         # the exact body -- the fingerprint never depended on these -- but the
         # evidence trail did, and half a trail is what makes an incident
         # unreconstructable afterwards.
         # shown_at is the record's OWN queue-write time: outbound-humanize
-        # writes the queue before it prints the body Sam reads.
+        # writes the queue before it prints the body the operator reads.
         fps[rec["fp"]] = {
             "recipient": rec["recipient"],
             "preview": body[:200],
@@ -332,7 +332,7 @@ def main() -> int:
         )
 
     # One-shot per draft: drop what was just approved, keep the rest queued so
-    # `ok #2` does not throw away the drafts Sam has not decided on yet.
+    # `ok #2` does not throw away the drafts the operator has not decided on yet.
     remaining = [rec for rec in queue if rec["fp"] not in fps]
     try:
         if remaining:

@@ -188,7 +188,7 @@ Every run, in order:
    commitments.
 1. Resolve WhatsApp accounts (`ops-wa-accounts` — never hardcode a port). Scan every agent-enabled number.
 2. Freshness: `~/bin/wa-inbox-fresh.sh` (blocking, bounded). Then `bin/ops-inbox-scan` (defaults to every enabled account, `--debt-days 90`). Never an unread listing: unread is a display state and is empty for every thread already opened on a phone. Forgotten unanswered asks (archived/read, still their ball, inside 90 days) come back tagged `forgotten` — on WhatsApp AND on email, where a Gmail filter or category can hide a live thread from `in:inbox` entirely.
-2b. **Every other channel in the same pass, in parallel:** iMessage/SMS (`$HERMES_HOME/bin/imessage-inbox-scan --days 30` — copies `-wal`/`-shm` first or recent messages are invisible; alphanumeric shortcodes and OTP bodies are `fyi`, never `needs_reply`). Slack: `channels_me {channel_types:"im,mpim"}` then `conversations_history` per human DM, never `conversations_unreads` — unread is never a filter (Sam, 2026-09-17), a DM he read on his phone and never answered stays invisible to an unread listing. Telegram user dialogs if configured. Email is already in the scan. A miss on one channel is not absence on another.
+2b. **Every other channel in the same pass, in parallel:** iMessage/SMS (`$HERMES_HOME/bin/imessage-inbox-scan --days 30` — copies `-wal`/`-shm` first or recent messages are invisible; alphanumeric shortcodes and OTP bodies are `fyi`, never `needs_reply`). Slack: `channels_me {channel_types:"im,mpim"}` then `conversations_history` per human DM, never `conversations_unreads` — unread is never a filter (2026-09-17), a DM read on a phone and never answered stays invisible to an unread listing. Telegram user dialogs if configured. Email is already in the scan. A miss on one channel is not absence on another.
 3. **All-context sweep** (Rule 9 + `references/details.md` "ALL CONTEXT SOURCES"): query every configured calendar, mailbox, and messaging channel before any schedule claim or NEEDS_REPLY draft. Google Calendar alone is not enough — Notion show/calendar databases count when Notion is configured.
 4. `bin/ops-inbox-archive-set` report-only. Present KEEP vs ARCHIVE; `--apply` only after explicit OK.
 5. Deep-read KEEP / NEEDS_REPLY. Fan out if volume (`references/fan-out.md`). One read-only worker per channel, then one per KEEP thread-chunk. Stage the first draft as soon as one KEEP exists — do not wait for the full scan, and do not wait for "continue drafting". Stage the next draft the moment the previous card is answered — no "next?" pause.
@@ -249,8 +249,8 @@ been DEALT WITH (`handled=0`, falling back to `archived=0`), never what has not 
 defect has a second shape: `in:inbox` is a LABEL, not a state of the conversation. A Gmail
 filter, a category (Promotions/Updates/Social/Forums), a mute, or one stray archive strips
 INBOX from a live thread, and an inbox-only query then reports the mailbox clean while a
-counterparty waits. Real miss: Salim Jawad at Believe delivered the finished UGC fan videos
-on the `MRT Gen AI Videos` thread; Gmail had filed that thread out of the inbox, so three
+counterparty waits. Real miss: a counterparty delivered finished assets
+on a project thread; Gmail had filed that thread out of the inbox, so three
 consecutive scans said email was handled and nobody answered him. `ops-inbox-scan` now runs
 a second email pass (`--debt-days`, default 90) over archived, non-promo, human mail and
 reopens every thread whose NEWEST message is inbound and never answered; those rows arrive
@@ -259,22 +259,22 @@ rule to carry into any channel you add: **debt is DIRECTION, not label or unread
 The honest test is always "whose message is last in this thread, and did we answer after
 it" — never "is it still in the inbox".
 
-**Unread is never a filter, on any channel (Sam, 2026-09-17).** A message Sam
+**Unread is never a filter, on any channel (the operator, 2026-09-17).** A message the operator
 opened and navigated away from without replying still owes a reply — read state is
 a display flag, not a proxy for "handled". `conversations_unreads` only sees what
-Sam has not opened; a DM he read on his phone and never answered is invisible to
+the operator has not opened; a DM read on a phone and never answered is invisible to
 it. Never use it, and never use `whatsapp_unread`, to decide what needs triage.
 Always confirm direction with `conversations_history` (Slack) or `whatsapp_find` /
 `whatsapp_thread` (WhatsApp) — who spoke last, not what is marked unread. A guard
-(`unread-filter-guard.py`, wired into `pre-tool-dispatcher.py` on hub/Mac/HYPEST)
+(`unread-filter-guard.py`, wired into `pre-tool-dispatcher.py`)
 hard-blocks `whatsapp_unread`, `conversations_unreads`, and any `is:unread` /
 `unread_count` / `unread=1` filter in a terminal command.
 
-**ON SAM'S BOX THE WHATSAPP ZERO IS ALWAYS A LIE — measured 2026-09-06.** Every chat in
+**ON A FULLY ARCHIVED WHATSAPP STORE THE ZERO IS ALWAYS A LIE — measured 2026-09-06.** Every chat in
 both stores is archived and `handled` is maintained on 3 of 1808 rows, so the scan prints
 `whatsapp: every chat is archived and handled is not maintained ... inbox zero, not flag
-corruption`, disarms its own recency net, and reports `needs_reply: 0` for personal_nl AND
-personal_us. That run reported inbox zero while six people were genuinely waiting on a
+corruption`, disarms its own recency net, and reports `needs_reply: 0` for every
+configured account. That run reported inbox zero while six people were genuinely waiting on a
 reply. Whenever a note contains "recency net disarmed" or "taken at face value", the zero
 carries no information: derive needs_reply yourself — a thread needs a reply when its
 NEWEST message has `is_from_me = 0`, regardless of the archive flag. Do this with the
@@ -305,7 +305,7 @@ stays shut: the reopen is bounded by `--days`.
 
 **Read state is not the test, on WhatsApp either.** Use `whatsapp_find` /
 `whatsapp_thread` and classify by direction (newest message `is_from_me = 0` ==
-needs_reply), never `whatsapp_unread` — a thread Sam opened on his phone and
+needs_reply), never `whatsapp_unread` — a thread opened on a phone and
 never answered is empty in any unread listing but still owes a reply.
 
 **CROSS-ACCOUNT: a reply on one number counts for the other.** One person often
@@ -388,10 +388,10 @@ genuine reasoning, not for reading a database.
 
 **What the script does NOT do — and what you do next, in the MAIN session (no subagents):**
 
-1. **Slack** — never `conversations_unreads` (unread is not a filter, Sam 2026-09-17;
+1. **Slack** — never `conversations_unreads` (unread is not a filter, the operator 2026-09-17;
    a guard hard-blocks the call). Instead: `channels_me {channel_types:"im,mpim"}` once
    to list human DMs, then `conversations_history {channel_id, limit:"5d"}` per DM to
-   check who spoke last. A DM Sam read on his phone and never answered must surface —
+   check who spoke last. A DM read on a phone and never answered must surface —
    an unread listing would miss it entirely.
 2. **Telegram** — one `mcp__plugin_ops_telegram__list_dialogs` call (skip the
    Pocket ops bot dialog — that's automation). Skip if unconfigured.

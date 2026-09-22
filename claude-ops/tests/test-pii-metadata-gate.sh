@@ -126,6 +126,16 @@ printf 'fix: credit %s %s for the report\n' "$FN" "$LN" > "$WORK/msg.txt"
 assert_blocked "owner's full name in a commit message blocks" "operator-identity" \
   --commit-msg-file "$WORK/msg.txt"
 
+# --- 1b. The bare given name, with no surname on the line ----------------------
+# The full-name pair was already refused. The given name alone was not in the
+# digest, so "(<name>, 2026-09-17)" stayed in the tree while CI stayed green.
+# Fragments stay on this line as separate quotes; the assembled word exists
+# only in the temp file the scanner reads.
+GIVEN="$(printf '%s%s%s' 's' 'a' 'm')"
+printf '%s opened the thread and left\n' "$GIVEN" > "$WORK/given.txt"
+assert_blocked "a bare given name in text blocks" "operator-identity" \
+  --origin "note" --text-file "$WORK/given.txt"
+
 # --- 2. The bare handle ----------------------------------------------------------
 # In the CI state the handle is a WARN (every commit is authored under it, so a
 # message mentioning it is the least private text there is). It must still be

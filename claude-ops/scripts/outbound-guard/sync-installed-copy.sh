@@ -14,7 +14,7 @@
 # even compatible. On a machine whose installed copy was the current
 # reservation-schema guard and whose checkout still carried the old count-schema
 # one, this silently DOWNGRADED the guard. It fails closed, so nothing leaks,
-# but the two-phase commit for MCP-proxy-routed sends stops working and Sam's
+# but the two-phase commit for MCP-proxy-routed sends stops working and the operator's
 # approvals are never redeemed. Nothing said a word, because setup.sh called
 # this with `|| true` and stderr on /dev/null.
 #

@@ -7,7 +7,7 @@ on:
 
 
 concurrency:
-  # Auto-cancel superseded runs for same workflow+ref/PR (Sam 2026-07-14)
+  # Auto-cancel superseded runs for same workflow+ref/PR (the operator 2026-07-14)
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 permissions:

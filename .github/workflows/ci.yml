@@ -9,7 +9,7 @@ on:
 
 
 concurrency:
-  # Auto-cancel superseded runs for same workflow+ref/PR (Sam 2026-07-14)
+  # Auto-cancel superseded runs for same workflow+ref/PR (the operator 2026-07-14)
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
@@ -88,6 +88,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: PII / personal-data scan
         run: bash claude-ops/tests/test-no-secrets.sh
+      - name: Hashed identity scan of every tracked file
+        run: bash claude-ops/bin/ops-pii-scan --tracked
 
   # The companion to `pii-gate`, for everything that is NOT a file.
   #

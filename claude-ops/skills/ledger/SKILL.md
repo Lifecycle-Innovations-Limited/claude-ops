@@ -46,7 +46,7 @@ Before doing real work, run:
 ~/.claude-ops/bin/ledger query --claim-key "$CLAIM_KEY" --since -PT24H
 ```
 
-If result has any entry with `status in (in_progress, done, drafted, awaiting_sam)`,
+If result has any entry with `status in (in_progress, done, drafted, awaiting_user)`,
 SKIP — the other system already handled it. Don't duplicate.
 
 After doing work:
@@ -55,5 +55,5 @@ After doing work:
 ~/.claude-ops/bin/ledger claim --claim-key "$CLAIM_KEY" --kind <kind> --brand <brand> \
   --title "<title>" --source claude-ops
 # ... do work ...
-~/.claude-ops/bin/ledger resolve <id> --status done|drafted|awaiting_sam
+~/.claude-ops/bin/ledger resolve <id> --status done|drafted|awaiting_user
 ```

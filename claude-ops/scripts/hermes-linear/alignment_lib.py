@@ -20,7 +20,6 @@ ENV_PATHS = (
     HOME / ".mcp-secrets.env",
 )
 DEFAULT_API = "http://127.0.0.1:18790"
-AURORA_COMPANY_ID = os.environ.get("PAPERCLIP_AURORA_COMPANY_ID", "")
 CLIENT_COMPANY_ID = os.environ.get("PAPERCLIP_CLIENT_COMPANY_ID", "")
 # Linear team key for the configured client team. A team key identifies another
 # organisation's workspace, so it is read from the environment and never
@@ -28,6 +27,34 @@ CLIENT_COMPANY_ID = os.environ.get("PAPERCLIP_CLIENT_COMPANY_ID", "")
 CLIENT_TEAM_KEY = os.environ.get("LINEAR_CLIENT_TEAM_KEY", "TEAM")
 PRIMARY_COMPANY_ID = CLIENT_COMPANY_ID
 CLAIM_TTL_SECONDS = 2 * 60 * 60
+
+
+def client_team_prefix() -> str:
+    """Uppercase team key safe to interpolate into a regex or SQL pattern.
+
+    The default ``TEAM`` is a placeholder. A real key belongs in
+    ``LINEAR_CLIENT_TEAM_KEY`` and is never committed.
+    """
+    key = (CLIENT_TEAM_KEY or "TEAM").strip().upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9]{1,9}", key):
+        raise ValueError(
+            "LINEAR_CLIENT_TEAM_KEY must be 2-10 letters or digits, like TEAM"
+        )
+    return key
+
+
+def client_issue_pattern(*, group: bool = True) -> str:
+    """Regex body for this install's issue ids, for example ``(TEAM-\\d+)``."""
+    body = rf"{re.escape(client_team_prefix())}-\d+"
+    return f"({body})" if group else body
+
+
+def linear_issue_url(identifier: str) -> str:
+    """Public Linear URL when LINEAR_WORKSPACE_SLUG is set, else the identifier."""
+    slug = os.environ.get("LINEAR_WORKSPACE_SLUG", "").strip()
+    if slug and re.fullmatch(r"[A-Za-z0-9_-]+", slug):
+        return f"https://linear.app/{slug}/issue/{identifier}"
+    return identifier
 
 META_RE = re.compile(
     r"^(stage|machine|worktree|branch|pr|run_id|linear|mirror|paperclip):\s*(.+)$",

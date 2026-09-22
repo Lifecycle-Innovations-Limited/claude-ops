@@ -37,10 +37,10 @@ WHATSAPP_CONFIG_PATH = os.path.join(_HOME, ".claude/state/pocket/whatsapp-config
 IMESSAGE_CONFIG_PATH = os.path.join(_HOME, ".claude/state/pocket/imessage-config.json")
 TELEGRAM_CONFIG_PATH = os.path.join(_HOME, ".claude/state/pocket/telegram-config.json")
 
-# Persistent prior-approval allowlist (Sam's directive 2026-06-18): EMAIL sends
-# whose every to/cc/bcc recipient is on this list are sends Sam has ALREADY
+# Persistent prior-approval allowlist (the operator's directive 2026-06-18): EMAIL sends
+# whose every to/cc/bcc recipient is on this list are sends the operator has ALREADY
 # approved (e.g. an approved cancellation batch). They skip the per-send token
-# gate entirely — no more slow one-token-per-message minting for work Sam has
+# gate entirely — no more slow one-token-per-message minting for work the operator has
 # signed off on. Any email with even ONE recipient NOT on the list still hits
 # the standard token gate. Scope is EMAIL ONLY; Slack/WhatsApp/SMS/voice keep
 # the strict per-send token. Edit the JSON to grant/revoke; deleting an address
@@ -103,9 +103,9 @@ def _load_self_imessage_handles() -> set:
 
 
 def _load_self_telegram_owners() -> set:
-    """Return set of Telegram chat_ids considered 'self' (Sam's own owner chat).
-    Sends to these are operational self-notifications (status pings to Sam),
-    exempt from the token gate per Sam's directive 2026-05-27. Sends to ANY
+    """Return set of Telegram chat_ids considered 'self' (the operator's own owner chat).
+    Sends to these are operational self-notifications (status pings to the operator),
+    exempt from the token gate per the operator's directive 2026-05-27. Sends to ANY
     other chat_id stay blocked."""
     out = set()
     try:
@@ -121,7 +121,7 @@ def _load_self_telegram_owners() -> set:
 
 
 def _load_approved_recipients() -> set:
-    """Return the set of email addresses Sam has pre-approved as outbound
+    """Return the set of email addresses the operator has pre-approved as outbound
     recipients (lowercased). Loaded from outbound-approvals.json shaped as
     {"approved_recipients": ["addr@x.com", ...]}. Missing/empty/malformed file
     → empty set → nothing is auto-approved (strict default; gate stays armed)."""
@@ -139,7 +139,7 @@ def _load_approved_recipients() -> set:
 
 
 def _load_approved_whatsapp() -> set:
-    """Return the set of WhatsApp recipients Sam has pre-approved (lowercased).
+    """Return the set of WhatsApp recipients the operator has pre-approved (lowercased).
 
     Read from the same outbound-approvals.json, under a SEPARATE key so an email
     address can never silently authorise a WhatsApp send or the reverse:
@@ -200,10 +200,10 @@ APPROVED_WHATSAPP = _load_approved_whatsapp()
 
 def _telegram_recipient_is_self(cmd: str) -> bool:
     """True iff every Telegram chat_id target in the curl command resolves to
-    one of Sam's own owner chat_ids. Accepts two safe forms:
+    one of the operator's own owner chat_ids. Accepts two safe forms:
       1. A literal numeric id present in SELF_TELEGRAM_OWNERS.
       2. The TELEGRAM_OWNER_ID / OWNER_ID env-var token ($X, ${X}). These
-         resolve, in the orchestrator's environment, to Sam's own owner id by
+         resolve, in the orchestrator's environment, to the operator's own owner id by
          definition — an injection cannot change what the env var points to,
          so treating the token as 'self' is safe. (The orchestrator naturally
          writes `chat_id=$TELEGRAM_OWNER_ID` rather than the literal number.)
@@ -275,7 +275,7 @@ BASH_PATTERNS = [
     # Until 2026-09-09 it was [^#\n], so a send written over several lines --
     # the readable form, and the form every worked example in these files uses --
     # matched NO pattern at all. detect_outbound_bash then returned None, the
-    # hook exited 0, and the mail left with no gate, no ledger row, and Sam's
+    # hook exited 0, and the mail left with no gate, no ledger row, and the operator's
     # approval left unspent, so his next `ok` re-armed an already-sent body.
     # Measured against a real multi-line `gog gmail send` that slipped through
     # ungated on 2026-09-09. Newlines are joined by _join_continuations() as well;
@@ -362,7 +362,7 @@ def is_outbound_mcp(tool_name: str, tool_input: dict):
     # went out ungated. The settings matcher was already routing them here correctly.
     if OUTBOUND_TOOL_RE.match(tool_name):
         # iMessage self-thread exception: replies inside a 1:1 thread with
-        # Sam's own handle (self-chat / notes-to-self) are operational, not
+        # the operator's own handle (self-chat / notes-to-self) are operational, not
         # outbound human-to-human comms. Group chats and 1:1 to anyone else
         # remain BLOCKED.
         if tool_name == 'mcp__imessage__reply':
@@ -644,7 +644,7 @@ def _identify(tool_name: str, tool_input: dict, cmd: str = '') -> tuple[str, str
 def check_token(recipient: str = '', body: str = '', tool: str = '', session_id: str = '') -> bool:
     """Ask the shared store in outbound_guard for approval.
 
-    That store now binds approval to the exact (recipient, body) Sam approved, not
+    That store now binds approval to the exact (recipient, body) the operator approved, not
     to a bare count — see outbound_guard.py for why. `tool` and `session_id` are
     passed through so the guard can (a) give a short free pass to a second guard
     checking the SAME not-yet-dispatched call, and (b) never let one session's
@@ -702,7 +702,7 @@ def audit(verdict: str, tool_name: str, reason: str, cmd_snippet: str = ''):
 
 def _email_all_recipients_approved(tool_name: str, tool_input: dict, cmd: str) -> bool:
     """True iff this is an EMAIL send whose EVERY to/cc/bcc recipient is on the
-    persistent approved-recipients allowlist (Sam's prior-approval). Scope is
+    persistent approved-recipients allowlist (the operator's prior-approval). Scope is
     email only — Slack/WhatsApp/SMS/voice are never auto-approved here. An empty
     recipient set returns False so we never blanket-allow a malformed/parse-miss
     send. Covers both the MCP gmail_send tool and a `gog gmail send` Bash call."""
@@ -738,7 +738,7 @@ def _whatsapp_all_recipients_approved(tool_name: str, tool_input: dict, cmd: str
       * Text messages only. send_file and send_audio_message are never
         auto-approved: attachments carry content the allowlist never reviewed.
       * Group JIDs (@g.us) are never auto-approved, even if listed. A group is
-        an audience, not the contact Sam signed off on.
+        an audience, not the contact the operator signed off on.
       * An empty recipient set returns False, so a parse miss can never
         blanket-allow a send.
     """
@@ -798,8 +798,8 @@ def main():
         # send (all --to/--cc/--bcc are user's own address), it's a notification.
         if reason and _bash_recipient_is_self(cmd):
             reason = None
-        # Self-Telegram exception: if the curl sends only to Sam's own owner
-        # chat_id(s), it's a status ping to Sam — operational, not outbound
+        # Self-Telegram exception: if the curl sends only to the operator's own owner
+        # chat_id(s), it's a status ping to the operator — operational, not outbound
         # human-to-human comms. Sends to any other chat_id stay blocked.
         if reason == 'Telegram bot' and _telegram_recipient_is_self(cmd):
             reason = None
@@ -837,7 +837,7 @@ def main():
         audit('BLOCKED_SUBAGENT', tool_name, reason, cmd_snippet)
         msg = (
             f'BLOCKED: subagents may NEVER send outbound comms ({reason}).\n'
-            f'Only the parent Claude Code session can dispatch a send after Sam\n'
+            f'Only the parent Claude Code session can dispatch a send after the operator\n'
             f'explicitly approves the specific draft. Subagent id: {agent_id or "(env)"}\n'
             f'Return the DRAFT to the parent session, do not attempt to send.'
         )
@@ -874,9 +874,9 @@ def main():
         sys.stderr.write(msg)
         sys.exit(2)
 
-    # Persistent prior-approval bypass (Sam's directive 2026-06-18): an EMAIL
+    # Persistent prior-approval bypass (the operator's directive 2026-06-18): an EMAIL
     # whose every recipient is on the approved-recipients allowlist is a send
-    # Sam has already signed off on — let it through without burning a token, so
+    # the operator has already signed off on — let it through without burning a token, so
     # an approved batch doesn't require slow one-token-per-message minting. Any
     # email with a recipient NOT on the list still falls through to the gate.
     # Email only; Slack/WhatsApp/SMS/voice are unaffected.
@@ -895,7 +895,7 @@ def main():
     # Pass recipient and text so the shared store can recognise this message when
     # another guard sees it too. Without them the same message would cost a unit at
     # every layer. Also pass tool name and session id: the guard uses them to bind
-    # approval to the exact message from the exact session that was shown to Sam,
+    # approval to the exact message from the exact session that was shown to the operator,
     # not a bare count any session can spend (fixed 2026-09-02).
     _rcpt, _body = _identify(tool_name, tool_input if isinstance(tool_input, dict) else {}, cmd)
     _session_id = str(data.get('session_id') or data.get('sessionId') or '')
@@ -921,32 +921,32 @@ def main():
     # NAME COLLISION FIXED 2026-09-08. This used to instruct `! ok`, which is a
     # shell escape that runs `touch /tmp/.claude-send-ok`. But ~/.local/bin/ok
     # is a DIFFERENT program -- the one that mints a body-bound approval from
-    # the pending queue. Sam typed the wrong one four times in one day, and the
+    # the pending queue. The operator typed the wrong one four times in one day, and the
     # advice was pointing at the weaker mechanism anyway.
     #
     # The primary path is now the word. Saying `ok` in the conversation mints
     # approval bound to fingerprint(recipient, body) for the drafts this session
-    # already showed him -- which is the evidence his policy actually asks for.
+    # already showed the operator -- which is the evidence the policy actually asks for.
     # The bare token stays documented last, as the fallback it is, for sends
     # that cannot go through a humanizer pass.
     msg = (
         f'BLOCKED: outbound-comms guardrail tripped ({reason}).\n\n'
-        f"Sam's policy: ONE send per explicit approval, and the approval must be\n"
+        f"The operator's policy: ONE send per explicit approval, and the approval must be\n"
         f'bound to the exact text. No session may send email / Slack / WhatsApp /\n'
-        f'SMS / voice without Sam seeing the FINAL body for THIS send and\n'
+        f'SMS / voice without the operator seeing the FINAL body for THIS send and\n'
         f'approving THAT send to THAT recipient.\n\n'
         f'Normal path — no token needed:\n'
         f'  1. printf \'%s\' "$DRAFT" | outbound-humanize --to \'RECIPIENT\'\n'
         f'     (rewrites, reads the thread, queues the exact body, stamps it)\n'
-        f'  2. Show Sam that exact stdout, in full.\n'
-        f'  3. Sam replies with one word in the conversation: ok / ja / stuur /\n'
+        f'  2. Show the operator that exact stdout, in full.\n'
+        f'  3. The operator replies with one word in the conversation: ok / yes /\n'
         f'     send / go. That mints approval bound to (recipient, body).\n'
-        f'     His Telegram DM works too.\n'
+        f'     The operator\'s own Telegram DM works too.\n'
         f'  4. Retry this same tool call. One approval = one successful send.\n\n'
-        f'Do NOT ask him for `! ok`: that is the bare token, it binds to no text,\n'
+        f'Do NOT ask for `! ok`: that is the bare token, it binds to no text,\n'
         f'and `ok` in the shell is a different program from the `!` escape.\n\n'
-        f'Fallback for sends with no humanizer pass (rare): Sam runs\n'
-        f'`touch /tmp/.claude-send-ok` himself, valid 120s, single use. That is\n'
+        f'Fallback for sends with no humanizer pass (rare): the operator runs\n'
+        f'`touch /tmp/.claude-send-ok`, valid 120s, single use. That is\n'
         f'weaker evidence and is logged as approval_route=legacy-token.\n\n'
         f'Consent audit: ~/.claude/state/outbound-consent-audit.jsonl\n'
         f'Gate audit:    /tmp/claude-outbound-audit.log'

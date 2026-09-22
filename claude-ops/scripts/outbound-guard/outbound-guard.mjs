@@ -4,7 +4,7 @@
 // fields -- `remaining` (a count) and `spent` (a fingerprint map) -- that the
 // Python side stopped writing on 2026-09-02. `mint()` writes
 // {minted, ttl, approved, inflight}. So `Number(d.remaining ?? 0)` was 0 and
-// `spent` was {} on every single call, and this guard refused EVERY message Sam
+// `spent` was {} on every single call, and this guard refused EVERY message the operator
 // had actually approved. The only sends that got through did so because
 // read() returned null and the legacy /tmp/.claude-send-ok fallback fired.
 //
@@ -112,14 +112,14 @@ export function peek() {
   };
 }
 
-// True when Sam's own outbound gate ALREADY approved this exact message and is
+// True when the operator's own outbound gate ALREADY approved this exact message and is
 // holding a live reservation for it -- i.e. this guard is the second lock on one
 // call, not the first lock on a new one. Nothing is minted and nothing is spent
 // here; the reservation is still committed or released by the PostToolUse step.
 //
 // Fails closed on every uncertainty. If the Python guard cannot be reached at
 // all we return false, with NO legacy-token fallback: consume() may fall back
-// because a bare token is Sam's deliberate escape hatch for a send, but "gate 1
+// because a bare token is the operator's deliberate escape hatch for a send, but "gate 1
 // already approved this" is a claim about state, and a claim about state we
 // cannot read is not a claim we may make.
 export function claimReservation({ args, recipient = '', body = '', guard = '', sessionId = '', tool = '' } = {}) {

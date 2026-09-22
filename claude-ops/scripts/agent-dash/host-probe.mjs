@@ -103,7 +103,7 @@ function deriveFromTranscript(path) {
   }
 
   // Walk backward for the most recent meaningful action; detect an
-  // AskUserQuestion tool_use with no following tool_result (in-flight => needs-sam).
+  // AskUserQuestion tool_use with no following tool_result (in-flight => needs-user).
   const pendingToolUseIds = new Set();
   const satisfiedToolUseIds = new Set();
   let askText = null;
@@ -244,7 +244,7 @@ function probeClaude() {
     const idleFor = rec.lastActivity ? NOW - rec.lastActivity : Infinity;
     if (!alive)
       rec.status = 'zombie'; // roster entry, dead pid
-    else if (rec.needs_user) rec.status = 'needs-sam';
+    else if (rec.needs_user) rec.status = 'needs-user';
     else if (pending && idleFor > STUCK_MS) rec.status = 'stuck';
     else if (idleFor < WORKING_MS) rec.status = 'working';
     else rec.status = 'idle';

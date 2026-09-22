@@ -16,7 +16,7 @@ Cron:
 
 Problem: outbound Paperclip→Linear `issueCreate` minted a new Linear issue for every
 unlinked Paperclip row, even when an open Linear sibling already covered the same
-work (same `paperclip:{id}`, same `[Paperclip HEA-n]` title, or same cleaned title
+work (same `paperclip:{id}`, same `[Paperclip <id>]` title, or same cleaned title
 fingerprint). Status mirror could also push open PC status onto Linear issues already
 in Duplicate/Canceled/Production.
 
@@ -37,7 +37,7 @@ Guards (minimal):
 
 3. **`linear_fix_all.py`** (follow-up 2026-07-26)
    - Does not mint open Linear clones when the linked mirror is Duplicate/Canceled/Production.
-   - `find_existing_export` reuses terminal `[Paperclip HEA-n]` hits when no live sibling exists.
+   - `find_existing_export` reuses terminal `[Paperclip <id>]` hits when no live sibling exists.
 
 ### Deploy
 

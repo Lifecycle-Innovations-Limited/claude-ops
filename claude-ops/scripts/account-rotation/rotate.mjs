@@ -1248,7 +1248,7 @@ function displayNameFor(account) {
   if (roleLocals.has(local.toLowerCase())) {
     return `${org} ${local.charAt(0).toUpperCase() + local.slice(1)}`;
   }
-  // For personal mailboxes (sam@…), use Org only if org is meaningful, else email local
+  // For personal mailboxes, use Org only if org is meaningful, else email local
   return org || local.charAt(0).toUpperCase() + local.slice(1);
 }
 

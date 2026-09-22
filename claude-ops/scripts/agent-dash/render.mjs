@@ -23,7 +23,7 @@ const C = {
 const STATUS = {
   working: { dot: '●', color: C.green, label: 'working' },
   idle: { dot: '○', color: C.gray, label: 'idle' },
-  'needs-sam': { dot: '◆', color: C.brightYellow, label: 'NEEDS YOU' },
+  'needs-user': { dot: '◆', color: C.brightYellow, label: 'NEEDS YOU' },
   blocked: { dot: '■', color: C.magenta, label: 'blocked' },
   stuck: { dot: '▲', color: C.yellow, label: 'stuck' },
   dead: { dot: '✕', color: C.brightRed, label: 'dead' },
@@ -39,7 +39,7 @@ const TYPE_GLYPH = {
   other: '·',
 };
 
-export const STATUS_ORDER = ['needs-sam', 'blocked', 'stuck', 'working', 'idle', 'zombie', 'dead'];
+export const STATUS_ORDER = ['needs-user', 'blocked', 'stuck', 'working', 'idle', 'zombie', 'dead'];
 
 function pad(s, n) {
   s = String(s ?? '');
@@ -111,7 +111,7 @@ export function renderDashboard(snapshot, { width = 100, selectedIdx = 0, status
   const lines = [];
   const agents = sortAgents(snapshot.agents);
   const total = agents.length;
-  const needs = agents.filter((a) => a.status === 'needs-sam').length;
+  const needs = agents.filter((a) => a.status === 'needs-user').length;
   const fra = snapshot.hosts?.fra || {};
   const fraUnknown = fra.known === false || fra.count === null || fra.count === undefined;
   const fraTag = fraUnknown

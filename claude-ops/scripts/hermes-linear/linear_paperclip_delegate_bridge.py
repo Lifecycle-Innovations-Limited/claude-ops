@@ -53,7 +53,9 @@ from alignment_lib import (  # noqa: E402
     canonical_linear_title,
     canonical_paperclip_title,
     clean_semantic_title,
+    client_team_prefix,
     create_issue,
+    linear_issue_url,
     get_comments,
     get_issue,
     load_env,
@@ -359,7 +361,7 @@ def update_linear_fields(issue_id: str, fields: dict[str, Any]) -> dict:
       }
     }
     """
-    # Prefer personal key for reliability; agent token also OK for HEA
+    # Prefer personal key for reliability; agent token also OK for the client team
     res = linear_gql(m, {"id": issue_id, "input": fields}, token=personal_key() or agent_token())
     if res.get("errors"):
         res = linear_gql(m, {"id": issue_id, "input": fields}, token=agent_token() or personal_key())
@@ -369,7 +371,7 @@ def update_linear_fields(issue_id: str, fields: dict[str, Any]) -> dict:
 def desired_linear_title(pc_ident: str, pc_title: str, lin_title: str) -> Optional[str]:
     """Paperclip title is SSOT when AgentCore is delegate.
 
-    - Preserve ``[Paperclip HEA-N]`` prefix on exports.
+    - Preserve ``[Paperclip <id>]`` prefix on exports.
     - For native Linear titles, replace with PC title (no prefix) unless already equal.
     """
     pc_title = (pc_title or "").strip()
@@ -635,7 +637,7 @@ def route_inbound_to_qiubo(
         add_comment(
             pc_id,
             (
-                f"**Inbound Linear→Paperclip route (Sam 2026-07-19)**\n\n"
+                f"**Inbound Linear→Paperclip route (the operator 2026-07-19)**\n\n"
                 f"- Source Linear: `{lin}` (AgentCore delegate)\n"
                 f"- Assignee: **{CLIENT_INBOUND_ASSIGNEE_NAME}** (`{CLIENT_INBOUND_ASSIGNEE_AGENT_ID}`)\n"
                 f"- Action: triage + route to product/eng/growth as needed\n"
@@ -815,10 +817,10 @@ SELECT json_agg(row_to_json(t)) FROM (
             title.startswith("[Paperclip ")
             or "[Paperclip " in title
             or "source:linear-ai-delegate" in desc
-            or re.match(r"^\[HEA-\d+\]\s", title)
+            or re.match(rf"^\[{re.escape(client_team_prefix())}-\d+\]\s", title)
             or title.startswith("Watchdog review for ")
             or title.startswith("coord:")
-            or title.startswith("[HEA-") and "residual" in title.lower()
+            or title.startswith(f"[{client_team_prefix()}-") and "residual" in title.lower()
         ):
             continue
         if r.get("marked"):
@@ -832,10 +834,14 @@ SELECT json_agg(row_to_json(t)) FROM (
 
 
 def _title_fingerprint(title: str) -> str:
-    """Normalize title for open-sibling matching (strip Paperclip/HEA brackets)."""
+    """Normalize title for open-sibling matching (strip Paperclip and team-key brackets)."""
     sem = clean_semantic_title(title or "")
     t = re.sub(r"\s+", " ", sem).strip().lower()
-    t = re.sub(r"^hea-\d+\s*[:\-–—]?\s*", "", t)
+    t = re.sub(
+        rf"^{re.escape(client_team_prefix().lower())}-\d+\s*[:\-–—]?\s*",
+        "",
+        t,
+    )
     return t
 
 
@@ -991,7 +997,7 @@ def outbound_create(row: dict, dry_run: bool, states_cache: dict[str, list[dict]
     if sibling and sibling.get("identifier"):
         lin_ident = sibling["identifier"]
         lin_uuid = sibling.get("id") or ""
-        lin_url = sibling.get("url") or f"https://linear.app/lifecycle-innovations/issue/{lin_ident}"
+        lin_url = sibling.get("url") or linear_issue_url(lin_ident)
         st_name = ((sibling.get("state") or {}).get("name") or "")
         st_type = ((sibling.get("state") or {}).get("type") or "").lower()
         terminal = st_type in ("completed", "canceled", "duplicate") or st_name.lower() in (
@@ -1059,7 +1065,7 @@ def outbound_create(row: dict, dry_run: bool, states_cache: dict[str, list[dict]
     if not created.get("success") or not issue.get("identifier"):
         return f"outbound FAIL create {pc}: {res}"
     lin_ident = issue["identifier"]
-    lin_url = issue.get("url") or f"https://linear.app/lifecycle-innovations/issue/{lin_ident}"
+    lin_url = issue.get("url") or linear_issue_url(lin_ident)
     lin_uuid = issue["id"]
     append_linear_markers_to_paperclip(pc, lin_ident, lin_url)
     post_linear_comment(
@@ -1136,10 +1142,10 @@ def resolve_pair_linear_id(row: dict) -> Optional[str]:
 
     # Standing routine hard block (even if comment thrash re-added markers)
     try:
-        from hea_thrash_canons import FORCE_UNLINK, MULTI_CANON, STANDING_OWN_LINEAR  # type: ignore
+        from client_thrash_canons import FORCE_UNLINK, MULTI_CANON, STANDING_OWN_LINEAR  # type: ignore
     except Exception:  # noqa: BLE001
         # No fallback canons ship with this repo: these are one client's real
-        # Linear issue ids. Supply them in an out-of-repo ``hea_thrash_canons``
+        # Linear issue ids. Supply them in an out-of-repo ``client_thrash_canons``
         # module. Empty means "no canon overrides", which is correct here.
         FORCE_UNLINK = {}
         MULTI_CANON = {}
@@ -1583,7 +1589,7 @@ def main() -> int:
                 events.append(ev)
                 if not args.dry_run and "inbound created " in ev:
                     created += 1
-                    # parse pc id from "inbound created HEA-N for HEA-M"
+                    # parse pc id from "inbound created TEAM-N for TEAM-M"
                     m = re.search(r"inbound created ([A-Z]+-\d+)", ev)
                     if m:
                         created_ids.append(m.group(1))

@@ -25,7 +25,7 @@ app = Flask(__name__)
 
 HOME = Path(os.environ.get("HOME", "$HOME"))
 STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", HOME / ".claude/state/pocket"))
-ALLOWED_USER = os.environ.get("TAILSCALE_USER", "")  # e.g. sam@example.com
+ALLOWED_USER = os.environ.get("TAILSCALE_USER", "")  # e.g. user@example.com
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 

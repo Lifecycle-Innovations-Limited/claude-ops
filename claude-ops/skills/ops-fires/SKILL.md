@@ -332,7 +332,7 @@ CLAIM_KEY="sentry:issue:<short_id>"
 ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
 ```
 
-If `in_progress` or `done` exists, skip the issue. If `awaiting_sam` exists, surface
+If `in_progress` or `done` exists, skip the issue. If `awaiting_user` exists, surface
 it as "fix already staged — needs your decision."
 
 ### Claim + resolve
