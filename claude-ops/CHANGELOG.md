@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [3.10.23] - 2026-09-22
+
+### Changed
+fix(ops-dash): de fires-sectie vroeg de falende CI-runs een tweede keer op, serieel en zonder tijdslimiet, waardoor het dashboard als achtergrondtaak landde in plaats van in beeld.
+
+
 ## [3.10.22] - 2026-09-22
 
 ### Changed
