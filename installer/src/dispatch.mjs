@@ -219,6 +219,7 @@ function applyAll({ plan, dryRun, cfg }) {
     applyBinLinks({
       binPath: cfg.bin.path,
       plan: plan.bin,
+      dryRun,
       onApply: (to, from) => addSymlink(manifest, to, from),
     });
   }

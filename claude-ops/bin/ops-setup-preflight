@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 # ops-setup-preflight — gather all setup data in parallel (runs in background)
 # Results written to /tmp/ops-preflight/ for the setup wizard to read
+
+# macOS still ships Bash 3.2, and the Telegram probe below uses an associative
+# array. That probe runs as a background job, so under 3.2 it dies quietly and
+# the wizard sees a complete-looking result directory with telegram.txt missing.
+# Repair the interpreter boundary here, the same way bin/ops-status does.
+if (( BASH_VERSINFO[0] < 4 )); then
+  for modern_bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [ -x "$modern_bash" ] && "$modern_bash" -c '(( BASH_VERSINFO[0] >= 4 ))' 2>/dev/null; then
+      exec "$modern_bash" "$0" "$@"
+    fi
+  done
+  printf 'ops-setup-preflight: Bash 4+ is required (found %s)\n' "$BASH_VERSION" >&2
+  exit 69
+fi
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"

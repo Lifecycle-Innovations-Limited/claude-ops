@@ -76,11 +76,17 @@ export function planBinLinks({ srcDir, binPath, binNames, force }) {
   return { planned, refused, errors };
 }
 
-export function applyBinLinks({ binPath, plan, onApply }) {
+export function applyBinLinks({ binPath, plan, onApply, dryRun }) {
   const results = [];
-  fs.mkdirSync(binPath, { recursive: true });
+  // Creating binPath is itself a mutation — on a fresh host this is what brings
+  // ~/bin into existence, so it has to sit behind the dryRun guard too.
+  if (!dryRun) fs.mkdirSync(binPath, { recursive: true });
   for (const r of plan.planned) {
     if (r.status !== "planned") {
+      results.push(r);
+      continue;
+    }
+    if (dryRun) {
       results.push(r);
       continue;
     }
