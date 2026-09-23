@@ -112,6 +112,34 @@ try {
     "ops-inbox-scan binstub present in scratch",
   );
 
+  // 3b. applyBinLinks honours dryRun. Regression: it used to take no dryRun
+  // param at all, so `install --dry-run` created the bin dir and every symlink
+  // for real — and, because the manifest is only saved when !dryRun, left them
+  // untracked and beyond the reach of `uninstall`.
+  const dryBin = path.join(scratch, "bin-dry");
+  const dryPlan = planBinLinks({
+    srcDir: SRC,
+    binPath: dryBin,
+    binNames: bins,
+    force: false,
+  });
+  const dryManifest = newManifest();
+  applyBinLinks({
+    binPath: dryBin,
+    plan: dryPlan,
+    dryRun: true,
+    onApply: (to, from) => addSymlink(dryManifest, to, from),
+  });
+  assert(!fs.existsSync(dryBin), "dry-run does not create the bin directory");
+  assert(
+    dryManifest.symlinks.length === 0,
+    `dry-run records nothing in the manifest (got ${dryManifest.symlinks.length})`,
+  );
+  assert(
+    dryPlan.planned.every((r) => r.status === "planned"),
+    "dry-run leaves every entry at status=planned",
+  );
+
   // 4. Detection-gated planning skips undetected agents by default.
   const detectedPath = path.join(scratch, "detected-agent");
   const undetectedPath = path.join(scratch, "undetected-agent");
