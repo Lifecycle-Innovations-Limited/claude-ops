@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## [3.10.26] - 2026-09-28
+
+### Fixed
+
+- `ops-aws-audit` now works out timestamps correctly with the BSD `date` that ships on macOS. Before, access keys showed an age of about 20,000 days, which made healthy keys look long overdue for rotation.
+
+### Removed
+
+- The `ledger` skill has been removed.
+
+
 ## [3.10.25] - 2026-09-28
 
 ### Fixed
