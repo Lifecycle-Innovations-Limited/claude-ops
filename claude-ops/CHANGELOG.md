@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## [3.10.25] - 2026-09-28
+
+### Fixed
+- Installer: honour `--dry-run` for binstubs, and add a Bash 4 shim to the preflight check (#1013).
+- ops-dash: drop the second CI pass so the dashboard stays on screen (#1009).
+- infra-monitor: pass ECS service ARNs through instead of names (#1008).
+
+### Changed
+- Make the public plugin generic (#1010).
+- Dependencies: prettier 3.9.8, anthropics/claude-code-action 1.0.233, aws-actions/configure-aws-credentials 6.3.0.
+
+
 ## [3.10.24] - 2026-09-22
 
 ### Changed
