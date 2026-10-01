@@ -216,6 +216,7 @@ Every `/ops:ops-inbox` run should be fast for the owner, whose time is spent onl
 - **Do research, context-gathering, and draft-writing in the background while the owner works.** Kick off the readers/drafters; let them build full-thread arcs, cross-channel dedup, contact profiles, and staged draft text concurrently. Surface results as they land so the owner approves in a steady stream instead of after one big serial pass.
 - **Parallelism NEVER changes the safety model.** Workers are strictly READ-ONLY — they classify and return draft text only. Every outbound send stays in the main session, one draft → one `AskUserQuestion` → one approval → one send (Rule 6 + PER-DRAFT APPROVAL).
 - **Respect the box concurrency ceiling** (heartbeat `MAX_BUSY`) — queue extra work rather than exceeding it.
+- **Workers run on a cheaper tier than the main session.** Pass `model` on every fan-out agent: `haiku` for retrieval, `sonnet` for reading, classifying and ordinary drafts, the top model only for legal/financial/deal threads. Never pin a model id. Change models from the next stage onward; never stop a running worker for it. Details: `references/fan-out.md`.
 
 ## Scan engine — offline script triages first, Workflow fan-out is the DEFAULT for deep per-thread work
 

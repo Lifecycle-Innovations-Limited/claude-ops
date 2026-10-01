@@ -49,6 +49,22 @@ volume is more than a glance.
   so it can look up the same person/topic across other channels before drafting, not just
   its own assigned channel's tools.
 
+- **Model per worker — never the session's top model for parallel workers (the
+  operator, 2026-10-01).** A fan-out inherits the main session's model by default, so
+  a run on a frontier-tier main model silently spends frontier tokens on every scanner.
+  Set `model` explicitly on each `agent()` call: `haiku` for pure retrieval (listing
+  chats, paging search results, pulling a thread), `sonnet` for reading, classifying,
+  cross-channel context and ordinary reply drafts, and the session's top model only for
+  the few threads where a wrong word costs money or goodwill (legal, financial, deal
+  terms). Sonnet is an acceptable choice for every stage when in doubt. Never pin a
+  model id — use the tier aliases so they track the current generation (`ops-rules`
+  Rule 17).
+- **Change models from the next stage onward, never mid-flight.** A running worker is
+  sunk cost; stopping it discards its work (the resume cache only reuses agents that
+  finished with an unchanged prompt and options, and a changed `model` is a changed
+  option). Read `journal.jsonl` first: if no agent has completed, a stop gains nothing.
+  Apply a model change to stages that have not started, or to the next run.
+
 **Canonical scan workflow.** Pass the available channels in via `args` (the orchestrator
 builds the list from the detected-available channels), so the script body stays stable:
 
@@ -138,7 +154,7 @@ const scans = (await parallel(CHANNELS.map(c => () =>
     \`for each (needed later to reply). Cover ~last 7 days plus \` +
     \`anything clearly still open. Retry the documented reconnect handshake before reporting \` +
     \`reachable=false. Never fabricate conversations.\`,
-    { label: \`scan:\${c.key}\`, phase: 'Scan', schema: SCAN_SCHEMA }
+    { label: \`scan:\${c.key}\`, phase: 'Scan', schema: SCAN_SCHEMA, model: 'sonnet' }
   )
 ))).filter(Boolean)
 
@@ -150,7 +166,7 @@ return await agent(
   \`Return ONLY structured JSON with buckets: needsReply[], waiting[], fyi[], unreachable[]. \` +
   \`Each item: {channel, who, summary, chatId, lastMessageAt}. Order needsReply most-urgent \` +
   \`first. Do NOT draft replies — that happens in the main session under the per-message gate.\`,
-  { label: 'synthesize', phase: 'Synthesize',
+  { label: 'synthesize', phase: 'Synthesize', model: 'sonnet',
     schema: { type: 'object', additionalProperties: true } }
 )
 `,
