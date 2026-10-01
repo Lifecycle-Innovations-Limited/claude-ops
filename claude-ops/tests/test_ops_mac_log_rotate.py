@@ -3,6 +3,7 @@ import contextlib
 import importlib.machinery
 import importlib.util
 import io
+import os
 import pathlib
 import plistlib
 import subprocess
@@ -10,7 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-SOURCE = pathlib.Path(__file__).resolve().parents[1] / "scripts/ops-mac/agent-log-rotate"
+SOURCE = pathlib.Path(os.getenv("OPS_MAC_LOG_SOURCE", str(pathlib.Path(__file__).resolve().parents[1] / "scripts/ops-mac/agent-log-rotate")))
 loader = importlib.machinery.SourceFileLoader("log_rotate", str(SOURCE))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 module = importlib.util.module_from_spec(spec)
