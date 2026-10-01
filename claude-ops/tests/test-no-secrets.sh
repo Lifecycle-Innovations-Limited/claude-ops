@@ -515,8 +515,12 @@ identity_filename_check() {
   # location — which on a developer machine includes their own username, a live
   # denylist term — so scanning absolute paths flags every file in the repo.
   # That is a property of where the clone sits, not of what is committed.
-  local hits
-  hits=$(sed "s|^$PLUGIN_ROOT/||" "$TRACKED_FILE" \
+  # Ask git for every tracked name relative to its actual top-level, including
+  # tests/ and .github/, without interpreting the checkout path as a regex.
+  local hits root_git
+  root_git="$(git -C "$PLUGIN_ROOT" rev-parse --show-toplevel)"
+  # Keep non-ASCII identity terms literal; this option applies only to this call.
+  hits=$(git -c core.quotePath=false -C "$root_git" ls-files \
     | grep -iF -f <(echo "$terms") 2>/dev/null || true)
   if [[ -n "$hits" ]]; then
     local count; count=$(echo "$hits" | wc -l | tr -d ' ')

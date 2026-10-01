@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## [3.10.27] - 2026-10-01
+
+### Changed
+- chore(deps): bump ip-address (#1021)
+- chore(deps): bump ip-address (#1022)
+
+### Fixed
+- Scan repository-relative filenames in the privacy gate, including workflow files, so the checkout location does not trigger false positives.
+- Use generic host descriptions in WhatsApp health warnings without changing runtime behavior.
+
 ## [3.10.26] - 2026-09-28
 
 ### Fixed

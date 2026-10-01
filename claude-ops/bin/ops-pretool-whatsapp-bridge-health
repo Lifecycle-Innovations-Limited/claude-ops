@@ -2,7 +2,7 @@
 # PreToolUse hook: fast WhatsApp reachability check (backgrounded to avoid blocking)
 # Event JSON arrives on stdin (Claude + Grok). Optional argv kept for old callers.
 #
-# WhatsApp runs on the always-on host (ai-hub), for both numbers. This machine is
+# WhatsApp runs on the always-on host, for both numbers. This machine is
 # only ever a CLIENT: the MCP reaches the remote bridge through local reverse
 # proxies. There is no local bridge and there must never be one -- starting or
 # pairing a bridge here hijacks the remote session and logs it out.
@@ -37,7 +37,7 @@ WA_CLIENT_PORT_US="${OPS_WA_CLIENT_PORT_US:-8482}"
   if [[ -n "$down" ]]; then
     cat <<EOF >&2
 ⚠ WhatsApp client leg down:${down}
-  WhatsApp runs on ai-hub only (both numbers); this machine is just a client.
+  WhatsApp runs on the always-on host only (both numbers); this machine is just a client.
   Do NOT start, pair or kickstart a local bridge -- that hijacks the hub session.
   Check the local reverse proxy and the tunnel to the hub, then retry.
 EOF
