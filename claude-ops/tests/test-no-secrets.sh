@@ -519,7 +519,8 @@ identity_filename_check() {
   # tests/ and .github/, without interpreting the checkout path as a regex.
   local hits root_git
   root_git="$(git -C "$PLUGIN_ROOT" rev-parse --show-toplevel)"
-  hits=$(git -C "$root_git" ls-files \
+  # Keep non-ASCII identity terms literal; this option applies only to this call.
+  hits=$(git -c core.quotePath=false -C "$root_git" ls-files \
     | grep -iF -f <(echo "$terms") 2>/dev/null || true)
   if [[ -n "$hits" ]]; then
     local count; count=$(echo "$hits" | wc -l | tr -d ' ')

@@ -65,5 +65,16 @@ for rel in ".github/workflows/$TERM.yml" "claude-ops/tests/$TERM.txt" \
   rm -f "$REPO/$rel"
 done
 
+# Git's default quotePath escapes non-ASCII bytes; these names must be matched
+# as literal UTF-8, in both the external workflow tree and the tests tree.
+TERM="café"
+for rel in ".github/workflows/$TERM.yml" "claude-ops/tests/$TERM.txt"; do
+  printf 'ok\n' > "$REPO/$rel"
+  git -C "$REPO" add -- "$rel"
+  check "unicode-${PASS}-${FAIL}" 1 "$rel"
+  git -C "$REPO" rm -q -f --cached -- "$rel"
+  rm -f "$REPO/$rel"
+done
+
 echo "Results: $PASS passed, $FAIL failed"
 [[ "$FAIL" == 0 ]]
