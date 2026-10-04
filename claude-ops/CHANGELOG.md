@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [3.10.28] - 2026-10-04
+
+### Changed
+ops-ar: Cyanite schema drift (fileUploadRequest id, ID! upload var), real auth test via libraryTracks, webhook must verify HMAC-SHA512 Signature, bpmRangeAdjusted vs bpmPrediction, Soundcharts app-id/key pairing.
+
+
 ## [3.10.27] - 2026-10-01
 
 ### Changed
