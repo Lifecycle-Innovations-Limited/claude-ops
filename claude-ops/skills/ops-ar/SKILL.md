@@ -105,10 +105,10 @@ Pull every demo/song from the user's Gmail inbox and A&R them all:
 
 ## Pro APIs (Cyanite / Music.ai / Soundcharts) — operational notes
 
-- **Cyanite** (`$AUDIO_AR_HOME/venv/bin/python pro_apis.py cyanite <file>`): returns genreTags, subgenreTags, moodTags, instrumentTags, `bpmPrediction{value confidence}`, `keyPrediction{value confidence}`, timeSignature, energyLevel, valence, arousal, voicePresenceProfile, predominantVoiceGender, musicalEraTag, transformerCaption and per-mood scores (`mood{happy uplifting energetic dark sad calm epic romantic}`). **Free/trial plans have a LIFETIME library cap — deleting tracks does NOT free quota.** On `librarySizeLimitExceededError`, route through Music.ai instead.
+- **Cyanite** (`$AUDIO_AR_HOME/venv/bin/python pro_apis.py cyanite <file>`): returns genreTags, subgenreTags, moodTags, instrumentTags, bpmRangeAdjusted, `bpmPrediction{value confidence}`, `keyPrediction{value confidence}`, timeSignature, energyLevel, valence, arousal, voicePresenceProfile, predominantVoiceGender, musicalEraTag, transformerCaption and per-mood scores (`mood{happy uplifting energetic dark sad calm epic romantic}`). **Free/trial plans have a LIFETIME library cap — deleting tracks does NOT free quota.** On `librarySizeLimitExceededError`, route through Music.ai instead.
   - **Schema drift (2026-10):** `fileUploadRequest` now returns `{ uploadUrl id }` (the field was `uploadId`), then `libraryTrackCreate(input: { uploadId: $id })` with `$id: ID!`. Older `pro_apis.py` copies that read `uploadId`, send a String id, or query removed fields fail validation — fix the stack, not the card.
   - **Auth test:** `query { ping }` answers without a valid key. Prove a key with `libraryTracks(first: 1) { edges { node { id } } }` and check that `data.libraryTracks` is an object.
-  - **API access needs a webhook URL** on the Cyanite integration, even if you only poll. Any HTTPS endpoint that returns 200 works; if it verifies, the `Signature` header is HMAC-SHA512 of the raw body with the webhook secret. A tiny Cloudflare Worker is enough.
+  - **API access needs a webhook URL** on the Cyanite integration, even if you only poll. Point it at an HTTPS endpoint you control, and verify the `Signature` header (HMAC-SHA512 of the raw body with the webhook secret) before processing any payload; reject mismatches. A tiny Cloudflare Worker is enough.
   - **Mood scores beat CLAP on dark/bright.** When CLAP says "dark" but Cyanite `mood.dark` is low (< 0.2) and happy/uplifting are high, report the Cyanite reading.
 - **Music.ai** (`pro_apis.py musicai <file>`, needs `$MUSICAI_WORKFLOW`, e.g. a "Metadata Suite" workflow): same Cyanite engine on separate billing + extras — `ai_voice` (Real vs AI-GENERATED — always flag AI guide vocals: they're placeholders needing a real singer), `voice_gender`, `instruments`. Implementation gotchas (already handled in pro_apis.py): requests need a browser `User-Agent` (Cloudflare 1010 blocks default python-urllib), and the upload-URL request must be a clean GET with no body. Convert `.m4a` to mp3 before upload.
 - **Soundcharts** (`pro_apis.py soundcharts <query>`): released-catalogue lookup only — useless for unreleased demos; use it for reference-track benchmarking in the REFERENCE section. Auth is the `x-app-id` + `x-api-key` pair, and both must come from the **same** console app — a key from one app with another app's id fails auth and looks like an expired key. `song/{uuid}` gives `audio.key`/`audio.mode`/`audio.tempo`, handy for checking that a remix keeps the original's key.
@@ -117,7 +117,7 @@ Pull every demo/song from the user's Gmail inbox and A&R them all:
 
 - Demo bounces are loud and dull on top — judge song/topline/lane, not the demo master.
 - Never infer missing verses / song incompleteness from a sparse Whisper transcript (low vocal in the bounce ≠ unwritten song).
-- librosa BPM can read doubled/halved — trust the pro-layer `bpmRangeAdjusted` when available; otherwise confirm by groove.
+- librosa BPM can read doubled/halved — trust the pro-layer `bpmPrediction` (check its confidence; `bpmRangeAdjusted` is the same value without one) when available; otherwise confirm by groove.
 - Verify hit-claims with data (CLAP commercial lean, valence/arousal), but the verdict is producer judgment, not a printout.
 
 ## Fallback
