@@ -117,7 +117,7 @@ Pull every demo/song from the user's Gmail inbox and A&R them all:
 
 - Demo bounces are loud and dull on top — judge song/topline/lane, not the demo master.
 - Never infer missing verses / song incompleteness from a sparse Whisper transcript (low vocal in the bounce ≠ unwritten song).
-- librosa BPM can read doubled/halved — trust the pro-layer `bpmPrediction` (check its confidence; `bpmRangeAdjusted` is the same value without one) when available; otherwise confirm by groove.
+- librosa BPM can read doubled/halved — trust the pro-layer `bpmRangeAdjusted` (the prediction folded into 60–180 BPM, so it can differ from raw `bpmPrediction.value`, e.g. 200 vs 100) and use `bpmPrediction.confidence` to judge how sure it is, when available; otherwise confirm by groove.
 - Verify hit-claims with data (CLAP commercial lean, valence/arousal), but the verdict is producer judgment, not a printout.
 
 ## Fallback
