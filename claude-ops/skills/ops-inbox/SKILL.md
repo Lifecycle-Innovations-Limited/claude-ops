@@ -58,385 +58,88 @@ effort: high
 maxTurns: 60
 ---
 
-# OPS ► INBOX ZERO
-
-Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
-
-## Parent session: AUTO-START DRAFTING
-
-This skill MUST run in the parent session. Never set `context: fork` — that
-parks the whole run (including drafts) in a background agent, so the parent
-idles until the owner types "continue drafting". Measured 2026-09-21.
-
-**Always report to the main agent by default.** Every Agent / Workflow /
-forked worker this skill launches returns KEEP rows, thread arcs, and draft
-text to the parent. It never `AskUserQuestion`, never numbered-options the
-owner, never waits for "continue". If this skill itself was spawned as a
-subagent, the same rule: the last message is a report for the parent, not a
-card for the owner.
-
-**30-second parent heartbeat (default).** At the start of every run, launch:
-
-```bash
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-parent-heartbeat.sh"
-```
-
-via Bash `run_in_background: true`. Default interval is 30 seconds
-(`OPS_INBOX_HEARTBEAT_SEC`). The job sleeps, prints one `INBOX HEARTBEAT`
-line, and exits. **The job's exit IS the ping to this parent session.**
-When it fires: print that line to the owner, then relaunch the same
-command. Never wait for the owner to ask for a status.
-
-Every background worker also `SendMessage`s the parent at least every 30
-seconds with one line (`channel=… keep=… drafting=…`). That is the
-default, not an opt-in.
-
-On `/ops:ops-inbox` / `/ops-inbox`, start drafting in THIS session without a
-second prompt:
-
-1. Kick the cheap scan (`ops-inbox-scan`) and fan-out readers immediately.
-2. The moment the first KEEP / NEEDS_REPLY exists (scan JSON, keep.md,
-   thread_tail, or a reader returning), stage that draft. Do not wait for
-   the rest of the inbox.
-3. Queue further drafts as readers land. One draft → one approval → one send.
-4. Never wait for "continue drafting", "go", or "next?". The slash command
-   is the start signal.
-
-Scanners stay background and read-only. Sends never leave the parent.
-
-## ⚠️ WHATSAPP TRANSPORT — MCP ONLY, NEVER `wacli`
-
-For **all** WhatsApp operations in this skill (list chats, read messages, search contacts, send replies, archive chats), use the `mcp__whatsapp__*` tool family backed by the whatsmeow (Go) whatsapp-bridge — upstream `lharries/whatsapp-mcp`. (Earlier docs misnamed this as "Baileys" — Baileys is the Node.js WhatsApp library; this bridge uses `go.mau.fi/whatsmeow`.)
-
-> **Server name.** `mcp__whatsapp__*` is the single-account default. Installs with more than one account
-> register one server per account (`whatsapp-nl`, `whatsapp-us`, `whatsapp-personal`, `whatsapp-work`, ...)
-> and have no plain `mcp__whatsapp__*` at all. `whatsapp-cos` is not an account — do not send on it.
-> Resolve the real name from the available tools before the first call, and when several accounts exist,
-> scan each one separately and keep the results labelled by account. See CLAUDE.md / ops-rules Rule 8.
-
-**NEVER call the legacy `wacli` CLI** (`wacli chats list`, `wacli messages list`, `wacli send`, `wacli doctor`, `wacli history backfill`, etc). The wacli store and keepalive daemon are deprecated for this skill.
-
-If you find yourself reaching for any `wacli ...` shell command, stop and use the MCP tool with the same intent:
-
-| Intent                        | ✅ Use this                                                                                                                                                                           | ❌ Do NOT use                       |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| List recent chats             | `mcp__whatsapp__list_chats {sort_by: "last_active", limit: 25}`                                                                                                                       | `wacli chats list`                  |
-| Read full thread              | `mcp__whatsapp__list_messages {chat_jid, limit: 20}`                                                                                                                                  | `wacli messages list`               |
-| Full-text search              | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}`                                                                                                                           | `wacli messages search`             |
-| Resolve a contact             | `mcp__whatsapp__search_contacts {query: "<name>"}`                                                                                                                                    | `wacli contacts`                    |
-| Send a reply (after approval) | `mcp__whatsapp__send_message {recipient: "<JID>", message: "<text>"}`                                                                                                                 | `wacli send`                        |
-| Health check                  | `ops-wa-accounts --list`, then `curl -s -o /dev/null -w "%{http_code}" "$WA_API/api/v1/status"` (401 is healthy when the route is Bearer-gated). Never `lsof :8080`, never `launchctl kickstart` unless policy says the bridge is local. | `wacli doctor` / `~/.wacli/.health` |
-| Trigger history backfill      | `curl -fsS -X POST "$WA_API/api/backfill"` (resolve `$WA_API` first — see "WHICH NUMBER" below; claude-ops patch — runs per-chat against the 50 most-recent chats; bridge also auto-backfills 5s after every Connected event) | —                                   |
-
-**Rationale:** the bridge exposes a typed MCP surface, returns consistent JSON shapes (`is_from_me`, `content`, `timestamp`, `sender`), supports FTS5 search natively, and avoids store-lock contention with the wacli keepalive daemon. Mixing the two surfaces caused inconsistent state in past sessions.
-
-**Sole exception:** the `~/.wacli/.health` file is still readable for legacy daemon-health surfacing in other skills, but no `wacli` command should be invoked from this skill.
-
-## ⚠️ WHICH NUMBER — resolve the account before the first read or send
-
-**This box may run more than one WhatsApp account.** The bridge process may be local, or it may
-run on another host with this machine as a **client**. Clients dial a local reverse-proxy URL from
-policy (`api` / `bridge_port` in `$PREFS_PATH` `.channels.whatsapp`, written by `/ops:setup`
-step 3b; `$OPS_DATA_DIR/registry.json` `.whatsapp` is the same shape). They never dial a remote
-IP, never guess `:8080`, and never start a local LaunchAgent "to recover" when policy says the
-bridge is elsewhere. A 401 on `$WA_API/api/v1/status` is healthy when that route is Bearer-gated.
-
-**Resolve first, every run, before any read, archive, or send:**
-
-```bash
-"$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --list      # every account: port, number, agent, api
-# Two agent-enabled accounts: scan EACH, labelled. Do not call --port (exits 3 on purpose).
-# For each agent_enabled account in the JSON: WA_API=$account.api
-```
-
-`ops-wa-accounts` reads local `whatsapp-bridge*` stores if present, then **overlays policy**
-from `$PREFS_PATH` (wins), then registry, then legacy `~/.config/whatsapp/agent-policy.json`.
-Policy `api` / `bridge_port` always wins over a leftover local store's launcher port. A client
-box with no `messages.db` is still resolved. It exits 3 rather than pick one account when more
-than one is agent-enabled — that is a loop, not a stop.
-
-**The rules:**
-
-1. **Never hardcode a port, never use whichever port answers, never probe a remote IP.** Use
-   each account's `api` from the resolver JSON.
-2. **A number can be agent-disabled.** An account with `agent_enabled: false` is off-limits: do not
-   scan it, do not archive it, do not send from it, do not pair or re-pair it.
-3. **Two agent-enabled accounts is not ambiguous.** Scan each, keep results labelled by account,
-   reply on the number the thread lives on. Stop and ask only when none are enabled, or when
-   unpolicy'd bridges appear with no `api`.
-4. **Reply on the number the thread lives on.** Cross-account replies are never an acceptable fallback.
-5. **Rule 8 applies to the MCP surface too.** With several accounts the servers are named per account
-   (`mcp__whatsapp-nl__*`, `mcp__whatsapp-us__*`, or `whatsapp-personal` / `whatsapp-work`) and a bare
-   `mcp__whatsapp__*` / `mcp__whatsapp-cos__*` is not an account. Match the registered name; do not
-   assume. Hermes `wa status` / `wa thread` / `wa find` is a valid read path on a client box when MCP is down.
-
-**Why this section exists:** a full inbox run once followed this skill's hardcoded
-`127.0.0.1:8080` and sent every reply from the wrong number. Guessing a port, or treating a
-missing local `messages.db` as "WhatsApp down", repeats that class of failure.
-
-## Runtime Context
-
-Default: fan out one read-only scanner per configured channel after the offline scan. Skip fan-out only in the trivial case (~1–3 candidates). Full freshness / Mac fallback / version-heal / watcher: `references/runtime.md`.
-
-Every run, in order:
-
-0. **Rank by VIP first.** Load the `vip` skill and resolve the VIP set once
-   (`/ops:vip list`). Tier-1 senders are read and answered before anything else,
-   tier-2 next, everything else after. A VIP with an unanswered inbound is
-   surfaced individually with thread context, never as a line in a digest.
-   Before drafting to any person, load `relations` for their brief and open
-   commitments.
-1. Resolve WhatsApp accounts (`ops-wa-accounts` — never hardcode a port). Scan every agent-enabled number.
-2. Freshness: `~/bin/wa-inbox-fresh.sh` (blocking, bounded). Then `bin/ops-inbox-scan` (defaults to every enabled account, `--debt-days 90`). Never an unread listing: unread is a display state and is empty for every thread already opened on a phone. Forgotten unanswered asks (archived/read, still their ball, inside 90 days) come back tagged `forgotten` — on WhatsApp AND on email, where a Gmail filter or category can hide a live thread from `in:inbox` entirely.
-2b. **Every other channel in the same pass, in parallel:** iMessage/SMS (`$HERMES_HOME/bin/imessage-inbox-scan --days 30` — copies `-wal`/`-shm` first or recent messages are invisible; alphanumeric shortcodes and OTP bodies are `fyi`, never `needs_reply`). Slack: `channels_me {channel_types:"im,mpim"}` then `conversations_history` per human DM, never `conversations_unreads` — unread is never a filter (2026-09-17), a DM read on a phone and never answered stays invisible to an unread listing. Telegram user dialogs if configured. Email is already in the scan. A miss on one channel is not absence on another.
-3. **All-context sweep** (Rule 9 + `references/details.md` "ALL CONTEXT SOURCES"): query every configured calendar, mailbox, and messaging channel before any schedule claim or NEEDS_REPLY draft. Google Calendar alone is not enough — Notion show/calendar databases count when Notion is configured.
-4. `bin/ops-inbox-archive-set` report-only. Present KEEP vs ARCHIVE; `--apply` only after explicit OK.
-5. Deep-read KEEP / NEEDS_REPLY. Fan out if volume (`references/fan-out.md`). One read-only worker per channel, then one per KEEP thread-chunk. Stage the first draft as soon as one KEEP exists — do not wait for the full scan, and do not wait for "continue drafting". Stage the next draft the moment the previous card is answered — no "next?" pause.
-6. Stage drafts one at a time (Rule 6) in this parent session. Archive after a verified send.
-
-## Every suggested send carries reasoning
-
-A draft without this block is incomplete. Never show only the outbound text.
-
-Print, in the same bubble as the exact draft, three short lines in plain words:
-
-- **Why this reply:** what in the live thread this answers (quote the ask, not a vibe).
-- **Expected outcome:** what happens after they read it (they stop chasing, they can act, the thread closes).
-- **Why that is good:** the concrete gain.
-
-If you cannot fill all three from the thread, do not stage. Go read more.
-
-Channel processing, FULL-THREAD AWARENESS GATE, and per-channel recipes: `references/details.md`.
-
-## Standing behavior: RUN WIDE — parallel subagents / agent-teams / workflow by DEFAULT
-
-Every `/ops:ops-inbox` run should be fast for the owner, whose time is spent only reviewing and approving — never waiting on serial reads. By default:
-
-- **Fan out the moment there is more than a trivial amount of work.** After the offline `ops-inbox-scan` first pass, push the per-thread deep-read / dedup / context-gathering / draft-writing into parallel background workers — `Workflow` fan-out (preferred) or an Agent-Teams read-only scanner per channel/thread-chunk. Do NOT deep-read dozens of threads serially in the main session.
-- **Do research, context-gathering, and draft-writing in the background while the owner works.** Kick off the readers/drafters; let them build full-thread arcs, cross-channel dedup, contact profiles, and staged draft text concurrently. Surface results as they land so the owner approves in a steady stream instead of after one big serial pass.
-- **Parallelism NEVER changes the safety model.** Workers are strictly READ-ONLY — they classify and return draft text only. Every outbound send stays in the main session, one draft → one `AskUserQuestion` → one approval → one send (Rule 6 + PER-DRAFT APPROVAL).
-- **Respect the box concurrency ceiling** (heartbeat `MAX_BUSY`) — queue extra work rather than exceeding it.
-- **Workers run on a cheaper tier than the main session.** Pass `model` on every fan-out agent: `haiku` for retrieval, `sonnet` for reading, classifying and ordinary drafts, the top model only for legal/financial/deal threads. Never pin a model id. Change models from the next stage onward; never stop a running worker for it. Details: `references/fan-out.md`.
-
-## Scan engine — offline script triages first, Workflow fan-out is the DEFAULT for deep per-thread work
-
-**Run `bin/ops-inbox-scan` FIRST. It is the primary scan engine.** It classifies the two
-heaviest channels — WhatsApp (direct read of the whatsmeow sqlite store) and Email (one
-`gog gmail search`) — deterministically, in-process, in well under a second, emitting compact
-JSON. No subagents, no MCP, near-zero tokens.
-
-```bash
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --all-accounts --pretty   # EVERY enabled number
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --whatsapp-only     # WA only
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --days 14           # wider window
-# target one specific WhatsApp account instead:
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" \
-  --wa-store ~/.local/share/whatsapp-mcp/whatsapp-bridge-<label>/store/messages.db \
-  --bridge-port <port>
-```
-
-**`--all-accounts` is the default choice when more than one number is agent-enabled.**
-It scans each one, labels every row with its account and bridge port, and still emits the
-flat `whatsapp` buckets older consumers read. Without it the scan exits 3 rather than pick
-a number, and a caller that "handles" that by scanning one account silently reports half
-an inbox.
-
-**NEVER substitute an unread listing for a scan.** `unread` is a DISPLAY state: an owner
-who reads on a phone leaves every real thread at zero unread, so an unread-only sweep
-reports inbox zero over a mailbox full of unanswered asks. The working set is what has not
-been DEALT WITH (`handled=0`, falling back to `archived=0`), never what has not been seen.
-
-**AND NEVER SUBSTITUTE A LABEL FOR A CONVERSATION — measured 2026-09-16, email.** The same
-defect has a second shape: `in:inbox` is a LABEL, not a state of the conversation. A Gmail
-filter, a category (Promotions/Updates/Social/Forums), a mute, or one stray archive strips
-INBOX from a live thread, and an inbox-only query then reports the mailbox clean while a
-counterparty waits. Real miss: a counterparty delivered finished assets
-on a project thread; Gmail had filed that thread out of the inbox, so three
-consecutive scans said email was handled and nobody answered him. `ops-inbox-scan` now runs
-a second email pass (`--debt-days`, default 90) over archived, non-promo, human mail and
-reopens every thread whose NEWEST message is inbound and never answered; those rows arrive
-in `email.needs_reply` tagged `forgotten: true` with a `forgotten_count` and a note. The
-rule to carry into any channel you add: **debt is DIRECTION, not label or unread state.**
-The honest test is always "whose message is last in this thread, and did we answer after
-it" — never "is it still in the inbox".
-
-**Unread is never a filter, on any channel (the operator, 2026-09-17).** A message the operator
-opened and navigated away from without replying still owes a reply — read state is
-a display flag, not a proxy for "handled". `conversations_unreads` only sees what
-the operator has not opened; a DM read on a phone and never answered is invisible to
-it. Never use it, and never use `whatsapp_unread`, to decide what needs triage.
-Always confirm direction with `conversations_history` (Slack) or `whatsapp_find` /
-`whatsapp_thread` (WhatsApp) — who spoke last, not what is marked unread. A guard
-(`unread-filter-guard.py`, wired into `pre-tool-dispatcher.py`)
-hard-blocks `whatsapp_unread`, `conversations_unreads`, and any `is:unread` /
-`unread_count` / `unread=1` filter in a terminal command.
-
-**ON A FULLY ARCHIVED WHATSAPP STORE THE ZERO IS ALWAYS A LIE — measured 2026-09-06.** Every chat in
-both stores is archived and `handled` is maintained on 3 of 1808 rows, so the scan prints
-`whatsapp: every chat is archived and handled is not maintained ... inbox zero, not flag
-corruption`, disarms its own recency net, and reports `needs_reply: 0` for every
-configured account. That run reported inbox zero while six people were genuinely waiting on a
-reply. Whenever a note contains "recency net disarmed" or "taken at face value", the zero
-carries no information: derive needs_reply yourself — a thread needs a reply when its
-NEWEST message has `is_from_me = 0`, regardless of the archive flag. Do this with the
-WhatsApp plugin tools (`whatsapp_find`, `whatsapp_thread`), never `whatsapp_unread`, and
-never a hand-written sqlite read.
-
-**Empty buckets are only trustworthy when the scan says it succeeded.** Check the flags
-before believing a zero:
-
-| field | meaning | what you do |
-|---|---|---|
-| `email.empty: true` | search ran, zero hits | real inbox zero |
-| `email.reachable: false` | the call failed | fix it, never report zero |
-| `whatsapp.blocked: true` | no store, local or pulled | fix ssh/policy, never report zero |
-
-On a client box (bridge on another host) the scan pulls the remote store itself over the
-policy `ssh` + `remote_store` entries, using `VACUUM INTO` for a consistent snapshot. It
-only reports `blocked` when that genuinely fails.
-
-**ARCHIVED MEANS "DEALT WITH AS OF NOW", NOT FOREVER.** WhatsApp never moves
-the archive flag when a new message lands, so a swept thread that gets a
-reply an hour later would sit invisible while the scan reports inbox zero (observed
-2026-09-06: five people replied within four hours of a sweep). `--apply` writes
-a per-chat watermark (`ops-sweep-watermarks.json`, beside `messages.db`) and the
-scan reopens any archived chat whose newest inbound is later than that mark,
-noting how many. An archived chat that stayed quiet stays archived, and history
-stays shut: the reopen is bounded by `--days`.
-
-**Read state is not the test, on WhatsApp either.** Use `whatsapp_find` /
-`whatsapp_thread` and classify by direction (newest message `is_from_me = 0` ==
-needs_reply), never `whatsapp_unread` — a thread opened on a phone and
-never answered is empty in any unread listing but still owes a reply.
-
-**CROSS-ACCOUNT: a reply on one number counts for the other.** One person often
-exists in both stores under different jids. A reply sent from account A lands
-only in A's database, so B's copy still ends on their inbound line and looks
-unanswered. The scan therefore reads every OTHER account's store as read-only
-evidence and demotes such a thread to `waiting` with
-`reconciled: "answered from another WhatsApp account"`. That discovery is
-automatic; `--peer-store DB` names one explicitly and `--no-peer-stores` turns
-it off. Never draft a reply for a thread carrying a `reconciled` field.
-
-**ARCHIVE/KEEP SPLIT — `bin/ops-inbox-archive-set`.** The scan says what the
-inbox looks like; this turns that into the two lists inbox-zero actually needs,
-deterministically, instead of re-deciding a few hundred rows by eye every run:
-
-```bash
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set"                      # report only
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" | \
-  "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" -                  # reuse a scan
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" --scan /tmp/scan.json --json
-# extra WhatsApp account (repeat the pair per account):
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" \
-  --wa-store ~/.local/share/whatsapp-mcp/whatsapp-bridge-<label>/store/messages.db \
-  --bridge-port <port>
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" --apply               # AFTER approval
-```
-
-- **ARCHIVE** — WAITING (you sent last), courtesy tails with no open ask
-  ("thanks!", "will do!!"), threads past `--stale-days` (7), dead groups past
-  `--dead-group-days` (30).
-- **REVIEW (FYI)** — newsletters, broadcasts, automated mail. **Never swept.**
-  Read it, brief the user, then ask; `--archive-fyi` is the opt-in that answer
-  unlocks. See the FYI core principle below.
-- Undescribed media (`[image]`, `[voice]` with no enrichment yet) is **unknown**,
-  never a tail — it always lands in KEEP.
-- **KEEP** — every genuine unanswered ask, plus every email carrying a
-  todo/action label. Ambiguity always resolves to KEEP; keeping is safe,
-  archiving is the risky direction.
-- **Report-only by default.** It archives nothing without `--apply`, and never
-  sends. Present the counts plus the KEEP list with `AskUserQuestion`, and only
-  re-run with `--apply` after an explicit OK. `--apply --dry-run` walks the path
-  without calling out.
-- It enforces the todo/action-label HARD GUARDRAIL in code, so a labelled mail
-  cannot be swept even when it looks exactly like a newsletter.
-
-**ONE-SHOT TRIAGE:** `bin/ops-inbox-zero` attempts the inbox-zero
-pipeline (scan → Paperclip SSOT → Slack direct API → dual-JID deep-read → proposed WA/email
-archive actions → KEEP report) in one shell call. Gmail, Slack, or Paperclip can be skipped
-when authentication or local services are unavailable; the report surfaces each status.
-The agent still does the manual nuance
-refinement (unsure rows + Rule-6 inline drafts + Telegram AskUserQuestion), but the script
-handles the deterministic 80% in ~5s so the agent only spends tokens on judgment calls.
-
-```bash
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero"                   # safe report-only default
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --archive         # only after explicit approval
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --no-slack        # skip Slack triage
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --days 14         # wider window
-```
-
-Always run the report-only command first. Present the exact proposed WhatsApp and Gmail
-archive items/counts with `AskUserQuestion`; only after explicit approval rerun the same
-arguments with `--archive`. Never infer approval from a previous run. `unsure` items are
-report-only and are never archived or unarchived by the script.
-
-Outputs:
-- `/tmp/ops-inbox-scan-clean.json` — raw scan output
-- `/tmp/ops-inbox-keep.json` — classified KEEP/ARCHIVE/UNSURE rows (incl. Slack DMs)
-- `/tmp/slack-triage.txt` — Slack direct-API triage (AUTH + human DMs)
-- `~/.local/share/ops-inbox/keep-<ts>.md` — final report (agent reads this for Telegram)
-
-**Why this exists:** the multi-channel scan used to fan out one Workflow subagent per
-channel. A single real run burned **~330k subagent tokens / 5 agents / ~130s** to do work
-that, for WhatsApp, is a sqlite read, and for Email, is a CLI call. The script does the same
-classification (and _better_ — it merges each person's lid↔phone chats into one
-conversation and resolves real names from `contacts`) for free. Reserve agent fan-out for
-genuine reasoning, not for reading a database.
-
-`ops-inbox-scan` JSON always includes `whatsapp` / `email` buckets (`needs_reply`, `waiting`, `groups`, `fyi`) plus `whatsapp_account` and `counts`. Partial failure still emits valid JSON. Email rows carrying `forgotten: true` were archived or filtered out of the inbox but still owe a reply (see `forgotten_count` and the matching note) — treat them exactly like inbox rows.
-
-**What the script does NOT do — and what you do next, in the MAIN session (no subagents):**
-
-1. **Slack** — never `conversations_unreads` (unread is not a filter, the operator 2026-09-17;
-   a guard hard-blocks the call). Instead: `channels_me {channel_types:"im,mpim"}` once
-   to list human DMs, then `conversations_history {channel_id, limit:"5d"}` per DM to
-   check who spoke last. A DM read on a phone and never answered must surface —
-   an unread listing would miss it entirely.
-2. **Telegram** — one `mcp__plugin_ops_telegram__list_dialogs` call (skip the
-   Pocket ops bot dialog — that's automation). Skip if unconfigured.
-3. **FULL-THREAD AWARENESS GATE on the few NEEDS_REPLY candidates** — the script's WhatsApp
-   buckets are merged-thread, last-direction-correct _first passes_; its `groups` entries
-   are explicitly un-classified. Its email `needs_reply` is an envelope first pass. Before
-   you draft ANY reply, clear the gate per "Processing each channel": for the handful of
-   candidates, read the full thread both directions (incl. `[voice]`), write the 2-sentence
-   arc, reconcile the user's own phone-sent messages, and demote anything already answered.
-   You are now doing deep reads on ~3 threads, not scanning hundreds — that is the whole
-   point of the split: cheap script-side triage, expensive reasoning only where it pays.
-
-**Fan-out for real per-thread volume.** After the cheap scan, deep-read and draft in parallel (`Workflow` default; Agent Teams / Hermes `delegate_task` fallback). Skip only the trivial case (~1–3 candidates). Mechanics, hard constraints, and the canonical Workflow JS: `references/fan-out.md`. Fan-out never sends, archives, or mutates — Rule 6 stays in the main session.
-
-## Agent Teams support
-
-When `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set and `Workflow` is missing, fan out one read-only scanner per available channel:
-
-```
-TeamCreate("inbox-channels")
-Agent(team_name="inbox-channels", name="whatsapp-scanner", ...)
-```
-
-If the flag is NOT set, use `Workflow` or sequential main-session reads. Full script and hard constraints: `references/fan-out.md`.
-
-### Fallback — Hermes / Grok (`delegate_task`)
-
-When this skill runs on Hermes or Grok (no `Workflow` tool, no `AskUserQuestion`):
-
-- **Fan-out:** `delegate_task` for one read-only scanner per available channel. If that
-  tool is missing, scan sequentially in the main session. Same read-only contract.
-- **Approval:** numbered options in chat. On Telegram, two turns — full draft as its own
-  bubble, then the `[Send]` `[Edit]` `[Skip]` card. Never bundle drafts. Never put the
-  only copy of the draft in a clipped preview.
-- Plugin-wide table: Rule 10 in `CLAUDE.md` and `hermes-plugin/RUNTIME.md`.
-
-## Additional resources
-
-Read the matching file before acting. Do not skip.
-
-- `references/cli.md` — WhatsApp MCP + gog CLI
-- `references/details.md` — inbox-zero rules, gates, per-channel processing, **ALL CONTEXT SOURCES**
-- `references/runtime.md` — freshness, Mac fallback, version-heal, watcher, all-context sweep
-- `references/fan-out.md` — Workflow JS, Agent Teams, hard constraints
-- `CHANNELS.md` — channel setup
-- `vip` skill — tier order for step 0; who is answered first
-- `relations` skill — person brief, open commitments, draft context
+# OPS ► INBOX
+
+Load `ops-rules` before acting. Public repo: no personal data. Run in the parent
+session: readers return evidence; the parent owns draft presentation and sends.
+
+## AUTO-START DRAFTING: validate per reply
+
+Always report to the main agent by default. Never set `context: fork` for this
+skill: the parent owns the visible queue. Do not wait for "continue drafting".
+The invocation starts the selected channels (default: all configured channels).
+No continuation menu, channel picker, or second "start drafting" prompt.
+
+1. Check existing ownership and reusable evidence before launching readers.
+   Enumerate accounts/workspaces once; record each source's actual read status.
+2. Use an existing fresh report or the authorized read-only scan path. The bundled
+   scanner is a candidate pre-filter, not proof that a request is unanswered.
+   Do not run a second overlapping whole-inbox sweep. See `references/runtime.md`.
+3. Run independent read-only source/thread readers in parallel, within the
+   executing machine's concurrency limit. Keep the quickest useful candidate
+   in the parent; do not leave the parent waiting for an aggregate report.
+4. Validate full person/topic context **per candidate**, including sent history
+   on every configured account. See `references/details.md`. A KEEP row alone
+   is not a ready draft. Missing load-bearing context stays unknown.
+5. Surface the **first validated draft immediately**. Do not wait for unrelated
+   sources or the rest of the inbox. Recheck its live thread before showing it.
+   Every later ready candidate joins the parent's queue as evidence arrives.
+6. One draft → one explicit approval → one send. Use the installed approved
+   outbound gate; for email, WhatsApp and Slack this is only samimizer `message`.
+   Populate its real session/thread/recipient metadata on the first call.
+   Go is not approval. No self-created approval proof or alternate send route.
+7. After verified delivery, continue to the next ready item without asking
+   "next?". Archive/mark-read is separate and requires authorization. A send
+   does not prove the underlying action is complete.
+
+Readers never send, archive, mark-read, modify integrations, or ask the owner
+questions. They send evidence packets to the parent as soon as ready; an idle
+worker without a report is not completion. See `references/fan-out.md`.
+
+## Coverage is not unread state
+
+- **Email:** every mailbox, including sent history, All Mail and discovered
+  action/follow-up labels. Inbox, read/unread, archived, categories and drafts
+  are not evidence that an ask was handled.
+- **WhatsApp:** every agent-enabled WhatsApp account, labelled separately. Prove
+  phone/JID/LID identity before merging aliases; reconcile incoming **and**
+  outgoing across accounts. A generic MCP name does not prove account coverage.
+- **Slack:** every Slack workspace, scoped human DMs/group DMs (`im,mpim`),
+  allowed `public_channel` and `private_channel` history, mentions and replies.
+  Read-state is not the filter; inspect thread replies, not just channel tails.
+- **Other configured sources:** allowlisted iMessage/SMS, user-auth Telegram,
+  scoped Discord, Notion comments/tasks, contact memory and open commitments.
+- **Dates/availability:** every configured calendar plus the show/travel source
+  of truth for the candidate's relevant dates. Never infer timezone from a number.
+
+Paginate and disclose the lookback and retention limits. Record not checked,
+partial, failed, or not configured explicitly; unknown is never a clean zero.
+Older known open asks stay in the queue even outside the scan window.
+
+## What the owner sees
+
+One compact context block: who, the two-sentence thread arc, the actual latest
+ask, why this answer helps, and any source gap. Then the gate shows the exact
+recipient/account/thread, reply-all recipients, subject, full body and attachments.
+The gate's latest delivered full-draft proof binds approval to those bytes.
+
+After a native, proven yes to that shown draft, send without a second approval
+menu. On failure report the concrete diagnostic, keep ownership and continue
+independent safe work. Never claim "sent" from a staged draft or an idle reader.
+
+## Finish honestly
+
+Recheck source changes since each reader's cutoff before claiming complete.
+Account for queued, shown, approved, sent, skipped, unresolved and unknown items.
+Inbox zero means no outstanding action in the enumerated coverage, not zero
+unread messages or an empty visible inbox. A real approval wait is a wait, not
+completion; preserve the queue for the next user event. Status heartbeats follow
+the host's cadence, contain actual results, and stop at a final result or real wait.
+
+## References (load only the relevant one)
+
+- `references/details.md` — per-candidate context, preflight, approval and verification
+- `references/runtime.md` — ownership, account discovery, freshness and source gaps
+- `references/fan-out.md` — progressive read-only workers and evidence packet
+- `references/cli.md` — supported read paths and authorized archive verification
+- `vip`, `relations` — priority, verified contact identity and open commitments
