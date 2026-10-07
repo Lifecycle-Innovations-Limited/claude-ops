@@ -196,35 +196,19 @@ if [[ -s "$CALLS" ]]; then
 fi
 
 echo
-echo "=== cleanup deregisters the LABEL, not just the plist file ==="
-# Deleting the plist leaves launchd holding the label, pointing at a path that
-# no longer exists. Prove the trap removes the registration itself. Register a
-# throwaway label with the REAL launchctl (the shim cannot register anything),
-# then run cleanup and assert the domain is clean.
-LEAK_USER="ops-migrate-leakcheck-$$"
-LEAK_LABEL="com.${LEAK_USER}.whatsapp-bridge"
-LEAK_DIR=$(mktemp -d)
-CLEANUP_PATHS+=("$LEAK_DIR")
-LEAK_PLIST="$LEAK_DIR/$LEAK_LABEL.plist"
-printf '#!/bin/bash\nsleep 3600\n' > "$LEAK_DIR/run-bridge.sh"
-chmod +x "$LEAK_DIR/run-bridge.sh"
-cat > "$LEAK_PLIST" <<PL
-<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict>
-<key>Label</key><string>$LEAK_LABEL</string>
-<key>ProgramArguments</key><array><string>$LEAK_DIR/run-bridge.sh</string></array>
-</dict></plist>
-PL
-if /bin/launchctl bootstrap "gui/$(id -u)" "$LEAK_PLIST" 2>/dev/null; then
-  CLEANUP_LABELS+=("$LEAK_LABEL")
-  registered=$(/bin/launchctl list 2>/dev/null | grep -c "$LEAK_LABEL" || true)
-  ck "throwaway label registered (precondition)" "$registered" "1"
-  rm -f "$LEAK_PLIST"
-  /bin/launchctl bootout "gui/$(id -u)/$LEAK_LABEL" 2>/dev/null || true
-  still=$(/bin/launchctl list 2>/dev/null | grep -c "$LEAK_LABEL" || true)
-  ck "bootout deregisters it even with the plist already deleted" "$still" "0"
+echo "=== all launchctl paths remain isolated fixtures ==="
+ck "launchctl resolves to the recording shim" "$(command -v launchctl)" "$SHIM_DIR/launchctl"
+: > "$CALLS"
+launchctl bootstrap fixture-domain "$SHIM_DIR/fixture.plist"
+launchctl bootout fixture-domain/fixture-label
+ck "bootstrap and bootout are recorded only, never registered" "$(wc -l < "$CALLS" | tr -d ' ')" "2"
+# Fail if a future fixture bypasses the shim using either standard absolute path.
+# Assemble the search token so this assertion does not match its own source.
+direct_path='/bin/''launchctl'
+if grep -Fq "$direct_path" "$0"; then
+  ck "no direct launchctl path bypasses the shim" "unsafe" "safe"
 else
-  echo "  SKIP: could not bootstrap a throwaway label in this environment"
+  ck "no direct launchctl path bypasses the shim" "safe" "safe"
 fi
 
 rm -rf "$SHIM_DIR"

@@ -71,9 +71,9 @@ for name in ${SINGLETON_NAMES[@]+"${SINGLETON_NAMES[@]}"}; do
   log "observed multiple $name processes; ownership policy required, none killed"
 done
 
-# --- (3) Kill stuck worktree/lsof scans running > 5 min (healthy scans finish in seconds) ---
+# --- (3) Observe old scans; age and command do not establish ownership. ---
 for pid in $(pgrep -f 'find [^ ]*\.worktrees|lsof -a -d cwd' 2>/dev/null); do
-  [ "$(age_secs "$pid")" -gt 300 ] && kill -9 "$pid" 2>/dev/null && log "killed stuck scan pid=$pid"
+  [ "$(age_secs "$pid")" -gt 300 ] && log "observed old scan pid=$pid; ownership unknown, no action"
 done
 
 # --- (4) Reap MCP children whose claude parent has died (not ppid==1, but parent gone) ---
@@ -113,14 +113,13 @@ done
 # re-add a bg-spare killer here or as a launchd job.
 
 
-# --- (7) Kill runaway rg filesystem scans ---
-# Only broad, old filesystem walks are unsafe. Short repo-local `rg --files`
-# calls are normal agent behavior and killing them creates false failure noise.
+# --- (7) Observe broad old rg scans; their live owner may still need them. ---
+# No process action is authorized by a command-pattern/elapsed-time match.
 pgrep -f 'rg.*--files' 2>/dev/null | while read -r pid; do
   [ "$(age_secs "$pid")" -gt 120 ] || continue
   cmd=$(ps -o args= -p "$pid" 2>/dev/null || true)
   echo "$cmd" | grep -qE '(^|[[:space:]])/(home|mnt|Users|private|var|)([[:space:]]|$)|--follow[[:space:]]+/' || continue
-  kill -9 "$pid" 2>/dev/null && log "killed runaway broad rg filesystem scan pid=$pid"
+  log "observed broad old rg scan pid=$pid; ownership unknown, no action"
 done
 
 # --- (8) Cap runaway background-task output files ---
@@ -134,15 +133,9 @@ find "${REAPER_TASK_ROOT:-/private/tmp/claude-$(id -u)}" -type f -name '*.output
   : > "$f" && log "truncated runaway task output ${sz}MB: $f"
 done
 
-# --- (9) Reap orphaned `claude auth login --email` processes ---
-# Account rotation spawns `claude auth login --email <addr>` to walk a magic link.
-# When the rotation parent dies mid-flow the child is reparented to launchd and sits
-# there forever holding ~150MB. speedup can't clear these: its basename guard shields
-# anything called `claude`. They refill at roughly 2/hour, so a manual sweep never
-# converges. Three gates, all of which must hold, so a live login is never killed:
-#   ppid==1        the rotation parent is gone (a live login still has its parent)
-#   age > 900s     a magic-link wait this old has already timed out
-#   no rotation    nothing in .rotating / rotate.mjs / force-rotate is running
+# --- (9) Observe old authentication processes; never infer permission to stop. ---
+# PID 1 and elapsed time do not prove an unmanaged, noninteractive orphan.
+# Authentication/account lifecycle belongs to its owner, not this broad scan.
 if ! pgrep -f 'rotate\.mjs|force-rotate' >/dev/null 2>&1; then
   ROTLOCK="$HOME/.claude/scripts/account-rotation/.rotating"
   rot_live=0
@@ -155,10 +148,7 @@ if ! pgrep -f 'rotate\.mjs|force-rotate' >/dev/null 2>&1; then
       [ "$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" = "1" ] || continue
       [ "$(age_secs "$pid")" -gt 900 ] || continue
       rss=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ')
-      kill "$pid" 2>/dev/null
-      sleep 2
-      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
-      kill -0 "$pid" 2>/dev/null || log "reaped orphaned auth-login pid=$pid rss=${rss}KB"
+      log "observed old auth-login pid=$pid rss=${rss}KB; ownership unknown, no action"
     done
   fi
 fi

@@ -160,7 +160,7 @@ pr_checks_json() {
     return 0
   fi
   runs="$(gh_api GET "/commits/$sha/check-runs?per_page=100")" || return 1
-  statuses="$(gh_api GET "/commits/$sha/status")" || statuses='{"statuses":[]}'
+  statuses="$(gh_api GET "/commits/$sha/status")" || return 1
   jq -n --argjson r "$runs" --argjson s "$statuses" '
     [ $r.check_runs[]? | {name, bucket:
         (if .status != "completed" then "pending"
@@ -174,13 +174,75 @@ pr_checks_json() {
          else "fail" end)} ]'
 }
 
+RELEASE_REQUIRED_CHECKS='["lint-and-check (ubuntu-latest)","lint-and-check (ubuntu-24.04)","pii-gate","test-suite (ubuntu-latest)","test-suite (ubuntu-24.04)","CodeQL"]'
+
+# Read-only pre-merge proof for the exact checked head. Queries are bounded;
+# missing, partial, paginated-error or stale evidence refuses the merge.
+release_review_gate() {
+  local pr_ref="$1" expected_head="$2" number owner name detail reviews threads checks query
+  number="${pr_ref##*/}"; owner="${GH_REPO%%/*}"; name="${GH_REPO#*/}"
+  [[ "$number" =~ ^[0-9]+$ ]] || return 1
+  detail="$(run_bounded 25 gh api "repos/$GH_REPO/pulls/$number")" || return 1
+  jq -e --arg head "$expected_head" '
+    .state == "open" and .draft == false and .base.ref == "main"
+    and .head.sha == $head and .mergeable == true and .mergeable_state == "clean"
+  ' <<<"$detail" >/dev/null || return 1
+
+  reviews="$(run_bounded 25 gh api --paginate --slurp "repos/$GH_REPO/pulls/$number/reviews?per_page=100")" || return 1
+  jq -e --arg head "$expected_head" '
+    type == "array" and length > 0 and all(.[]; type == "array")
+    and any(.[][]; .commit_id == $head and .user.type == "Bot"
+      and ((.user.login | ascii_downcase) == "copilot-pull-request-reviewer[bot]"
+        or (.user.login | ascii_downcase) == "copilot-pull-request-reviewer"
+        or (.user.login | ascii_downcase) == "copilot")
+      and (.state == "COMMENTED" or .state == "APPROVED"))
+  ' <<<"$reviews" >/dev/null || return 1
+
+  query='query($owner:String!,$name:String!,$number:Int!,$endCursor:String) {
+    repository(owner:$owner,name:$name) {
+      pullRequest(number:$number) {
+        headRefOid
+        reviewThreads(first:100,after:$endCursor) {
+          nodes { isResolved }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }'
+  threads="$(run_bounded 60 gh api graphql --paginate --slurp -f query="$query" -f owner="$owner" -f name="$name" -F number="$number")" || return 1
+  jq -e --arg head "$expected_head" '
+    type == "array" and length > 0 and length <= 20
+    and all(.[];
+      ((.errors // []) | length) == 0
+      and .data.repository.pullRequest.headRefOid == $head
+      and (.data.repository.pullRequest.reviewThreads.nodes | type) == "array"
+      and all(.data.repository.pullRequest.reviewThreads.nodes[]; .isResolved == true)
+      and (.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage | type) == "boolean")
+    and .[-1].data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false
+  ' <<<"$threads" >/dev/null || return 1
+
+  checks="$(pr_checks_json "$pr_ref" "$expected_head" 25)" || return 1
+  jq -e --argjson required "$RELEASE_REQUIRED_CHECKS" '
+    type == "array" and length > 0
+    and (($required - [.[].name]) | length) == 0
+    and all(.[]; .bucket == "pass")
+  ' <<<"$checks" >/dev/null || return 1
+  # Last read immediately precedes --match-head-commit; a concurrent head or
+  # conflict change cannot borrow reviews/checks from the earlier head.
+  detail="$(run_bounded 25 gh api "repos/$GH_REPO/pulls/$number")" || return 1
+  jq -e --arg head "$expected_head" '
+    .state == "open" and .draft == false and .head.sha == $head
+    and .base.ref == "main" and .mergeable == true and .mergeable_state == "clean"
+  ' <<<"$detail" >/dev/null
+}
+
 wait_for_release_ci() {
   local pr_url="$1"
   local expected_head="$2"
   local stable_head_file="$3"
   local deadline=$((SECONDS + 900))
   local checks_json current_head confirmed_head required_seen all_finished request_timeout sleep_for
-  local required_checks='["lint-and-check (ubuntu-latest)","lint-and-check (ubuntu-24.04)","pii-gate","test-suite (ubuntu-latest)","test-suite (ubuntu-24.04)","CodeQL"]'
+  local required_checks="$RELEASE_REQUIRED_CHECKS"
 
   # Give GitHub Actions time to register the release branch checks.
   sleep 30
@@ -481,6 +543,7 @@ if [ "$do_merge" -eq 1 ]; then
   fi
   stable_head="$(cat "$stable_head_file")"
   rm -f "$stable_head_file"
+  release_review_gate "$PR_URL" "$stable_head" || { echo "ops-release: same-head CI/review/Copilot/conflict proof missing; PR left open" >&2; exit 1; }
   gh pr merge "$PR_URL" --repo "$GH_REPO" --squash --delete-branch --match-head-commit "$stable_head"
   echo "ops-release: merged v$NEW to main"
   if [ "$do_tag" -eq 1 ]; then

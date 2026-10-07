@@ -22,6 +22,8 @@ plists actually name. It never walks the filesystem looking for logs.
 from __future__ import annotations
 
 import argparse
+import fcntl
+import tempfile
 import gzip
 import os
 import plistlib
@@ -99,52 +101,71 @@ def discover() -> list[tuple[str, str]]:
 
 def rotate(path: str, label: str, threshold: int, keep: int,
            dry_run: bool, prune: bool) -> tuple[bool, str]:
+    path = os.path.realpath(path)
     try:
         sz = os.path.getsize(path)
     except OSError:
         return False, "missing"
     if sz < threshold:
         return False, f"{human(sz)} under threshold"
-
     archdir = os.path.join(os.path.dirname(path), ARCHIVE_SUBDIR)
     base = os.path.basename(path)
-    stamp = time.strftime("%Y%m%dT%H%M%S")
-    dest = os.path.join(archdir, f"{base}.{stamp}.gz")
-
     if dry_run:
-        return True, f"would archive {human(sz)} -> {dest} and truncate in place"
+        return True, f"would create a unique archive of {human(sz)} in {archdir} and truncate in place"
 
+    lock_fd = None
     try:
-        os.makedirs(archdir, exist_ok=True)
-        # copy out, compressed
-        with open(path, "rb") as src, gzip.open(dest, "wb", compresslevel=6) as dst:
-            shutil.copyfileobj(src, dst, length=1024 * 1024)
-        # keep ownership sane if we are running as root
+        # The kernel releases the lock on exit; retain its path for other writers.
+        lock_fd = os.open(path + ".rotate.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
-            st = os.stat(path)
-            os.chown(dest, st.st_uid, st.st_gid)
-        except (OSError, PermissionError):
-            pass
-        # TRUNCATE IN PLACE - preserves the inode, so launchd's fd stays valid
-        with open(path, "r+b") as fh:
-            fh.truncate(0)
-    except OSError as exc:
-        return False, f"FAILED: {exc}"
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False, "rotation already in progress; live file preserved"
+        with open(path, "r+b") as src:
+            # The inode lock also serializes hardlink aliases of the same log.
+            try:
+                fcntl.flock(src.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False, "rotation already in progress; live file preserved"
+            before = os.fstat(src.fileno())
+            sz = before.st_size
+            if sz < threshold:
+                return False, f"{human(sz)} under threshold"
+            os.makedirs(archdir, exist_ok=True)
+            stamp = time.strftime("%Y%m%dT%H%M%S")
+            fd, temporary = tempfile.mkstemp(prefix=f"{base}.{stamp}.", suffix=".partial", dir=archdir)
+            dest = temporary[:-len(".partial")] + ".gz"
+            # Close the gzip footer and persist every archive byte before publishing.
+            with os.fdopen(fd, "wb") as archive:
+                with gzip.GzipFile(fileobj=archive, mode="wb", compresslevel=6) as compressed:
+                    shutil.copyfileobj(src, compressed, length=1024 * 1024)
+                archive.flush()
+                os.fsync(archive.fileno())
+            os.chown(temporary, before.st_uid, before.st_gid)
+            # Exclusive link: even a same-second collision cannot overwrite history.
+            os.link(temporary, dest)
+            os.unlink(temporary)
+            signature = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+            if signature(os.fstat(src.fileno())) != signature(before) or signature(os.stat(path)) != signature(before):
+                return False, "FAILED: source changed during archival; archive retained, live file preserved"
+            # Keep the original inode/fd. Producer-native rotation remains preferable:
+            # a noncooperating producer can still append after this final check.
+            src.truncate(0)
 
-    msg = f"archived {human(sz)} -> {os.path.basename(dest)}, truncated in place"
-
-    if prune:
-        try:
-            arch = sorted(
-                (f for f in os.listdir(archdir) if f.startswith(base + ".")),
-                reverse=True)
+        msg = f"archived {human(sz)} -> {os.path.basename(dest)}, truncated in place"
+        if prune:
+            arch = sorted((f for f in os.listdir(archdir)
+                           if f.startswith(base + ".") and f.endswith(".gz")), reverse=True)
             for old in arch[keep:]:
                 os.unlink(os.path.join(archdir, old))
             if len(arch) > keep:
                 msg += f", pruned {len(arch) - keep} old archive(s)"
-        except OSError:
-            pass
-    return True, msg
+        return True, msg
+    except OSError as exc:
+        return False, f"FAILED: {exc}; live source is not truncated before complete archival"
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
 
 
 def main() -> int:
@@ -180,6 +201,7 @@ def main() -> int:
     threshold = int(args.threshold_mb * 1024 * 1024)
     did = 0
     freed = 0
+    failed = False
     for label, p in logs:
         try:
             before = os.path.getsize(p)
@@ -190,9 +212,12 @@ def main() -> int:
             did += 1
             freed += before
             print(f"  {label}: {msg}")
+        elif msg.startswith("FAILED:"):
+            failed = True
+            print(f"  {label}: {msg}", file=sys.stderr)
     verb = "would rotate" if args.dry_run else "rotated"
     print(f"\n  {verb} {did} log(s), {human(freed)} reclaimed from live files")
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

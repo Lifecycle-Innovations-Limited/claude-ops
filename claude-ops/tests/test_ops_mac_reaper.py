@@ -39,7 +39,7 @@ class ReaperTests(unittest.TestCase):
     def test_invalid_identity_protected(self):
         self.assertNotEqual(self.predicate('ps() { return 1; }', 'ops_reaper_parent_absent ""'), 0)
 
-    def integration(self, parent, managed, age='10:00', tty='?', protected=False, reused=False):
+    def integration(self, parent, managed, age='10:00', tty='?', protected=False, reused=False, broad=False):
         with tempfile.TemporaryDirectory() as d:
             root = pathlib.Path(d)
             (root / '.claude').mkdir()
@@ -48,8 +48,8 @@ class ReaperTests(unittest.TestCase):
             policy = root / 'policy.sh'
             policy.write_text('ORPHAN_PAT=orphan-allow\nSTATEFUL_PAT=stateful-allow\nSINGLETON_NAMES=(example-singleton)\n')
             mocks = root / 'mocks.sh'
-            mocks.write_text('''pgrep() { case "$*" in *orphan-allow*|*stateful-allow*) echo 100;; *example-singleton*) printf '200\n201\n';; *) return 1;; esac; }
-ps() { case "$*" in *tty=*) echo "${MOCK_TTY:-?}";; *lstart=*) if [ "$REUSED" = 1 ]; then echo start >>"$HOME/starts"; wc -l <"$HOME/starts"; else echo 'fixture-start node'; fi;; *etime=*) echo "$AGE";; *ppid=*) echo "$PARENT";; *command=*) echo node;; *pid=*) return 0;; *) return 1;; esac; }
+            mocks.write_text('''pgrep() { case "$*" in *orphan-allow*|*stateful-allow*) echo 100;; *example-singleton*) printf '200\n201\n';; *'find '*|*'rg.*--files'*|*'auth login --email'*) [ "$BROAD" = 1 ] && echo 101 || return 1;; *) return 1;; esac; }
+ps() { case "$*" in *tty=*) echo "${MOCK_TTY:-?}";; *lstart=*) if [ "$REUSED" = 1 ]; then echo start >>"$HOME/starts"; wc -l <"$HOME/starts"; else echo 'fixture-start node'; fi;; *etime=*) echo "$AGE";; *ppid=*) echo "$PARENT";; *command=*) echo node;; *args=*) echo 'rg --files /';; *rss=*) echo 1000;; *pid=*) return 0;; *) return 1;; esac; }
 launchctl() { if [ "$MANAGED" = 1 ] && [ "$1" = list ]; then echo '100 0 com.example.worker'; else echo 'PID Status Label'; fi; }
 kill() { echo "kill $*" >>"$HOME/actions"; }
 pkill() { echo "pkill $*" >>"$HOME/actions"; }
@@ -57,10 +57,16 @@ find() { return 0; }
 lsof() { return 1; }
 sleep() { return 0; }
 ''')
-            env = dict(os.environ, HOME=str(root), BASH_ENV=str(mocks), OPS_MAC_POLICY=str(policy), PARENT=str(parent), MANAGED=str(int(managed)), AGE=age, MOCK_TTY=tty, REUSED=str(int(reused)))
+            env = dict(os.environ, HOME=str(root), BASH_ENV=str(mocks), OPS_MAC_POLICY=str(policy), PARENT=str(parent), MANAGED=str(int(managed)), AGE=age, MOCK_TTY=tty, REUSED=str(int(reused)), BROAD=str(int(broad)))
             result = subprocess.run(['/bin/bash', str(LIB.parent / 'claude-reaper.sh')], env=env, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             return (root / 'actions').read_text() if (root / 'actions').exists() else ''
+
+    def test_broad_scan_and_auth_candidates_are_observation_only(self):
+        for parent, managed, tty, reused in ((42, False, '?', False), (1, True, '?', False), (1, False, 'ttys001', False), (1, False, '?', True)):
+            with self.subTest(parent=parent, managed=managed, tty=tty, reused=reused):
+                actions = self.integration(parent, managed, age='20:00', tty=tty, reused=reused, broad=True)
+                self.assertNotIn('101', actions)
 
     def test_full_reaper_protects_live_non_claude_parent(self):
         self.assertEqual(self.integration(42, False), '')

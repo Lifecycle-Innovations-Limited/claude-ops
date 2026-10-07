@@ -85,5 +85,71 @@ class PlistTests(unittest.TestCase):
                     module.load_plist(path)
 
 
+class RotationTests(unittest.TestCase):
+    def fixture(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = pathlib.Path(tmp.name) / 'worker.log'
+        path.write_bytes(b'original log\n' * 100)
+        return path
+
+    def test_main_reports_archive_failure_and_returns_nonzero(self):
+        path = self.fixture()
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(module, 'discover', return_value=[('fixture', str(path))]), mock.patch.object(module, 'rotate', return_value=(False, 'FAILED: archival incomplete')), mock.patch.object(module.sys, 'argv', ['agent-log-rotate']), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = module.main()
+        self.assertNotEqual(code, 0)
+        self.assertIn('FAILED: archival incomplete', err.getvalue())
+
+    def test_same_second_archive_collision_never_overwrites(self):
+        path = self.fixture()
+        archive = path.parent / module.ARCHIVE_SUBDIR
+        archive.mkdir()
+        previous = archive / 'worker.log.fixed.gz'
+        previous.write_bytes(module.gzip.compress(b'previous archive'))
+        original = previous.read_bytes()
+        source_bytes = path.read_bytes()
+        with mock.patch.object(module.time, 'strftime', return_value='fixed'):
+            changed, message = module.rotate(str(path), 'fixture', 1, 10, False, False)
+        self.assertTrue(changed, message)
+        self.assertEqual(previous.read_bytes(), original)
+        archives = list(archive.glob('*.gz'))
+        self.assertEqual(len(archives), 2)
+        self.assertEqual({module.gzip.decompress(item.read_bytes()) for item in archives}, {b'previous archive', source_bytes})
+        self.assertEqual(path.read_bytes(), b'')
+
+    def test_competing_writer_lock_keeps_live_file_unchanged(self):
+        import fcntl
+        path = self.fixture()
+        original = path.read_bytes()
+        with open(str(path) + '.rotate.lock', 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            changed, message = module.rotate(str(path), 'fixture', 1, 10, False, False)
+        self.assertFalse(changed, message)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertFalse((path.parent / module.ARCHIVE_SUBDIR).exists())
+
+    def test_archival_failure_never_truncates(self):
+        path = self.fixture()
+        original = path.read_bytes()
+        with mock.patch.object(module.gzip, 'GzipFile', side_effect=OSError('fixture compression failure')):
+            changed, message = module.rotate(str(path), 'fixture', 1, 10, False, False)
+        self.assertFalse(changed, message)
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_appends_during_archive_are_preserved_not_truncated(self):
+        path = self.fixture()
+        original = path.read_bytes()
+        copy = module.shutil.copyfileobj
+        def append_after_copy(src, dst, length):
+            copy(src, dst, length)
+            with path.open('ab') as writer:
+                writer.write(b'new line\n')
+        with mock.patch.object(module.shutil, 'copyfileobj', side_effect=append_after_copy):
+            changed, message = module.rotate(str(path), 'fixture', 1, 10, False, False)
+        self.assertFalse(changed, message)
+        self.assertEqual(path.read_bytes(), original + b'new line\n')
+
+
 if __name__ == "__main__":
     unittest.main()

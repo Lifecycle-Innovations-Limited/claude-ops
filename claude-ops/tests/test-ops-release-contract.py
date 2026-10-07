@@ -44,6 +44,64 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn('rev-parse origin/main', tagging)
         self.assertNotIn('/commits/main', tagging)
 
+    def test_status_query_failure_cannot_become_empty_success(self):
+        function = 'pr_checks_json() {' + block('pr_checks_json() {', '\nwait_for_release_ci()')
+        code = '''run_bounded() { return 1; }
+ gh_api() { case "$*" in *check-runs*) echo '{"check_runs":[{"name":"required","status":"completed","conclusion":"success"}]}';; *) return 1;; esac; }
+''' + function + '\npr_checks_json fixture head 1'
+        result = subprocess.run(['bash', '-c', code], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0, 'failed status read was accepted as empty statuses')
+
+    def test_merge_gate_requires_review_proof(self):
+        self.assertTrue('release_review_gate() {' in RELEASE.read_text(), 'same-head review/thread/Copilot gate is absent')
+
+    def test_same_head_review_gate_negative_fixtures(self):
+        import copy
+        import json
+        function = 'release_review_gate() {' + block('release_review_gate() {', '\nwait_for_release_ci()')
+        required_line = next(line for line in RELEASE.read_text().splitlines() if line.startswith('RELEASE_REQUIRED_CHECKS='))
+        head = 'a' * 40
+        detail = {'state': 'open', 'draft': False, 'base': {'ref': 'main'}, 'head': {'sha': head}, 'mergeable': True, 'mergeable_state': 'clean'}
+        reviews = [[{'commit_id': head, 'user': {'type': 'Bot', 'login': 'copilot-pull-request-reviewer[bot]'}, 'state': 'COMMENTED'}]]
+        def page(resolved, more):
+            return {'data': {'repository': {'pullRequest': {'headRefOid': head, 'reviewThreads': {'nodes': [{'isResolved': resolved}], 'pageInfo': {'hasNextPage': more, 'endCursor': 'next' if more else None}}}}}}
+        threads = [page(True, True), page(True, False)]
+        required = json.loads(required_line.split('=', 1)[1].strip("'"))
+        checks = [{'name': name, 'bucket': 'pass'} for name in required]
+        for case in ('valid', 'copilot_missing', 'copilot_stale', 'copilot_spoofed', 'unresolved_second_page', 'partial_pagination', 'graphql_error', 'graphql_head_changed', 'final_head_changed', 'conflict', 'unknown_mergeable', 'skipped_ci', 'missing_ci', 'reviews_read_error', 'threads_read_error', 'checks_read_error', 'final_read_error'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                current, final, r, t, c = (copy.deepcopy(value) for value in (detail, detail, reviews, threads, checks))
+                if case == 'copilot_missing': r = [[]]
+                elif case == 'copilot_stale': r[0][0]['commit_id'] = 'b' * 40
+                elif case == 'copilot_spoofed': r[0][0]['user']['type'] = 'User'
+                elif case == 'unresolved_second_page': t[1]['data']['repository']['pullRequest']['reviewThreads']['nodes'][0]['isResolved'] = False
+                elif case == 'partial_pagination': t[-1]['data']['repository']['pullRequest']['reviewThreads']['pageInfo']['hasNextPage'] = True
+                elif case == 'graphql_error': t[1]['errors'] = [{'message': 'read failed'}]
+                elif case == 'graphql_head_changed': t[1]['data']['repository']['pullRequest']['headRefOid'] = 'b' * 40
+                elif case == 'final_head_changed': final['head']['sha'] = 'b' * 40
+                elif case == 'conflict': final['mergeable'] = False
+                elif case == 'unknown_mergeable': final['mergeable'] = None
+                elif case == 'skipped_ci': c[0]['bucket'] = 'skipping'
+                elif case == 'missing_ci': c.pop()
+                for name, value in {'detail': current, 'final': final, 'reviews': r, 'threads': t, 'checks': c}.items():
+                    (root / name).write_text(json.dumps(value))
+                mocks = '''run_bounded() { shift; "$@"; }
+ gh() {
+   case "$*" in
+    *graphql*) [ "$CASE" != threads_read_error ] || return 1; cat "$FIX/threads" ;;
+    *'/reviews?'*) [ "$CASE" != reviews_read_error ] || return 1; cat "$FIX/reviews" ;;
+    *'/pulls/7'*) if [ -e "$FIX/first" ]; then [ "$CASE" != final_read_error ] || return 1; cat "$FIX/final"; else touch "$FIX/first"; cat "$FIX/detail"; fi ;;
+    *) return 92 ;;
+   esac
+ }
+ pr_checks_json() { [ "$CASE" != checks_read_error ] || return 1; cat "$FIX/checks"; }
+'''
+                code = 'set -euo pipefail; GH_REPO=fixture/repo; ' + required_line + '\n' + mocks + function + '\nrelease_review_gate https://example.com/pull/7 ' + head
+                result = subprocess.run(['bash', '-c', code], env=dict(os.environ, FIX=str(root), CASE=case), capture_output=True, text=True)
+                if case == 'valid': self.assertEqual(result.returncode, 0, result.stderr)
+                else: self.assertNotEqual(result.returncode, 0, case)
+
     def test_inventory_failure_and_open_prs_stop_before_bump(self):
         inventory = block('# ----- read-only pre-release inventory -----', '# ----- version base -----')
         for body in ('return 1', 'echo "#7 unfinished requested fix"'):
