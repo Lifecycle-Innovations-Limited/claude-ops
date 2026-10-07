@@ -53,10 +53,27 @@ err()  { log "${C_R}  ✗ $*${C_N}"; }
 AWS() { command aws "${PROFILE_ARG[@]}" --no-cli-pager "$@"; }
 AWSR(){ local r="$1"; shift; command aws "${PROFILE_ARG[@]}" --region "$r" --no-cli-pager "$@"; }
 
-# epoch helper: ISO8601 -> epoch seconds (GNU date)
-epoch() { date -d "$1" +%s 2>/dev/null || echo 0; }
+# epoch helper: ISO8601 -> epoch seconds, independent of date implementation/TZ.
+epoch() {
+  python3 -I - "$1" <<'DATE_PY'
+from datetime import datetime
+import sys
+try:
+    value = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+    if value.tzinfo is None:
+        raise ValueError("timezone required")
+    print(int(value.timestamp()))
+except (ValueError, OverflowError):
+    print("audit: invalid key timestamp; age unknown", file=sys.stderr)
+    sys.exit(1)
+DATE_PY
+}
 NOW=$(date +%s)
-age_days() { echo $(( (NOW - $(epoch "$1")) / 86400 )); }
+age_days() {
+  local parsed
+  parsed=$(epoch "$1") || return 1
+  echo $(( (NOW - parsed) / 86400 ))
+}
 
 # finding SEV SERVICE REGION RESOURCE ISSUE RECOMMENDATION [EST_MONTHLY_USD]
 finding() {
@@ -67,6 +84,7 @@ finding() {
 }
 
 require() {
+  command -v python3 >/dev/null || { echo "FATAL: python3 not found"; exit 2; }
   command -v aws >/dev/null || { echo "FATAL: aws CLI not found"; exit 2; }
   command -v jq  >/dev/null || { echo "FATAL: jq not found";      exit 2; }
 }
@@ -110,11 +128,11 @@ audit_iam() {
         finding HIGH IAM global "user/$user" "Console password enabled but no MFA" "Enforce MFA for this user" 0
       # old active access keys
       if [ "$k1act" = "true" ] && [ "$k1rot" != "N/A" ]; then
-        a=$(age_days "$k1rot"); [ "$a" -gt "$KEY_AGE_DAYS" ] && \
+        a=$(age_days "$k1rot") && [ "$a" -gt "$KEY_AGE_DAYS" ] && \
           finding HIGH IAM global "user/$user" "Active access key is ${a}d old (>${KEY_AGE_DAYS}d)" "Rotate the access key and remove the old one" 0
       fi
       if [ "$k2act" = "true" ] && [ "$k2rot" != "N/A" ]; then
-        a=$(age_days "$k2rot"); [ "$a" -gt "$KEY_AGE_DAYS" ] && \
+        a=$(age_days "$k2rot") && [ "$a" -gt "$KEY_AGE_DAYS" ] && \
           finding HIGH IAM global "user/$user" "Active access key #2 is ${a}d old (>${KEY_AGE_DAYS}d)" "Rotate the access key and remove the old one" 0
       fi
     done

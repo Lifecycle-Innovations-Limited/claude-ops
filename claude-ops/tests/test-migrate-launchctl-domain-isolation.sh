@@ -56,28 +56,15 @@ SHIM
 chmod +x "$SHIM_DIR/launchctl"
 export PATH="$SHIM_DIR:$PATH"
 
-# Scenarios below render a plist under the REAL home (with a fake label) and
-# create sandbox roots under $TMPDIR. Clean both up even when the run is
-# interrupted, so a HUP/INT/TERM cannot leave a stray LaunchAgent behind.
-#
-# Deleting the plist FILE is not enough. If any launchctl call ever reaches the
-# real domain (a regression in the guard, or an older revision of this test),
-# launchd keeps the LABEL registered independently of the file, and
-# `launchctl list` then shows a job whose Program points into a deleted
-# /var/folders path forever. Observed on this machine: a
-# com.ops-migrate-guard-test-<pid>.whatsapp-bridge label survived with no plist
-# on disk. So deregister the label too, unconditionally and idempotently.
+# Every generated plist stays in a temporary directory, including the real-HOME
+# control. macOS watches ~/Library/LaunchAgents and posts a user-facing
+# background-activity banner when a test merely writes a fake plist there.
+# Keep all test artifacts out of that watched folder.
 CLEANUP_PATHS=()
-CLEANUP_LABELS=()
 cleanup() {
-  local p lbl
+  local p
   for p in "${CLEANUP_PATHS[@]:-}"; do
     [[ -n "$p" ]] && rm -rf "$p" 2>/dev/null || true
-  done
-  # The real launchctl, not the shim: the shim only records, so it cannot undo
-  # a registration that a regression actually made.
-  for lbl in "${CLEANUP_LABELS[@]:-}"; do
-    [[ -n "$lbl" ]] && /bin/launchctl bootout "gui/$(id -u)/$lbl" 2>/dev/null || true
   done
   rm -rf "$SHIM_DIR" 2>/dev/null || true
 }
@@ -105,9 +92,12 @@ PL
   # wrapper present, so the migration takes the branch that loads a LaunchAgent
   printf '#!/bin/bash\n' >"$WHATSAPP_BRIDGE_HOME/run-bridge.sh"
   chmod +x "$WHATSAPP_BRIDGE_HOME/run-bridge.sh"
-  PLIST="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
-  # a legacy plist too, to exercise the unload-and-remove branches
-  printf '<plist/>' >"$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
+  LAUNCH_AGENTS_DIR="$ROOT/generated-launchagents"
+  mkdir -p "$LAUNCH_AGENTS_DIR"
+  export OPS_MIGRATE_LAUNCHAGENTS_DIR="$LAUNCH_AGENTS_DIR"
+  PLIST="$LAUNCH_AGENTS_DIR/com.${USER}.whatsapp-bridge.plist"
+  # A legacy plist too, to exercise the unload-and-remove branches.
+  printf '<plist/>' >"$LAUNCH_AGENTS_DIR/com.claude-ops.wacli-keepalive.plist"
 }
 
 run() { CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$SCRIPT" >/dev/null 2>&1 || true; }
@@ -128,24 +118,17 @@ fi
 
 echo
 echo "=== the guard must not be dead code: real HOME still loads ==="
-# The guard keys on $HOME, so proving it is live requires the REAL home. That
-# makes the migration's destination path real too:
-#   $HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist
-# With the real $USER that is the LIVE production plist, and this test would
-# overwrite it with sandbox paths — reintroducing, from the guard itself, the
-# exact corruption the guard exists to prevent.
-#
-# Override USER instead. The destination becomes a bogus label that launchd has
-# never heard of, so the file is inert, while $HOME stays real and the guard's
-# condition is genuinely exercised. The shim still intercepts the launchctl call.
+# The guard keys on $HOME, so proving it is live requires the REAL home. The
+# generated plist is redirected to the temporary directory prepared below,
+# keeping macOS from treating this test fixture as a background item.
+# Override USER so its label cannot overlap a real service. The shim intercepts
+# the launchctl call, so the control exercises the guard without registration.
 FAKE_USER="ops-migrate-guard-test-$$"
 REAL_PLIST="$REAL_HOME_VALUE/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
 REAL_PLIST_SUM_BEFORE="$( [[ -f "$REAL_PLIST" ]] && shasum -a256 "$REAL_PLIST" | awk '{print $1}' || echo absent)"
-TEST_PLIST="$REAL_HOME_VALUE/Library/LaunchAgents/com.${FAKE_USER}.whatsapp-bridge.plist"
-CLEANUP_PATHS+=("$TEST_PLIST")
-CLEANUP_LABELS+=("com.${FAKE_USER}.whatsapp-bridge")
 
 setup_sandbox
+TEST_PLIST="$LAUNCH_AGENTS_DIR/com.${FAKE_USER}.whatsapp-bridge.plist"
 : > "$CALLS"
 CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" \
   HOME="$REAL_HOME_VALUE" \

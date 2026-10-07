@@ -18,15 +18,12 @@
 #   6. GitHub wiki                                   counts/version synced + a Release-Notes entry
 #                                                    pushed after merge (--no-wiki)
 #
-# Before any of that it runs the PR sweep (--no-sweep to skip): every open PR
-# against main — drafts and fork PRs included — is classified, has its held fork
-# workflow runs approved, is reviewed by a background agent that may undraft it
-# and fix its checks, and is merged only when the agent blessed it AND every
-# required check is green. Anything else is reported and left open, and the
-# release is cut without it. See scripts/lib/release-pr-sweep.sh.
+# Before any bump, inventory open PRs. Unfinished PRs stop the release;
+# consolidation/review belongs to the operator, never a broad automatic merge.
+# --no-sweep explicitly acknowledges exclusions. --sweep-only inventories only.
 #
 # Flow:
-#   sweep open PRs → fetch → isolated worktree off origin/main → bump version files → AI changelog
+#   inventory open PRs → fetch → isolated worktree off origin/main → bump version files → AI changelog
 #   → ops-sync-docs → commit → push → PR to main → (optional) wait for CI + squash-merge
 #   → (optional) tag vX.Y.Z → (optional) wiki sync
 #
@@ -49,7 +46,7 @@
 #   ops-release --no-merge             # open the PR, leave it for review
 #   ops-release --no-sweep             # cut the release without sweeping open PRs
 #   ops-release --sweep-only           # sweep open PRs and stop; cut nothing
-#   ops-release --dry-run              # show what would change (incl. AI changelog), touch nothing
+#   ops-release --dry-run              # preview current remote main without writes, fetch or AI
 #
 # After a release lands, refresh the local install:
 #   /plugin marketplace update ops-marketplace   (then update the `ops` plugin)
@@ -64,13 +61,9 @@ PLUGIN_JSON="$PLUGIN_DIR/.claude-plugin/plugin.json"
 MARKETPLACE_JSON="$REPO_ROOT/.claude-plugin/marketplace.json"
 CHANGELOG="$PLUGIN_DIR/CHANGELOG.md"
 PLUGIN_NAME="ops"                                   # name in marketplace.json .plugins[]
-GH_REPO="Lifecycle-Innovations-Limited/claude-ops"
+GH_REPO="${OPS_RELEASE_REPO:-$(git -C "$REPO_ROOT" remote get-url origin | sed -E 's#^.*github.com[:/]##; s#\.git$##')}"
 # shellcheck source=../scripts/lib/release-changelog.sh
 . "$PLUGIN_DIR/scripts/lib/release-changelog.sh"
-# shellcheck source=../scripts/lib/release-pr-sweep.sh
-. "$PLUGIN_DIR/scripts/lib/release-pr-sweep.sh"
-# shellcheck source=../scripts/lib/claude-invoke.sh
-. "$PLUGIN_DIR/scripts/lib/claude-invoke.sh" 2>/dev/null || true
 
 # package.json may live under claude-ops/ (current layout) or at the repo root.
 # Record its path RELATIVE to the repo root so we can reapply it inside a worktree.
@@ -120,21 +113,14 @@ raise SystemExit(result.returncode)
 PY
 }
 
-# GitHub REST call that survives a dead IP stack. Some networks route to
-# github.com over only one of IPv4/IPv6, so try the default first and retry
-# pinned to the other family before giving up.
+# GitHub REST calls use the authenticated CLI without exposing a token.
 gh_api() {
   local method="$1" path="$2" data="${3:-}"
-  local url="https://api.github.com/repos/${GH_REPO}${path}"
-  local token; token="$(gh auth token 2>/dev/null)" || return 1
-  [ -n "$token" ] || return 1
-  local args=(-fsS -m 30 -X "$method"
-    -H "Authorization: bearer $token"
-    -H "Accept: application/vnd.github+json")
-  [ -n "$data" ] && args+=(-d "$data")
-  curl "${args[@]}" "$url" 2>/dev/null && return 0
-  curl -6 "${args[@]}" "$url" 2>/dev/null && return 0
-  curl -4 "${args[@]}" "$url" 2>/dev/null
+  if [ -n "$data" ]; then
+    printf '%s' "$data" | gh api --method "$method" "repos/${GH_REPO}${path}" --input -
+  else
+    gh api --method "$method" "repos/${GH_REPO}${path}"
+  fi
 }
 
 # Fallback for `git push origin vX.Y.Z` when the git transport cannot reach
@@ -231,7 +217,7 @@ wait_for_release_ci() {
     fi
 
     required_seen="$(jq -r --argjson required "$required_checks" '(($required - [.[].name]) | length) == 0' <<<"$checks_json")"
-    all_finished="$(jq -r 'length > 0 and all(.[]; .bucket == "pass" or .bucket == "skipping")' <<<"$checks_json")"
+    all_finished="$(jq -r 'length > 0 and all(.[]; .bucket == "pass")' <<<"$checks_json")"
     if [ "$required_seen" = true ] && [ "$all_finished" = true ]; then
       if ! confirmed_head="$(pr_head_sha "$pr_url" "$request_timeout")"; then
         echo "ops-release: PR head recheck failed — retrying until the CI deadline" >&2
@@ -257,19 +243,16 @@ wait_for_release_ci() {
   return 1
 }
 
-# ----- pre-release PR sweep -----
-# Land everything that can land BEFORE the bump, so the changelog and the tag
-# cover it. A PR that cannot be made good and green is reported and left open;
-# the release goes ahead without it. Merging something bad is far worse than
-# skipping it, so anything short of a clear yes is a skip.
+# ----- read-only pre-release inventory -----
 if [ "$do_sweep" -eq 1 ] && [ "$dry_run" -eq 0 ]; then
-  echo "ops-release: sweeping open pull requests (--no-sweep to skip)…"
-  release_pr_sweep "$GH_REPO" || echo "ops-release: sweep did not run — continuing" >&2
-elif [ "$do_sweep" -eq 1 ]; then
-  echo "ops-release: --dry-run: skipping the PR sweep (it merges for real)"
+  open_prs="$(gh api --paginate "repos/$GH_REPO/pulls?state=open&base=main&per_page=100" --jq '.[] | "#\(.number) \(.title)"')" || exit 1
+  if [ -n "$open_prs" ]; then
+    printf 'ops-release: unfinished PRs; consolidate/review before releasing:\n%s\n' "$open_prs" >&2
+    exit 1
+  fi
 fi
 if [ "$sweep_only" -eq 1 ]; then
-  echo "ops-release: --sweep-only: stopping before the version bump"
+  echo "ops-release: inventory only; no PRs changed or release cut"
   exit 0
 fi
 
@@ -283,23 +266,16 @@ PLUGIN_JSON_REL="${PLUGIN_JSON#"$REPO_ROOT"/}"
 local_ver="$(jq -r '.version // empty' "$PLUGIN_JSON")"
 [[ "$local_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ops-release: checkout version '$local_ver' is not semver" >&2; exit 1; }
 
-if ! git -C "$REPO_ROOT" fetch origin --quiet 2>/dev/null; then
-  echo "ops-release: git fetch failed — reading the published version over the API" >&2
-fi
-
-main_ver="$(git -C "$REPO_ROOT" show "origin/main:$PLUGIN_JSON_REL" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || true)"
-if [ -z "$main_ver" ]; then
-  main_ver="$(gh api -H 'Accept: application/vnd.github.raw' \
-    "repos/$GH_REPO/contents/$PLUGIN_JSON_REL?ref=main" 2>/dev/null \
-    | jq -r '.version // empty' 2>/dev/null || true)"
-fi
-
-# Never guess the base. A stale or unreadable origin/main is exactly the case
-# this block exists to catch, so refuse rather than fall back to the checkout.
-if [[ ! "$main_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "ops-release: cannot read the published version from origin/main (git fetch and API both failed)." >&2
-  echo "ops-release: refusing to release from an unverified base — it could cut a regressive version." >&2
-  exit 1
+# Pin current remote main even in dry-run. Cached origin/main is not evidence.
+main_sha="$(gh api "repos/$GH_REPO/commits/main" --jq '.sha')" || exit 1
+[[ "$main_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "ops-release: invalid remote main SHA" >&2; exit 1; }
+main_plugin="$(gh api -H 'Accept: application/vnd.github.raw' "repos/$GH_REPO/contents/$PLUGIN_JSON_REL?ref=$main_sha")" || exit 1
+main_ver="$(jq -r '.version // empty' <<<"$main_plugin")"
+[[ "$main_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ops-release: invalid remote main version" >&2; exit 1; }
+main_changelog="$(gh api -H 'Accept: application/vnd.github.raw' "repos/$GH_REPO/contents/claude-ops/CHANGELOG.md?ref=$main_sha")" || exit 1
+if [ "$dry_run" -eq 0 ]; then
+  git -C "$REPO_ROOT" fetch origin --quiet
+  [ "$(git -C "$REPO_ROOT" rev-parse origin/main)" = "$main_sha" ] || { echo "ops-release: remote main moved; retry preview" >&2; exit 1; }
 fi
 
 # Local tags only ever raise the base, so a stale tag list cannot lower it.
@@ -330,7 +306,7 @@ else
   NEW="$MA.$MI.$PA"
 fi
 [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ops-release: target version '$NEW' is not semver" >&2; exit 1; }
-[ "$NEW" != "$CUR" ] || { echo "ops-release: target equals current ($CUR); nothing to do" >&2; exit 1; }
+[ "$(printf '%s\n%s\n' "$CUR" "$NEW" | sort -V | tail -1)" = "$NEW" ] && [ "$NEW" != "$CUR" ] || { echo "ops-release: target equals current ($CUR); nothing to do" >&2; exit 1; }
 
 REL_DATE="$(date +%F)"
 echo "ops-release: $CUR -> $NEW  (type=$bump_type, date=$REL_DATE)"
@@ -339,18 +315,19 @@ echo "ops-release: $CUR -> $NEW  (type=$bump_type, date=$REL_DATE)"
 # A maintained Unreleased body is the release source of truth. Consume it once;
 # explicit/AI/generated notes are fallbacks only when Unreleased is empty.
 ai_used=0
-unreleased_notes="$(release_unreleased_body "$CHANGELOG")"
+unreleased_notes="$(release_unreleased_body <(printf '%s\n' "$main_changelog"))"
 if [ -n "$unreleased_notes" ]; then
   notes="$unreleased_notes"
   echo "ops-release: using and draining existing Unreleased notes"
 elif [ -z "$notes" ]; then
-  prev_marker="$(git -C "$REPO_ROOT" log -1 --format=%H -- "$CHANGELOG" 2>/dev/null || true)"
+  prev_marker="$(gh api "repos/$GH_REPO/commits?sha=$main_sha&path=claude-ops/CHANGELOG.md&per_page=1" --jq '.[0].sha // empty')" || exit 1
+  [[ "$prev_marker" =~ ^[0-9a-f]{40}$ ]] || { echo "ops-release: previous changelog revision unknown" >&2; exit 1; }
   commits=""; range=""
-  if [ -n "$prev_marker" ]; then
-    range="$prev_marker..HEAD"
-    commits="$(git -C "$REPO_ROOT" log --no-merges --format='- %s' "$range" 2>/dev/null || true)"
+  if [ "$prev_marker" != "$main_sha" ]; then
+    range="$prev_marker..$main_sha"
+    commits="$(gh api --paginate "repos/$GH_REPO/compare/$prev_marker...$main_sha?per_page=100" --jq '.commits[] | select((.parents | length) < 2) | "- " + (.commit.message | split("\n")[0])')" || exit 1
   fi
-  if [ "$do_ai" -eq 1 ] && command -v claude >/dev/null 2>&1 && [ -n "$commits" ]; then
+  if [ "$dry_run" -eq 0 ] && [ "$do_ai" -eq 1 ] && command -v claude >/dev/null 2>&1 && [ -n "$commits" ]; then
     echo "ops-release: synthesizing changelog with AI (--no-ai to skip)…"
     diffstat="$(git -C "$REPO_ROOT" diff --stat "$range" 2>/dev/null | tail -40 || true)"
     ai_prompt="You are writing the CHANGELOG entry for v$NEW of 'claude-ops', a public open-source Claude Code plugin. Summarize the changes below into Keep-a-Changelog style markdown using only the relevant subset of these headings: '### Added', '### Changed', '### Fixed', '### Removed' (omit empty sections). Write tight, user-facing bullets grouped by theme — not one bullet per commit. Output ONLY the markdown section body (the ### headings and bullets); no '## [version]' header, no preamble, no code fences. Never include personal names, emails, paths under /Users or /home, tokens, or internal hostnames/URLs.
@@ -369,7 +346,7 @@ $diffstat"
       echo "ops-release: AI output unusable — falling back to commit subjects"
     fi
   fi
-  [ -z "$notes" ] && notes="${commits:-- (no notes provided)}"
+  [ -z "$notes" ] && notes="${commits:-- Release metadata only; no changes since the previous changelog.}"
 fi
 # Only add a "### Changed" heading when the body has none of its own — notes
 # passed with --notes often already carry "### Fixed" or "### Added", and a
@@ -388,7 +365,7 @@ if [ "$dry_run" -eq 1 ]; then
   echo "--- DRY RUN: would set version $CUR -> $NEW in:"
   echo "    $PLUGIN_JSON"
   echo "    $MARKETPLACE_JSON (.plugins[name==$PLUGIN_NAME].version)"
-  [ -n "$PACKAGE_REL" ] && echo "    $REPO_ROOT/$PACKAGE_REL"
+  [ -n "$PACKAGE_REL" ] && echo "    $REPO_ROOT/$PACKAGE_REL + adjacent package-lock.json"
   echo "    $PLUGIN_DIR/hermes-plugin/plugin.yaml"
   echo "    $REPO_ROOT/installer/src/config.mjs (DEFAULT_CONFIG.source.ref)"
   echo "--- would drain Unreleased into $CHANGELOG:"
@@ -399,13 +376,16 @@ fi
 
 # ----- isolated worktree off origin/main (never touch the shared main checkout) -----
 git -C "$REPO_ROOT" fetch origin --quiet
+[ "$(git -C "$REPO_ROOT" rev-parse origin/main)" = "$main_sha" ] || { echo "ops-release: main changed while preparing notes; retry" >&2; exit 1; }
 BR="release/v$NEW"
 WT="$REPO_ROOT/.worktrees/$BR"
-git -C "$REPO_ROOT" worktree remove --force "$WT" 2>/dev/null || true
-git -C "$REPO_ROOT" branch -D "$BR" 2>/dev/null || true
-git -C "$REPO_ROOT" worktree add "$WT" -b "$BR" origin/main >/dev/null
-cleanup() { git -C "$REPO_ROOT" worktree remove --force "$WT" 2>/dev/null || true; }
-trap cleanup EXIT
+if [ -e "$WT" ] || git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$BR"; then
+  echo "ops-release: existing release branch/worktree preserved; inspect before retrying" >&2
+  exit 1
+fi
+git -C "$REPO_ROOT" worktree add "$WT" -b "$BR" "$main_sha" >/dev/null
+# Retain our worktree on success/failure for inspection; never force-clean it.
+echo "ops-release: release worktree retained at $WT"
 
 wPLUGIN="$WT/claude-ops/.claude-plugin/plugin.json"
 wMKT="$WT/.claude-plugin/marketplace.json"
@@ -421,6 +401,12 @@ fi
 if [ -n "$PACKAGE_REL" ] && [ -f "$WT/$PACKAGE_REL" ]; then
   tmp="$(mktemp)"; jq --arg v "$NEW" '.version=$v' "$WT/$PACKAGE_REL" >"$tmp" && mv "$tmp" "$WT/$PACKAGE_REL"
   jq empty "$WT/$PACKAGE_REL" || { echo "ops-release: produced invalid $PACKAGE_REL" >&2; exit 1; }
+  lock="$(dirname "$WT/$PACKAGE_REL")/package-lock.json"
+  if [ -f "$lock" ]; then
+    tmp="$(mktemp)"
+    jq --arg v "$NEW" '.version=$v | if .packages[""] then .packages[""].version=$v else . end' "$lock" >"$tmp"
+    mv "$tmp" "$lock"
+  fi
 fi
 
 wHERMES="$WT/claude-ops/hermes-plugin/plugin.yaml"
@@ -471,12 +457,13 @@ echo "ops-release: bumped plugin.json + marketplace.json$([ -n "$PACKAGE_REL" ] 
 
 # 5. reconcile documentation counts/badges to the (now-bumped) tree — deterministic.
 if [ "$do_docs" -eq 1 ] && [ -x "$WT/claude-ops/bin/ops-sync-docs" ]; then
-  "$WT/claude-ops/bin/ops-sync-docs" "$WT" || echo "ops-release: ops-sync-docs returned non-zero (non-fatal)"
+  "$WT/claude-ops/bin/ops-sync-docs" "$WT"
 fi
 
 # ----- commit, push, PR -----
 git -C "$WT" add -A
-git -C "$WT" commit --no-verify -m "release: v$NEW" >/dev/null
+bash "$WT/claude-ops/tests/test-no-secrets.sh"
+git -C "$WT" commit -m "release: v$NEW" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" >/dev/null
 git -C "$WT" push -u origin "$BR" >/dev/null 2>&1
 PR_BODY="$(printf 'Release **v%s** (was %s).\n\n- plugin.json + marketplace.json (registry)%s bumped\n- CHANGELOG updated\n\n%s\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)' "$NEW" "$CUR" "$([ -n "$PACKAGE_REL" ] && echo " + $PACKAGE_REL")" "$notes")"
 PR_URL="$(gh pr create --repo "$GH_REPO" --base main --head "$BR" --title "release: v$NEW" --body "$PR_BODY")"
@@ -500,26 +487,18 @@ if [ "$do_merge" -eq 1 ]; then
     # The merge is already done, so a tag failure must never abort the run and
     # leave main released but untagged. Resolve the commit from the API when the
     # git transport is unreachable, and push the tag the same way if needed.
-    tag_commit=""
-    if git -C "$REPO_ROOT" fetch origin --quiet 2>/dev/null; then
-      tag_commit="$(git -C "$REPO_ROOT" rev-parse origin/main)"
+    merged_pr="$(gh api "repos/$GH_REPO/pulls/${PR_URL##*/}")"
+    tag_commit="$(jq -er 'select(.merged == true) | .merge_commit_sha // empty' <<<"$merged_pr")" || exit 1
+    [[ "$tag_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "ops-release: merge SHA unavailable; not tagged" >&2; exit 1; }
+    # Fetch objects, never choose whatever concurrent main points at.
+    git -C "$REPO_ROOT" fetch origin --quiet
+    if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/tags/v$NEW"; then
+      [ "$(git -C "$REPO_ROOT" rev-parse "v$NEW^{commit}")" = "$tag_commit" ] || { echo "ops-release: existing tag differs; preserved" >&2; exit 1; }
     else
-      echo "ops-release: git fetch failed — resolving main over the API"
-      tag_commit="$(gh_api GET /commits/main | jq -r '.sha // empty')"
+      git -C "$REPO_ROOT" tag -a "v$NEW" -m "claude-ops v$NEW" "$tag_commit"
     fi
-    if [ -z "$tag_commit" ]; then
-      echo "ops-release: could not resolve main's commit — v$NEW is NOT tagged. Tag it manually." >&2
-    else
-      git -C "$REPO_ROOT" tag -a "v$NEW" -m "claude-ops v$NEW" "$tag_commit" 2>/dev/null \
-        || git -C "$REPO_ROOT" tag "v$NEW" "$tag_commit" 2>/dev/null || true
-      if git -C "$REPO_ROOT" push origin "v$NEW" 2>/dev/null; then
-        echo "ops-release: tagged v$NEW"
-      elif push_tag_via_api "$NEW" "$tag_commit"; then
-        echo "ops-release: tagged v$NEW (pushed over the API — git transport unreachable)"
-      else
-        echo "ops-release: TAG PUSH FAILED — v$NEW is merged to main but NOT tagged. Create refs/tags/v$NEW manually." >&2
-      fi
-    fi
+    git -C "$REPO_ROOT" push origin "v$NEW" || push_tag_via_api "$NEW" "$tag_commit"
+    echo "ops-release: tagged PR merge commit v$NEW"
   fi
 
   # ----- wiki: keep the GitHub wiki's counts/version in lockstep + log the release -----
@@ -555,7 +534,7 @@ if [ "$do_merge" -eq 1 ]; then
       if [ -n "$(git -C "$wiki_tmp" status --porcelain)" ]; then
         git -C "$wiki_tmp" add -A
         git -C "$wiki_tmp" -c user.email="ops-release@example.com" -c user.name="ops-release" \
-          commit -m "wiki: sync to v$NEW (counts + release notes)" >/dev/null 2>&1 || true
+          commit -m "wiki: sync to v$NEW (counts + release notes)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" >/dev/null
         if git -C "$wiki_tmp" push origin HEAD >/dev/null 2>&1; then
           echo "ops-release: wiki synced to v$NEW"
         else

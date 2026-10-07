@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""agent-log-rotate — bounded copy/truncate rotation for launchd service logs.
+
+WHY COPY-TRUNCATE AND NOT RENAME
+launchd opens a job's StandardOutPath/StandardErrorPath itself and hands the
+process an fd. Renaming the file (what newsyslog and logrotate do by default)
+leaves the service writing into the *renamed* file forever while the fresh one
+stays empty at 0 bytes. So this copies the content out to a compressed archive
+and then truncates the original IN PLACE, which keeps the inode and the fd
+valid. Copy/truncate is NOT lossless: lines appended between the copy and
+truncate can be lost. Prefer producer-native rotation when available. This
+parser repair deliberately leaves the existing rotation behavior unchanged.
+
+NOTHING IS EVER DELETED without an explicit --prune, and even then only
+archives beyond --keep. Log retention must not be shortened during debugging, so the default keep
+count is deliberately generous and `--prune` is opt-in.
+
+Discovery is bounded: it reads launchd plists and rotates only paths those
+plists actually name. It never walks the filesystem looking for logs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
+import time
+
+PLIST_DIRS = [
+    os.path.expanduser("~/Library/LaunchAgents"),
+    "/Library/LaunchDaemons",
+    "/Library/LaunchAgents",
+]
+ARCHIVE_SUBDIR = "rotated"
+
+
+def human(n: float) -> str:
+    for u in ("B", "K", "M", "G"):
+        if n < 1024:
+            return f"{n:.0f}{u}"
+        n /= 1024
+    return f"{n:.0f}T"
+
+
+def load_plist(path) -> dict:
+    """Prefer plistlib; normalize Apple-valid XML without changing its file."""
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    try:
+        result = plistlib.loads(raw)
+    except Exception:
+        try:
+            converted = subprocess.run(
+                ["/usr/bin/plutil", "-convert", "xml1", "-o", "-", "--", str(path)],
+                capture_output=True, check=True, timeout=5,
+            )
+            result = plistlib.loads(converted.stdout)
+        except Exception as exc:
+            raise ValueError("plistlib and plutil could not parse plist") from exc
+    if not isinstance(result, dict):
+        raise ValueError("plist root must be a dictionary")
+    return result
+
+
+def discover() -> list[tuple[str, str]]:
+    """(label, path) for every log a user-installed launchd job declares."""
+    out, seen = [], set()
+    for d in PLIST_DIRS:
+        if not os.path.isdir(d):
+            continue
+        try:
+            names = sorted(os.listdir(d))
+        except PermissionError:
+            continue
+        for n in names:
+            if not n.endswith(".plist"):
+                continue
+            path = os.path.join(d, n)
+            try:
+                pl = load_plist(path)
+            except Exception as exc:
+                print(f"agent-log-rotate: cannot parse {path}: {exc}", file=sys.stderr)
+                continue
+            label = pl.get("Label", n[:-6])
+            if label.startswith(("com.apple.", "org.")):
+                continue
+            for key in ("StandardOutPath", "StandardErrorPath"):
+                p = pl.get(key)
+                if not p or p == "/dev/null" or p in seen:
+                    continue
+                seen.add(p)
+                out.append((label, p))
+    return out
+
+
+def rotate(path: str, label: str, threshold: int, keep: int,
+           dry_run: bool, prune: bool) -> tuple[bool, str]:
+    try:
+        sz = os.path.getsize(path)
+    except OSError:
+        return False, "missing"
+    if sz < threshold:
+        return False, f"{human(sz)} under threshold"
+
+    archdir = os.path.join(os.path.dirname(path), ARCHIVE_SUBDIR)
+    base = os.path.basename(path)
+    stamp = time.strftime("%Y%m%dT%H%M%S")
+    dest = os.path.join(archdir, f"{base}.{stamp}.gz")
+
+    if dry_run:
+        return True, f"would archive {human(sz)} -> {dest} and truncate in place"
+
+    try:
+        os.makedirs(archdir, exist_ok=True)
+        # copy out, compressed
+        with open(path, "rb") as src, gzip.open(dest, "wb", compresslevel=6) as dst:
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
+        # keep ownership sane if we are running as root
+        try:
+            st = os.stat(path)
+            os.chown(dest, st.st_uid, st.st_gid)
+        except (OSError, PermissionError):
+            pass
+        # TRUNCATE IN PLACE - preserves the inode, so launchd's fd stays valid
+        with open(path, "r+b") as fh:
+            fh.truncate(0)
+    except OSError as exc:
+        return False, f"FAILED: {exc}"
+
+    msg = f"archived {human(sz)} -> {os.path.basename(dest)}, truncated in place"
+
+    if prune:
+        try:
+            arch = sorted(
+                (f for f in os.listdir(archdir) if f.startswith(base + ".")),
+                reverse=True)
+            for old in arch[keep:]:
+                os.unlink(os.path.join(archdir, old))
+            if len(arch) > keep:
+                msg += f", pruned {len(arch) - keep} old archive(s)"
+        except OSError:
+            pass
+    return True, msg
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--threshold-mb", type=float, default=25.0,
+                    help="rotate logs larger than this (default 25)")
+    ap.add_argument("--keep", type=int, default=10,
+                    help="archives to keep per log when --prune is used (default 10)")
+    ap.add_argument("--prune", action="store_true",
+                    help="delete archives beyond --keep. OFF by default; "
+                         "preserve logs during debugging.")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--list", action="store_true", help="show sizes and exit")
+    args = ap.parse_args()
+
+    logs = discover()
+    if args.list:
+        rows = []
+        for label, p in logs:
+            try:
+                rows.append((os.path.getsize(p), label, p))
+            except OSError:
+                pass
+        rows.sort(reverse=True)
+        total = 0
+        for sz, label, p in rows:
+            total += sz
+            print(f"  {human(sz):>7}  {label}")
+            print(f"  {'':>7}    {p}")
+        print(f"\n  {len(rows)} logs, {human(total)} total")
+        return 0
+
+    threshold = int(args.threshold_mb * 1024 * 1024)
+    did = 0
+    freed = 0
+    for label, p in logs:
+        try:
+            before = os.path.getsize(p)
+        except OSError:
+            continue
+        changed, msg = rotate(p, label, threshold, args.keep, args.dry_run, args.prune)
+        if changed:
+            did += 1
+            freed += before
+            print(f"  {label}: {msg}")
+    verb = "would rotate" if args.dry_run else "rotated"
+    print(f"\n  {verb} {did} log(s), {human(freed)} reclaimed from live files")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

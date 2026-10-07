@@ -39,8 +39,8 @@ bash -n "$RELEASE" && ok "bin/ops-release still parses"  || err "bin/ops-release
 grep -q -- '--no-sweep)'   "$RELEASE" && ok "ops-release accepts --no-sweep"   || err "--no-sweep is not parsed"
 grep -q -- '--sweep-only)' "$RELEASE" && ok "ops-release accepts --sweep-only" || err "--sweep-only is not parsed"
 
-# The sweep has to land PRs BEFORE the bump, or the changelog and tag miss them.
-sweep_line="$(grep -n 'release_pr_sweep "\$GH_REPO"' "$RELEASE" | head -1 | cut -d: -f1)"
+# Inventory must stop on unfinished work BEFORE the bump, never merge broadly.
+sweep_line="$(grep -n '^# ----- read-only pre-release inventory -----' "$RELEASE" | head -1 | cut -d: -f1)"
 bump_line="$(grep -n '^# ----- version base -----' "$RELEASE" | head -1 | cut -d: -f1)"
 if [ -n "$sweep_line" ] && [ -n "$bump_line" ] && [ "$sweep_line" -lt "$bump_line" ]; then
   ok "the sweep runs before the version bump"
