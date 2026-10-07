@@ -40,10 +40,46 @@ service cleanup. Only health snapshots, the lock file and temporary atomic-write
 files are written locally. No settings, credentials or service definitions are
 changed.
 
-Existing invocations without `--monitor-only` retain their prior behavior. The
-manager's `--dry-run` is still only a management preview, not this monitor mode.
-Do not use manager install/upgrade to deploy this mode without checking that the
-resulting service arguments retain `--monitor-only`.
+Existing invocations without `--monitor-only` retain their prior behavior,
+unless the operator has installed the persistent contract below. The manager's
+`--dry-run` is still only a management preview, not this monitor mode.
+
+## Persistent macOS mode contract
+
+Service managers and existing data-dir plist guards can repoint the entrypoint.
+Do not rely on a launchd flag alone. After backing up the operator-owned wrapper,
+install these files without changing the guard:
+
+1. Keep reviewed `ops-daemon.sh` and `ops-daemon-monitor.py` under
+   `$OPS_DATA_DIR/runtime/<reviewed-version>/`.
+2. Copy `ops-daemon-monitor-selector.py` to `$OPS_DATA_DIR/bin/`.
+3. Prepend the complete `ops-daemon-monitor-prefix.sh` to the backed-up
+   `$OPS_DATA_DIR/bin/ops-daemon.sh`. Its unconditional selector dispatch must
+   precede the entire legacy body; removing a manifest must not enable legacy.
+4. Write a private `$OPS_DATA_DIR/daemon-monitor.json` with exactly `mode`
+   (`monitor_only`), `runtime` (the absolute reviewed directory) and `sha256`
+   (the actual SHA-256 of each of the two runtime files, keyed by filename).
+   Never put a command, token or arbitrary executable in this file.
+5. Use the updated manager implementation. It validates the contract before
+   effects and produces `[bash, data-dir/bin/ops-daemon.sh, --monitor-only]`.
+   `ensure-current` skips legacy migrations and preserves that contract;
+   `restart` repairs a stale legacy plist before loading it. The unchanged guard
+   recognizes the same data-dir wrapper path and leaves it alone.
+
+Missing, malformed, out-of-directory, symlinked or hash-mismatched state is
+rejected before legacy execution. An installed data-dir selector is also a
+persistent mode marker: the updated manager refuses a missing manifest instead
+of rebuilding legacy configuration. The prefix dispatches even without a
+launchd mode flag. Reverting mode requires an explicit operator restoration of
+both the backed-up wrapper and mode state, not automatic fallback.
+
+The manager's persistent contract is tested only on macOS and fails closed on
+other operating systems. Direct passive observations still work on macOS/Linux.
+The version-agnostic launcher honors the contract before scanning plugin cache
+versions; keep the selector alongside it if deploying that launcher separately.
+Older manager or launcher binaries do not understand this contract. Promote the
+updated implementation at the actual invoked paths before claiming upgrade
+persistence; do not merely change a manifest while leaving older loaders active.
 
 Run the entrypoint safety tests with:
 

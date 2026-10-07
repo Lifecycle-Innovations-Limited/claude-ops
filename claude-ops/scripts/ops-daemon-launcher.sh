@@ -9,6 +9,12 @@
 # ops-daemon.sh, and execs it.
 set -euo pipefail
 
+DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+if [[ -e "$DATA_DIR/daemon-monitor.json" || -L "$DATA_DIR/daemon-monitor.json" ||
+      -e "$DATA_DIR/bin/ops-daemon-monitor-selector.py" || -L "$DATA_DIR/bin/ops-daemon-monitor-selector.py" ]]; then
+  exec python3 -I "$(dirname "$0")/ops-daemon-monitor-selector.py" "$@"
+fi
+
 CACHE_ROOT="${CLAUDE_PLUGIN_CACHE_ROOT:-$HOME/.claude/plugins/cache/ops-marketplace/ops}"
 
 if [[ ! -d "$CACHE_ROOT" ]]; then
