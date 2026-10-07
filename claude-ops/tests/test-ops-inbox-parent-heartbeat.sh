@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Guard: /ops:ops-inbox pings the parent every 30s by default.
-# The heartbeat script's exit IS the ping (same pattern as live-watch).
+# Keep the optional heartbeat utility tested, but inbox instructions follow the
+# host's cadence and deliver ready evidence instead of creating a polling loop.
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -56,16 +56,16 @@ case "$out" in
   *) err "scan summary was: $out" ;;
 esac
 
-if grep -q '30-second parent heartbeat' "$SKILL" && grep -q 'ops-inbox-parent-heartbeat.sh' "$SKILL"; then
-  ok "skill launches the heartbeat"
+if grep -q "host's cadence" "$SKILL" && ! grep -q 'ops-inbox-parent-heartbeat.sh' "$SKILL"; then
+  ok "skill follows host cadence without launching a polling loop"
 else
-  err "skill missing 30-second heartbeat launch"
+  err "skill overrides host cadence or launches a heartbeat loop"
 fi
 
-if grep -q 'SendMessage' "$SKILL" && grep -q 'every 30' "$FANOUT"; then
-  ok "workers SendMessage parent every 30s"
+if grep -q 'SendMessage' "$FANOUT" && grep -q 'as soon as' "$FANOUT" && ! grep -q 'every 30' "$FANOUT"; then
+  ok "workers report ready evidence progressively, without a fixed heartbeat"
 else
-  err "fan-out/skill missing 30s SendMessage"
+  err "fan-out lacks progressive reporting or mandates a fixed heartbeat"
 fi
 
 echo ""

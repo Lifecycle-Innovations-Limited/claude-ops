@@ -1,145 +1,71 @@
-# Inbox CLI/API reference
+# Inbox read paths
 
-## CLI/API Reference
+Loaded from the parent SKILL.md. Follow `ops-rules` and current host policy.
+Read the installed tool schema/help before calls; names below are discovery hints,
+not guaranteed API parameters. Load only tools needed for the current candidate.
 
-### whatsapp-bridge (WhatsApp — mcp**whatsapp**\*)
+## Email and calendars
 
-**Bridge health** — check bridge is running before any WhatsApp operation. Same `lsof` probe across platforms; supervisor command differs:
+- `gog auth list`: enumerate configured mailboxes; keep results account-labelled.
+- `gog gmail search`: candidate discovery per mailbox across All Mail, including
+  archived/read mail and discovered todo/action/follow-up labels, not just INBOX.
+  Bound and disclose lookback; paginate rather than treating the first page as all.
+- `gog gmail thread get <threadId> -j`: full chain, typically `thread.messages[]`.
+- `gog gmail get <messageId> -j` / `gog gmail raw <messageId>`: inspect source
+  body/headers and authoritative labels. Search envelopes alone do not prove SENT.
+- `gog calendar events --all` for relevant dates, plus all configured calendar,
+  show/tour/travel sources for an availability claim.
 
-```bash
-lsof -i :8080 | grep LISTEN   # bridge listens on :8080 (same on macOS + Linux)
+Use the actual mailbox/account options from current installed help. Replies are
+samimizer `message` only, with canonical thread/reply-all identifiers. Never use
+an independent CLI or raw API send route from this reference.
 
-# macOS — launchd:
-launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge" 2>&1 | head -3   # use print, NOT list — list only shows already-loaded services
+## WhatsApp
 
-# Linux — systemd-user (installed by scripts/install-whatsapp-bridge-linux.sh):
-systemctl --user is-active whatsapp-bridge.service
-journalctl --user -u whatsapp-bridge.service -n 10 --no-pager
-```
+Resolve `ops-wa-accounts --list` when installed, then load the actual account's
+read tools. Multi-account registration names alone do not prove either coverage
+or current routing; verify account-specific output.
 
-**One-line cross-platform restart** — use the in-repo wrapper when you don't want to branch on uname yourself:
+Read tools may include `list_chats`, `list_messages`, `search_contacts`, `get_chat`,
+and `get_message_context`. Read both directions for each authoritative JID/LID
+pair, deduplicate mirror message IDs and account for every connected account.
+Read only enabled authorized accounts; disabled accounts remain explicit coverage
+gaps, never an implicit clean zero. Stored `last_message_time` or unread/archive flags do not prove the latest
+request state. Keep account/source retention gaps explicit.
 
-```bash
-bash "$CLAUDE_PLUGIN_ROOT/scripts/lib/whatsapp-bridge-up.sh"
-```
+Use only existing host-approved live/snapshot/merged-thread read helpers. A client
+read failure does not authorize local-store fallback, pairing, restart, backfill,
+auth repair, session reset or raw transport. Sends use samimizer `message`.
 
-It restarts via launchctl on Darwin and `systemctl --user` on Linux, then waits up to 5s for `:8080` to come up.
+## Slack
 
-If you need the raw recipes:
+Enumerate every Slack workspace and actual tool binding. Load scoped read/search
+schemas: `channels_me` for allowed `im,mpim` and `public_channel,private_channel`,
+`conversations_history`, `conversations_replies` and supported message search.
+Read every relevant reply thread and user mention; paginate. Unread is never a
+reply-debt filter. One workspace's tool result proves only that workspace.
 
-**macOS** (handles the "service not loaded" case that breaks bare `kickstart`):
+## Other sources
 
-```bash
-LABEL="com.${USER}.whatsapp-bridge"
-PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
-TARGET="gui/$(id -u)/${LABEL}"
-if ! launchctl kickstart -k "$TARGET" 2>/dev/null; then
-  [ -f "$PLIST" ] && launchctl load -w "$PLIST"
-  sleep 2
-  launchctl kickstart -k "$TARGET" 2>/dev/null || true
-fi
-sleep 5
-lsof -i :8080 | grep -q LISTEN && echo "bridge up" || echo "bridge FAILED — check ~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log"
-```
+Read allowlisted iMessage conversations through its installed plugin. Use configured
+user-auth Telegram, scoped Discord reads and Notion page/comments/task reads. No
+allowlist changes, profile switching or new setup during triage. If the installed
+outbound gate does not support a channel, keep its reply owned with that gap; do
+not call a separate sender.
 
-**Linux** (systemd-user — the install script's standard path):
+## Authorized archive verification
 
-```bash
-systemctl --user daemon-reload
-systemctl --user restart whatsapp-bridge.service
-sleep 5
-lsof -i :8080 | grep -q LISTEN && echo "bridge up" || journalctl --user -u whatsapp-bridge.service -n 30 --no-pager
-```
-
-**Why the macOS recipe matters:** bare `launchctl kickstart -k gui/$UID/<label>` exits with `Could not find service` if the LaunchAgent isn't loaded (common after reboot, plist edits, or when the daemon hasn't auto-registered). Always quote the target string and fall back to `launchctl load -w` before retrying.
-
-**First-time Linux install** — if the bridge isn't installed yet on a Linux host:
-
-```bash
-bash "$CLAUDE_PLUGIN_ROOT/scripts/install-whatsapp-bridge-linux.sh" --wa-phone <E.164>
-```
-
-This clones lharries/whatsapp-mcp into `~/.local/share/whatsapp-mcp`, applies the in-repo claude-ops patches (Fix A/B pair-phone hardening, auto-backfill on Connected, `POST /api/backfill` REST endpoint, crash-safe `requestHistorySync`, Python LID↔phone↔contact resolver), drops the systemd-user units (`whatsapp-bridge.service`, `whatsapp-backfill.{service,timer}`, `whatsapp-transcribe.{service,timer}`), installs the voice-note transcriber (`transcriber/transcribe_voice_notes.py`), the media enricher (`transcriber/enrich_media.py`, with `whatsapp-enrich.{service,timer}`) and the pre-scan freshness gate (`~/bin/wa-inbox-fresh.sh`), enables linger, and emits the pairing code via `journalctl --user -u whatsapp-bridge -f`. Idempotent: re-running is safe and updates patches in place. Pass `--no-transcribe-timer` to skip voice-note transcription, `--no-enrich-timer` to skip video/image/document enrichment. The transcribe and enrich services read `OPENAI_API_KEY` from `~/.config/systemd/env/mcp-secrets.env`. The media-retry self-heal (Fix M) is part of the bridge patch set, no extra flag.
-
-**MCP tools** (use these instead of any wacli CLI command):
-
-| Tool                                 | Usage                                                    | Output                                                                                            |
-| ------------------------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `mcp__whatsapp__list_chats`          | `{sort_by: "last_active"}`                               | Array of chats with jid, name, last_message_time                                                  |
-| `mcp__whatsapp__list_messages`       | `{chat_jid, limit, query}`                               | Array of messages with id, sender, content, timestamp, is_from_me                                 |
-| `mcp__whatsapp__search_contacts`     | `{query}`                                                | Contacts matching name or phone                                                                   |
-| `mcp__whatsapp__send_message`        | `{recipient, message}`                                   | Send result                                                                                       |
-| `mcp__whatsapp__get_chat`            | `{chat_jid}`                                             | Chat metadata                                                                                     |
-| `mcp__whatsapp__get_message_context` | `{chat_jid, message_id}`                                 | Message context window                                                                            |
-| `mcp__whatsapp__archive_chat`        | `{chat_jid, archive: true}`                              | Archive (or unarchive with `archive: false`) a chat — sends app-state mutation via whatsmeow      |
-| `mcp__whatsapp__resync_app_state`    | `{name: "regular_low", full_sync: true, skip_bad: true}` | Force full app-state resync — run when archive fails with `LTHash mismatch` (server/local desync) |
-
-**Bulk archive non-actionable WA chats** — for newsletters, dead group chats, one-word reactions, etc.:
-
-```bash
-DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
-WA_API="http://127.0.0.1:$("$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --port)"   # resolve, never assume
-for jid in "<NEWSLETTER_JID>@newsletter" "<GROUP_JID>@g.us" "<CONTACT_PHONE>@s.whatsapp.net"; do
-  curl -s -X POST "$WA_API/api/archive" \
-    -H 'Content-Type: application/json' \
-    -d "{\"chat_jid\":\"$jid\",\"archive\":true}"
-done
-# The /api/archive endpoint auto-heals LTHash corruption internally (Fix G) and
-# immediately UPSERTs archived=1 into messages.db so the inbox query reflects it.
-# If you still get HTTP 409, the heal failed — run resync manually as a last resort:
-# curl -s -X POST "$WA_API/api/resync_app_state" -d '{"name":"regular_low","full_sync":true,"skip_bad":true}'
-```
-
-**Archive state is locally queryable** (Fix H — bridge persists `archived` flag in `chats` table):
-
-```bash
-# Inbox = all non-archived chats:
-sqlite3 "$DB" "SELECT jid, name, last_message_time FROM chats WHERE archived=0 ORDER BY last_message_time DESC;"
-# Confirm a specific chat was archived:
-sqlite3 "$DB" "SELECT jid, archived FROM chats WHERE jid='<JID>';"
-```
-
-**Full-text search** — use `mcp__whatsapp__list_messages` with a `query` param (backed by FTS5 after running `scripts/whatsapp-bridge-migrate.sh`):
-
-```bash
-# Direct sqlite3 FTS query (fallback when MCP unavailable):
-DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
-sqlite3 "$DB" "SELECT chat_jid, sender, content, timestamp FROM messages WHERE rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH '<query>') ORDER BY timestamp DESC LIMIT 20;"
-```
-
-**Contact lookup** — use `mcp__whatsapp__search_contacts` or query contacts table directly:
-
-```bash
-sqlite3 "$DB" "SELECT jid, name, phone FROM contacts WHERE name LIKE '%<name>%' COLLATE NOCASE LIMIT 10;"
-```
-
-**History backfill** — the whatsmeow bridge automatically syncs history on connection. No manual backfill command exists; if messages are missing, restart the bridge using the robust recipe above (load-then-kickstart).
-
-### gog CLI (Gmail/Calendar)
-
-| Command                                                                    | Usage                                                                                                                   | Output                    |
-| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| `gog gmail search "in:inbox" --max 50 -j --results-only --no-input`        | Full inbox scan                                                                                                         | JSON array of threads     |
-| `gog gmail thread get <threadId> -j`                                       | Get full thread with all messages                                                                                       | Full message JSON         |
-| `gog gmail get <messageId> -j`                                             | Get single message                                                                                                      | Message JSON              |
-| `gog gmail raw <messageId>`                                                | Dump lossless raw Gmail API JSON — includes authoritative `labelIds`                                                    | Raw message JSON          |
-| `gog gmail archive <messageId> [<messageId>...] --force`                   | **Archive** — removes the INBOX label (dedicated archive action; `--force`/`-y` skips confirm; add `--no-input` for CI) | Archive result            |
-| `gog gmail archive --query "<gmail-query>" --max N --force`                | Archive by query                                                                                                        | Archive result            |
-| `gog gmail messages modify <messageId> --add <LABEL> --remove <LABEL>`     | Edit labels only (NOT archive — use the `archive` subcommand above for that)                                            | Labels result             |
-| `gog gmail send --to "<email>" --subject "<subj>" --body "<body>"`         | Send email                                                                                                              | Send result               |
-| `gog gmail send --reply-to-message-id <msgId> --reply-all --body "text"`   | Reply all                                                                                                               | Send result               |
-| `gog gmail send --to "<email>" --subject "<subj>" --body "<body>" --track` | Send with open-tracking pixel (requires tracking setup — see Open Tracking section)                                     | Send result + tracking-id |
-| `gog gmail track status`                                                   | Show tracking configuration status                                                                                      | configured: true/false    |
-| `gog gmail track opens [<tracking-id>] --since <duration> --to <email> -j` | Query email opens for a tracking-id (or all recent opens)                                                               | JSON array of open events |
-| `gog gmail mark-read <messageId> ... --no-input`                           | Mark as read                                                                                                            | Result                    |
-| `gog gmail labels list -j`                                                 | List all labels                                                                                                         | Labels JSON               |
-
-**Known trap — archive verification:** do NOT verify an archive with `gog gmail search "in:inbox"`. That search result is **cached/stale** and keeps returning already-archived messages, making archive look like it failed when it succeeded. Verify the live label state instead:
-
-```bash
-gog gmail raw <messageId> | python3 -c "import json,sys; d=json.load(sys.stdin); print('INBOX' in d.get('labelIds',[]))"
-# False = archived successfully. gog gmail get -j does NOT reliably populate labelIds; use raw.
-```
-
----
-
+Sending does not grant archive authorization. After explicit authorization and
+confirmed resolution, use the installed supported account-specific archive path.
+For Gmail thread IDs, inspect whether the installed archive command requires
+`--thread`; verify live raw label state rather than cached search envelopes.
+For WhatsApp discover the account-specific `get_chat` read schema and inspect
+its actual archived flag for each authoritative phone JID and every LID after
+the archive call. Record the exact account/JID and readback surface, not a cached
+list or a successful write response. If the schema omits the flag, keep unknown.
+For a phone/browser archive claim, use the existing host-approved WhatsApp Web
+or connected client archive-state read for that same account/profile: bridge
+metadata alone is not phone/browser proof. A false, missing or inaccessible
+readback remains owned archive failure/unknown and prevents inbox-zero claims.
+No archive on a channel lacking a supported archive operation. No hardcoded
+endpoints, new browser pairing, integration mutations or security-repair ladder.
