@@ -76,7 +76,8 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-skill-update 2>/dev/null || true",
-            "timeout": 5
+            "timeout": 5,
+            "async": true
           }
         ]
       },
@@ -112,12 +113,13 @@
         ]
       },
       {
-        "matcher": "Bash|Edit|Write",
+        "matcher": "Bash|Edit|Write|TaskCreate|TaskUpdate|TaskList|TaskGet",
         "hooks": [
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-task-reminder 2>/dev/null || true",
-            "timeout": 2
+            "timeout": 5,
+            "async": true
           }
         ]
       }

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+- PreToolUse(Skill) `ops-pretool-skill-update` and PostToolUse `ops-task-reminder` now run async, so neither holds up the tool call it observes.
+
+### Fixed
+- `ops-task-reminder` takes a per-session exclusive lock (flock, or a portable mkdir lock where flock is missing) around its counter update, so overlapping async runs no longer lose counts. Fails open after ~2s.
+- `ops-task-reminder` now also fires on `TaskCreate|TaskUpdate|TaskList|TaskGet`, so its documented counter reset on Task* tools is reachable; previously the `Bash|Edit|Write` matcher never delivered a Task* event and the reminder could fire right after a task update.
+
 ## [3.10.28] - 2026-10-04
 
 ### Changed
