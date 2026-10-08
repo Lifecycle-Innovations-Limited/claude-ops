@@ -4,7 +4,23 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConfig, filterAgents, expandHome } from "./config.mjs";
 import { detectAll, AGENT_DEFS } from "./detect.mjs";
-import { ensureSource, listSourceSkills, listSourceBin } from "./source.mjs";
+import {
+  ensureSource,
+  findCachedSource,
+  remoteSha,
+  isSha,
+  listSourceSkills,
+  listSourceBin,
+} from "./source.mjs";
+import { acquireLock } from "./lock.mjs";
+import {
+  checkTargets,
+  formatText,
+  makeRecord,
+  finish,
+  exitCodeFor,
+  envPaths,
+} from "./parity/check.mjs";
 import { planMirror, applyActions } from "./mirror.mjs";
 import { planBinLinks, applyBinLinks } from "./bin.mjs";
 import { verifyAgent, verifyNativePlugin } from "./verify.mjs";
@@ -136,23 +152,25 @@ export function planNativePlugin({ srcDir, pluginPath, force }) {
         errors,
       };
     }
-    if (!force) {
-      errors.push({
-        path: to,
-        op: "symlink",
-        error: "target is real (refused without --force)",
-      });
-      return {
-        skipped: false,
-        action: {
-          op: "refuse",
-          from,
-          to,
-          reason: "target is a real file/dir; pass --force to overwrite",
-        },
-        errors,
-      };
-    }
+    errors.push({
+      path: to,
+      op: "symlink",
+      status: "OWNERSHIP_CONFLICT",
+      error: "target is a real file/dir not created by the installer",
+    });
+    return {
+      skipped: false,
+      action: {
+        op: "refuse",
+        from,
+        to,
+        status_code: "OWNERSHIP_CONFLICT",
+        reason: force
+          ? "target is a real file/dir; --force never deletes it (OWNERSHIP_CONFLICT)"
+          : "target is a real file/dir not created by the installer (OWNERSHIP_CONFLICT)",
+      },
+      errors,
+    };
   }
   return {
     skipped: false,
@@ -173,12 +191,18 @@ function applyPluginLink(pluginPlan, { dryRun, onApply }) {
     return;
   }
   fs.mkdirSync(path.dirname(a.to), { recursive: true });
+  let st = null;
   try {
-    fs.lstatSync(a.to);
-    fs.rmSync(a.to, { recursive: true, force: true });
+    st = fs.lstatSync(a.to);
   } catch (_e) {
     /* absent */
   }
+  if (st && !st.isSymbolicLink()) {
+    a.status = "refused";
+    a.status_code = "OWNERSHIP_CONFLICT";
+    return;
+  }
+  if (st) fs.unlinkSync(a.to);
   fs.symlinkSync(a.from, a.to);
   a.status = "applied";
   if (onApply) onApply(a.to, a.from);
@@ -187,31 +211,56 @@ function applyPluginLink(pluginPlan, { dryRun, onApply }) {
 function applyAll({ plan, dryRun, cfg }) {
   let manifest = loadManifest();
   for (const [name, mirror] of Object.entries(plan.agents)) {
-    if (!mirror.skipped) {
-      applyActions(mirror.actions, {
-        dryRun,
-        onApply: (to, from) => addSymlink(manifest, to, from),
-      });
-    }
-    if (mirror.plugin) {
-      applyPluginLink(mirror.plugin, {
-        dryRun,
-        onApply: (to, from) => addSymlink(manifest, to, from),
-      });
-    }
-    // Record every applied symlink in the manifest.
-    if (!dryRun && mirror.actions) {
-      for (const a of mirror.actions) {
-        if (a.status === "applied") {
-          try {
-            const st = fs.lstatSync(a.to);
-            if (st.isSymbolicLink())
-              addSymlink(manifest, a.to, fs.readlinkSync(a.to));
-          } catch (_e) {
-            /* ignore */
-          }
+    // One writer per target root. Dry runs take no lock (they write nothing).
+    const roots = [];
+    if (!mirror.skipped && mirror.actions?.length)
+      roots.push(path.dirname(mirror.actions[0].to));
+    if (mirror.plugin?.action) roots.push(mirror.plugin.action.to);
+    const held = [];
+    let blocked = null;
+    if (!dryRun) {
+      for (const r of roots) {
+        const l = acquireLock(r);
+        if (l.locked) {
+          blocked = l;
+          break;
         }
+        held.push(l);
       }
+    }
+    if (blocked) {
+      for (const l of held) l.release();
+      mirror.locked = { dir: blocked.dir, pid: blocked.pid };
+      plan.errors.push({
+        agent: name,
+        status: "LOCKED",
+        error: `another OPS run holds ${blocked.dir}`,
+      });
+      continue;
+    }
+    try {
+      if (!mirror.skipped) {
+        mirror.results = applyActions(mirror.actions, {
+          dryRun,
+          onApply: (to, from) => addSymlink(manifest, to, from),
+        });
+        for (const r of mirror.results)
+          if (r.op === "symlink" && r.status === "refused")
+            plan.errors.push({
+              agent: name,
+              path: r.to,
+              status: r.status_code,
+              error: "refused at apply time",
+            });
+      }
+      if (mirror.plugin) {
+        applyPluginLink(mirror.plugin, {
+          dryRun,
+          onApply: (to, from) => addSymlink(manifest, to, from),
+        });
+      }
+    } finally {
+      for (const l of held) l.release();
     }
   }
   // Apply bin links from plan.bin.planned (which contains from/to + status='planned').
@@ -234,14 +283,17 @@ function emit(plan, asJson) {
         process.stdout.write(`[${name}] skipped: ${m.reason}\n`);
         continue;
       }
-      const counts = m.actions.reduce((acc, a) => {
+      const rows = m.results || m.actions;
+      if (m.locked) process.stdout.write(`[${name}] LOCKED: ${m.locked.dir}\n`);
+      const counts = rows.reduce((acc, a) => {
         acc[a.op] = (acc[a.op] || 0) + 1;
         return acc;
       }, {});
       process.stdout.write(`[${name}] ${JSON.stringify(counts)}\n`);
-      for (const a of m.actions) {
+      for (const a of rows) {
         const arrow = a.status ? `${a.op}->${a.status}` : a.op;
-        process.stdout.write(`  ${arrow}  ${a.skill}\n`);
+        const code = a.status_code ? ` (${a.status_code})` : "";
+        process.stdout.write(`  ${arrow}  ${a.skill}${code}\n`);
       }
       if (m.plugin) {
         if (m.plugin.skipped) {
@@ -302,16 +354,36 @@ export async function runAgents(flags) {
   return 0;
 }
 
+function sourceError(e) {
+  const rec = makeRecord("reference", "MISSING_REFERENCE", {
+    required: true,
+    basis: "installer source fetch",
+    cause: `${e.errorClass || "unknown"}: ${e.message}`,
+    next: "check network access to the source URL, or pass --ref <tag>",
+  });
+  process.stderr.write(
+    `source unavailable\n  problem: ${rec.error.problem}\n  cause: ${rec.error.cause}\n  next: ${rec.error.next}\n  docs: ${rec.docs}\n`,
+  );
+  return exitCodeFor("gap");
+}
+
 export async function runInstall(flags) {
   const cfg = loadConfig(flags.config);
   if (flags.ref) cfg.source.ref = flags.ref;
-  const src = ensureSource(cfg);
+  let src;
+  try {
+    src = ensureSource(cfg);
+  } catch (e) {
+    if (e.code === "SOURCE_UNAVAILABLE") return sourceError(e);
+    throw e;
+  }
+  if (src.warning) process.stderr.write(`warning: ${src.warning}\n`);
   const agents = pickAgents(cfg, flags.agents);
   if (Object.keys(agents).length === 0) {
     process.stderr.write(
       "no agents enabled (run with --agents claude,codex,... to override)\n",
     );
-    return 4;
+    return exitCodeFor("usage");
   }
   const plan = planAll({
     cfg,
@@ -325,9 +397,13 @@ export async function runInstall(flags) {
   emit(plan, !!flags.json);
   const errs = plan.errors || [];
   if (errs.length) {
-    process.stderr.write(`\n${errs.length} non-fatal error(s):\n`);
+    process.stderr.write(`\n${errs.length} target(s) not applied:\n`);
     for (const e of errs) process.stderr.write(`  ${JSON.stringify(e)}\n`);
-    return 1;
+    process.stderr.write(
+      "  docs: docs/skill-parity.md#status-ownership-conflict\n",
+    );
+    const onlyLocked = errs.every((e) => e.status === "LOCKED");
+    return exitCodeFor(onlyLocked ? "locked" : "partial");
   }
   return 0;
 }
@@ -337,10 +413,47 @@ export async function runUpdate(flags) {
   return runInstall(flags);
 }
 
+// Pure: resolves the cached source for the configured ref without fetching,
+// cloning or creating anything. Missing cache -> MISSING_REFERENCE (exit 2).
+function cachedSourceOrRecord(cfg, flags) {
+  if (flags.source && flags.source !== "claude-installed")
+    return { dir: flags.source };
+  const remote =
+    flags.offline || isSha(cfg.source.ref)
+      ? null
+      : remoteSha(cfg.source.url, cfg.source.ref);
+  const c = findCachedSource(cfg, { remote });
+  if (c.status === "MISSING_REFERENCE") {
+    return {
+      record: makeRecord("reference", "MISSING_REFERENCE", {
+        required: true,
+        basis: `installer cache for ${cfg.source.ref}`,
+        cause: c.cause,
+        next: `run \`claude-ops-installer fetch --ref ${cfg.source.ref}\` (writes only the installer cache), or pass --source <plugin-root>`,
+      }),
+    };
+  }
+  return c;
+}
+
+function printRecordAndExit(rec, asJson) {
+  if (asJson)
+    process.stdout.write(
+      JSON.stringify({ records: [rec], aggregate: finish([rec]) }, null, 2) +
+        "\n",
+    );
+  else
+    process.stdout.write(
+      `[${rec.target}] ${rec.status}\n  problem: ${rec.error.problem}\n  basis: ${rec.error.basis}\n  cause: ${rec.error.cause}\n  next: ${rec.error.next}\n  docs: ${rec.docs}\n`,
+    );
+  return finish([rec]).exit_code;
+}
+
 export async function runVerify(flags) {
   const cfg = loadConfig(flags.config);
   if (flags.ref) cfg.source.ref = flags.ref;
-  const src = ensureSource(cfg);
+  const src = cachedSourceOrRecord(cfg, { ...flags, offline: true });
+  if (src.record) return printRecordAndExit(src.record, flags.json);
   const agents = pickAgents(cfg, flags.agents);
   const reports = [];
   for (const [name, a] of Object.entries(agents)) {
@@ -378,15 +491,19 @@ export async function runVerify(flags) {
         process.stdout.write(`  drift: ${d.name} — ${d.reason}\n`);
       for (const d of r.missing) process.stdout.write(`  missing: ${d.name}\n`);
     }
+    process.stdout.write(
+      "(symlink layout only; for byte-level parity across every CLI run `claude-ops-installer check`)\n",
+    );
   }
   const any = reports.some((r) => r.drifts?.length || r.missing?.length);
-  return any ? 1 : 0;
+  return any ? exitCodeFor("drift") : 0;
 }
 
 export async function runDoctor(flags) {
   const cfg = loadConfig(flags.config);
   if (flags.ref) cfg.source.ref = flags.ref;
-  const src = ensureSource(cfg);
+  const src = cachedSourceOrRecord(cfg, { ...flags, offline: true });
+  if (src.record) return printRecordAndExit(src.record, flags.json);
   const agents = pickAgents(cfg, flags.agents);
   const out = await runDoctorChecks({ srcDir: src.dir, agents });
   if (flags.json) process.stdout.write(JSON.stringify(out, null, 2) + "\n");
@@ -399,7 +516,75 @@ export async function runDoctor(flags) {
       `\n${out.failed.length === 0 ? "all green" : out.failed.length + " failed"}\n`,
     );
   }
-  return out.ok ? 0 : 1;
+  return out.ok ? 0 : exitCodeFor("drift");
+}
+
+// Byte-level parity across every CLI (shared check core). Never fetches or
+// writes; a moving --ref only costs a read-only `git ls-remote` so a stale
+// cache is reported as STALE_SOURCE (skip that with --offline).
+export async function runCheck(flags) {
+  const cfg = loadConfig(flags.config);
+  if (flags.ref) cfg.source.ref = flags.ref;
+  let source;
+  const extra = [];
+  if (flags.source === "claude-installed") source = undefined;
+  else if (flags.source) source = flags.source;
+  else {
+    const c = cachedSourceOrRecord(cfg, flags);
+    if (c.record) return printRecordAndExit(c.record, flags.json);
+    source = c.dir;
+    if (c.status === "STALE_SOURCE")
+      extra.push(
+        makeRecord("reference", "STALE_SOURCE", {
+          required: true,
+          basis: `installer cache for ${cfg.source.ref}`,
+          cause: c.cause,
+        }),
+      );
+  }
+  const report = checkTargets({
+    source,
+    hosts: flags.hosts,
+    required: flags.require,
+    configPath: flags.parityConfig,
+  });
+  report.records.unshift(...extra);
+  report.aggregate = finish(report.records);
+  if (flags.report)
+    fs.writeFileSync(flags.report, JSON.stringify(report, null, 2) + "\n");
+  if (flags.json) process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+  else
+    process.stdout.write(
+      formatText(report, { paths: flags.paths, home: envPaths().home }),
+    );
+  return report.aggregate.exit_code;
+}
+
+// The one explicit, named step that puts a release into the installer's own
+// cache dir. Touches nothing else.
+export async function runFetch(flags) {
+  const cfg = loadConfig(flags.config);
+  if (flags.ref) cfg.source.ref = flags.ref;
+  let src;
+  try {
+    src = ensureSource(cfg);
+  } catch (e) {
+    if (e.code === "SOURCE_UNAVAILABLE") return sourceError(e);
+    throw e;
+  }
+  if (src.warning) process.stderr.write(`warning: ${src.warning}\n`);
+  const out = {
+    ref: cfg.source.ref,
+    sha: src.ref,
+    dir: src.dir,
+    fresh: src.fresh,
+  };
+  if (flags.json) process.stdout.write(JSON.stringify(out, null, 2) + "\n");
+  else
+    process.stdout.write(
+      `fetched ${cfg.source.ref} -> ${src.ref}\n  ${src.dir}${src.fresh ? "" : " (already cached)"}\n`,
+    );
+  return 0;
 }
 
 export async function runUninstall(flags) {
