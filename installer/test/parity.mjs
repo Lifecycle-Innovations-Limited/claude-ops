@@ -38,6 +38,7 @@ if (!process.env.OPS_INSTALLER_TEST_ISOLATED) {
       XDG_STATE_HOME: path.join(home, ".local", "state"),
       XDG_CONFIG_HOME: path.join(home, ".config"),
       OPS_INSTALLER_TEST_ISOLATED: "1",
+      OPS_INSTALLER_PARENT_HOME: os.homedir(),
     },
   });
   fs.rmSync(home, { recursive: true, force: true });
@@ -128,6 +129,45 @@ function makeUpstream(dir) {
 }
 
 try {
+  // 0. Class fix for the 2026-10-08 incident (smoke.mjs overwrote the real
+  // installer manifest). Neither installer test may write under the HOME it
+  // was started with: run smoke.mjs with a sentinel HOME standing in for the
+  // real one and require that sentinel to be byte-identical afterwards.
+  assert(
+    process.env.OPS_INSTALLER_PARENT_HOME &&
+      HOME !== process.env.OPS_INSTALLER_PARENT_HOME,
+    "parity.mjs itself runs under an isolated HOME, not the caller's",
+  );
+  const sentinel = fs.mkdtempSync(
+    path.join(os.tmpdir(), "installer-real-home-"),
+  );
+  fs.mkdirSync(path.join(sentinel, ".cache", "claude-ops-installer"), {
+    recursive: true,
+  });
+  fs.writeFileSync(
+    path.join(sentinel, ".cache", "claude-ops-installer", "manifest.json"),
+    '{"version":1,"symlinks":[]}\n',
+  );
+  const sentinelBefore = snapshot(sentinel);
+  const smokeEnv = { ...process.env, HOME: sentinel };
+  delete smokeEnv.OPS_INSTALLER_TEST_ISOLATED;
+  delete smokeEnv.XDG_STATE_HOME;
+  delete smokeEnv.XDG_CONFIG_HOME;
+  const smokeRun = spawnSync(process.execPath, [path.join(HERE, "smoke.mjs")], {
+    encoding: "utf8",
+    env: smokeEnv,
+  });
+  assert(
+    smokeRun.status === 0,
+    "smoke.mjs passes when started from a sentinel HOME",
+    smokeRun.stdout.slice(-400),
+  );
+  assert(
+    snapshot(sentinel) === sentinelBefore,
+    "smoke.mjs writes nothing under the HOME it was started with (manifest untouched)",
+  );
+  fs.rmSync(sentinel, { recursive: true, force: true });
+
   // 1. Bundled parity core is the canonical one.
   if (fs.existsSync(path.join(PLUGIN, "lib", "parity", "check.mjs"))) {
     for (const f of ["check.mjs", "status.json"]) {
