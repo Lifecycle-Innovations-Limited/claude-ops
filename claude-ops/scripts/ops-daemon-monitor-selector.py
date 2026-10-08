@@ -44,19 +44,45 @@ def validate(data):
     return runtime
 
 
+def bounded_regular(path):
+    info = os.lstat(path)
+    if not stat.S_ISREG(info.st_mode) or info.st_size > 2 * 1024 * 1024:
+        raise ValueError("not a bounded regular file")
+    return Path(path).read_bytes()
+
+
+def installed_entry_points(bin_dir, reviewed):
+    """Executable is not trusted: pin the installed selector and wrapper prefix."""
+    selector = bounded_regular(bin_dir / "ops-daemon-monitor-selector.py")
+    wrapper = bounded_regular(bin_dir / "ops-daemon.sh")
+    if hashlib.sha256(selector).digest() != hashlib.sha256(
+            bounded_regular(reviewed / "ops-daemon-monitor-selector.py")).digest():
+        raise ValueError("selector bytes changed")
+    if not wrapper.startswith(bounded_regular(reviewed / "ops-daemon-monitor-prefix.sh")):
+        raise ValueError("wrapper does not begin with the reviewed prefix")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--validate", action="store_true")
     parser.add_argument("--monitor-only", action="store_true")
     parser.add_argument("--run-once", action="store_true")
+    parser.add_argument("--reviewed-scripts", type=Path)
     args = parser.parse_args()
     if args.validate and (args.monitor_only or args.run_once):
         parser.error("--validate cannot be combined with execution flags")
+    if args.reviewed_scripts and not args.validate:
+        parser.error("--reviewed-scripts requires --validate")
     data = Path(os.environ.get("OPS_DATA_DIR") or Path.home() / ".claude/plugins/data/ops-ops-marketplace").resolve()
     try:
         runtime = validate(data)
     except (OSError, ValueError, TypeError):
         parser.exit(78, "Invalid monitor-only contract; legacy execution refused.\n")
+    if args.reviewed_scripts:
+        try:
+            installed_entry_points(data / "bin", args.reviewed_scripts)
+        except (OSError, ValueError):
+            parser.exit(78, "Monitor-only wrapper or selector does not match the reviewed bytes; refusing to enable it.\n")
     if args.validate:
         return
     bash = next((path for path in ("/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/bin/bash")

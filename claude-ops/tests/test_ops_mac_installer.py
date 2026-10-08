@@ -1,7 +1,9 @@
 """Only temporary file fixtures; installer never executes helper payloads."""
 import importlib.util
+import os
 import pathlib
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -62,6 +64,24 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 installer.install(source, target, 'absent')
 
+    def test_router_refuses_non_macos_before_any_install(self):
+        # Runs on every platform: a uname fixture reports Linux, and the product
+        # gate must refuse before touching the target.
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / 'uname').write_text('#!/bin/sh\necho Linux\n')
+            (root / 'uname').chmod(0o755)
+            target = root / 'fixture'
+            target.write_bytes(b'original')
+            command = PATH.parents[2] / 'bin/ops-mac'
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'])
+            result = subprocess.run(['/bin/bash', str(command), 'maintenance', 'install', 'agent-log-rotate', '--target', str(target), '--expected-sha256', installer.digest(target)], capture_output=True, env=env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b'macOS only', result.stderr)
+            self.assertEqual(target.read_bytes(), b'original')
+
+    @unittest.skipUnless(sys.platform == 'darwin',
+                         'SKIP: ops-mac router is macOS-only; installer itself is covered above')
     def test_router_installer_is_dry_run_without_toolkit(self):
         with tempfile.TemporaryDirectory() as d:
             target = pathlib.Path(d) / 'fixture'

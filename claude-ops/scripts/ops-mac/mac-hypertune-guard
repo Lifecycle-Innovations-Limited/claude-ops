@@ -48,12 +48,33 @@ if [ -f "$MESH" ]; then
   if [ "$run" = "true" ] || [ "$run" = "1" ]; then need=1; fi
   if [ "${iv:-0}" -lt 600 ] 2>/dev/null; then need=1; fi
   if [ "$need" -eq 1 ]; then
+    # Every mutation is checked and the result read back. Only a verified
+    # result is logged as enforced; anything else marks the run failed.
+    mesh_ok=1
+    # Bootout of an unloaded job is not a failure; a loaded job must be gone after it.
     launchctl bootout "${GUI}/${MESH_LABEL}" 2>/dev/null || true
-    /usr/libexec/PlistBuddy -c 'Set :RunAtLoad false' "$MESH" 2>/dev/null || true
-    /usr/libexec/PlistBuddy -c 'Set :StartInterval 600' "$MESH" 2>/dev/null || \
-      /usr/libexec/PlistBuddy -c 'Add :StartInterval integer 600' "$MESH" 2>/dev/null || true
-    launchctl bootstrap "$GUI" "$MESH" 2>/dev/null || true
-    log "mesh policy enforced RunAtLoad=false StartInterval=600"
+    if launchctl print "${GUI}/${MESH_LABEL}" >/dev/null 2>&1; then mesh_ok=0; fi
+    if [ "$mesh_ok" = 1 ]; then
+      /usr/libexec/PlistBuddy -c 'Set :RunAtLoad false' "$MESH" 2>/dev/null || \
+        /usr/libexec/PlistBuddy -c 'Add :RunAtLoad bool false' "$MESH" 2>/dev/null || mesh_ok=0
+      /usr/libexec/PlistBuddy -c 'Set :StartInterval 600' "$MESH" 2>/dev/null || \
+        /usr/libexec/PlistBuddy -c 'Add :StartInterval integer 600' "$MESH" 2>/dev/null || mesh_ok=0
+      run=$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$MESH" 2>/dev/null || echo unknown)
+      iv=$(/usr/libexec/PlistBuddy -c 'Print :StartInterval' "$MESH" 2>/dev/null || echo 0)
+      [ "$run" = "false" ] || mesh_ok=0
+      { [ "${iv:-0}" -ge 600 ] 2>/dev/null; } || mesh_ok=0
+    fi
+    if [ "$mesh_ok" = 1 ]; then
+      launchctl bootstrap "$GUI" "$MESH" 2>/dev/null || mesh_ok=0
+      launchctl print "${GUI}/${MESH_LABEL}" >/dev/null 2>&1 || mesh_ok=0
+    fi
+    if [ "$mesh_ok" = 1 ]; then
+      log "mesh policy enforced RunAtLoad=false StartInterval=600 (verified)"
+    else
+      log "ERROR mesh policy NOT enforced; plist or launchd result unverified"
+      printf 'mac-hypertune-guard: mesh policy not enforced\n' >&2
+      failed=1
+    fi
   fi
 fi
 
@@ -61,8 +82,13 @@ fi
 KEEP="${LA}/${KEEP_LABEL}.plist"
 if [ -f "$KEEP" ]; then
   if ! launchctl print "${GUI}/${KEEP_LABEL}" >/dev/null 2>&1; then
-    launchctl bootstrap "$GUI" "$KEEP" 2>/dev/null || true
-    log "bootstrapped keepawake SSOT"
+    if launchctl bootstrap "$GUI" "$KEEP" 2>/dev/null &&
+       launchctl print "${GUI}/${KEEP_LABEL}" >/dev/null 2>&1; then
+      log "bootstrapped keepawake SSOT (verified)"
+    else
+      log "ERROR keepawake SSOT bootstrap unverified"
+      failed=1
+    fi
   fi
 fi
 # Extra caffeinate processes can belong to active agents/evals. Count is not

@@ -67,7 +67,9 @@ install these files without changing the guard:
    recognizes the same data-dir wrapper path and leaves it alone.
 
 Missing, malformed, out-of-directory, symlinked or hash-mismatched state is
-rejected before legacy execution. An installed data-dir selector is also a
+rejected before legacy execution. The manager also byte-verifies the data-dir
+selector against the release's selector and requires the wrapper to begin with
+the exact reviewed prefix; an edited entry point is never enabled. An installed data-dir selector is also a
 persistent mode marker: the updated manager refuses a missing manifest instead
 of rebuilding legacy configuration. The prefix dispatches even without a
 launchd mode flag. Reverting mode requires an explicit operator restoration of

@@ -141,7 +141,9 @@ After any fix, re-run the relevant probe and show before→after.
 ## Maintenance safety helpers
 
 `ops-mac maintenance <helper>` exposes bundled source helpers. Without arguments,
-`agent-log-rotate` lists logs only. Machine labels, endpoints, user scope and process
+`agent-log-rotate` lists logs only. Its copy/truncate rotation is best-effort, not
+lossless: launchd writers ignore locks, so a line written between the final check
+and the truncate can be lost; prefer producer-native rotation where available. Machine labels, endpoints, user scope and process
 allowlists stay in untracked files under `~/.config/claude-ops/`. Installing a
 helper never registers, starts, restarts or kills a job. Use
 `ops-mac maintenance install <helper> --target <path> --expected-sha256 <current>`

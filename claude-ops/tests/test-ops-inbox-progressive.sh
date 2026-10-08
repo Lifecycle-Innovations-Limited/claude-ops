@@ -114,6 +114,9 @@ rule6 = rules.split('## Rule 6')[1].split('## Rule 7')[0]
 check('Rule 6 permits only individually approved queue drain',
       'individually approved records' in rule6 and 'Never stack' not in rule6 and 'never batch' not in rule6)
 check('Rule 6 does not describe a shell token as consent', '.claude-send-ok' not in rule6)
+check('Rule 6 treats direct senders as transports that cannot replace the gate',
+      'transports, not gates' in rule6 and 'none of them can replace' in rule6
+      and 'is the same gate' not in rule6)
 for tool in ('mcp__gog__gmail_send', 'mcp__whatsapp__send_message',
              'mcp__plugin_imessage_imessage__reply', 'CronCreate'):
     check('frontmatter does not preauthorize ' + tool,

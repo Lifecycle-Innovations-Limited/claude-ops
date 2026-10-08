@@ -7,9 +7,11 @@ process an fd. Renaming the file (what newsyslog and logrotate do by default)
 leaves the service writing into the *renamed* file forever while the fresh one
 stays empty at 0 bytes. So this copies the content out to a compressed archive
 and then truncates the original IN PLACE, which keeps the inode and the fd
-valid. Copy/truncate is NOT lossless: lines appended between the copy and
-truncate can be lost. Prefer producer-native rotation when available. This
-parser repair deliberately leaves the existing rotation behavior unchanged.
+valid. Copy/truncate is BEST EFFORT, not lossless: the final unchanged-file
+check and the truncate are separate syscalls, and launchd-owned writers do not
+honor flock, so a line written in that window is lost. The window is kept as
+small as possible and a change detected before truncation preserves the file.
+Prefer producer-native rotation when available.
 
 NOTHING IS EVER DELETED without an explicit --prune, and even then only
 archives beyond --keep. Log retention must not be shortened during debugging, so the default keep
@@ -114,6 +116,7 @@ def rotate(path: str, label: str, threshold: int, keep: int,
         return True, f"would create a unique archive of {human(sz)} in {archdir} and truncate in place"
 
     lock_fd = None
+    temporary = None
     try:
         # The kernel releases the lock on exit; retain its path for other writers.
         lock_fd = os.open(path + ".rotate.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -145,14 +148,20 @@ def rotate(path: str, label: str, threshold: int, keep: int,
             # Exclusive link: even a same-second collision cannot overwrite history.
             os.link(temporary, dest)
             os.unlink(temporary)
+            temporary = None
             signature = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
-            if signature(os.fstat(src.fileno())) != signature(before) or signature(os.stat(path)) != signature(before):
+            if signature(os.stat(path)) != signature(before):
                 return False, "FAILED: source changed during archival; archive retained, live file preserved"
-            # Keep the original inode/fd. Producer-native rotation remains preferable:
-            # a noncooperating producer can still append after this final check.
+            # BEST EFFORT, NOT A GUARANTEE. The final check and the truncate are two
+            # syscalls, and launchd-owned writers do not honor flock, so a line
+            # written between them is lost. Keep the window minimal: the fd check
+            # is the last call before truncation. Prefer producer-native rotation.
+            if signature(os.fstat(src.fileno())) != signature(before):
+                return False, "FAILED: source changed during archival; archive retained, live file preserved"
             src.truncate(0)
 
-        msg = f"archived {human(sz)} -> {os.path.basename(dest)}, truncated in place"
+        msg = (f"archived {human(sz)} -> {os.path.basename(dest)}, truncated in place "
+               "(best-effort: writes racing the final check can be lost)")
         if prune:
             arch = sorted((f for f in os.listdir(archdir)
                            if f.startswith(base + ".") and f.endswith(".gz")), reverse=True)
@@ -161,9 +170,16 @@ def rotate(path: str, label: str, threshold: int, keep: int,
             if len(arch) > keep:
                 msg += f", pruned {len(arch) - keep} old archive(s)"
         return True, msg
-    except OSError as exc:
+    except (OSError, EOFError, ValueError) as exc:
         return False, f"FAILED: {exc}; live source is not truncated before complete archival"
     finally:
+        # A failed compress, ownership, link or publish step never leaves a
+        # .partial behind; an already published .gz is kept.
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
         if lock_fd is not None:
             os.close(lock_fd)
 

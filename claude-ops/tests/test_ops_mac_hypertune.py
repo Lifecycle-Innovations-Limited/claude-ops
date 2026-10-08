@@ -53,5 +53,63 @@ orbctl() { echo 0; }
         self.assertNotIn('kickstart', actions)
 
 
+@unittest.skipUnless(os.path.exists('/usr/libexec/PlistBuddy'), 'SKIP: mesh enforcement needs macOS PlistBuddy')
+class MeshEnforcementTests(unittest.TestCase):
+    """Real PlistBuddy on a temporary plist; launchctl is a state-file mock."""
+
+    def run_mesh(self, bootstrap_ok=True, loads_after=True):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = pathlib.Path(tmp.name)
+        la = root / 'Library/LaunchAgents'
+        la.mkdir(parents=True)
+        mesh = la / 'com.example.mesh.plist'
+        subprocess.run(['/usr/libexec/PlistBuddy', '-c', 'Add :Label string com.example.mesh',
+                        '-c', 'Add :RunAtLoad bool true', '-c', 'Add :StartInterval integer 60', str(mesh)],
+                       check=True, capture_output=True)
+        (root / 'loaded').touch()
+        policy = root / 'policy.sh'
+        policy.write_text('NEVER_AUTO=()\nKEEP_LABEL=\nMESH_LABEL=com.example.mesh\n')
+        mocks = root / 'mocks.sh'
+        mocks.write_text('''launchctl() {
+  printf '%s\\n' "$*" >>"$HOME/actions"
+  case "$1" in
+    print) [ -e "$HOME/loaded" ] ;;
+    bootout) rm -f "$HOME/loaded" ;;
+    bootstrap) [ "$BOOTSTRAP_OK" = 1 ] || return 5; [ "$LOADS_AFTER" = 1 ] && touch "$HOME/loaded"; return 0 ;;
+    *) return 0 ;;
+  esac
+}
+pgrep() { return 1; }
+sysctl() { echo 0; }
+orbctl() { echo 0; }
+''')
+        env = dict(os.environ, HOME=str(root), OPS_MAC_POLICY=str(policy), BASH_ENV=str(mocks),
+                   BOOTSTRAP_OK=str(int(bootstrap_ok)), LOADS_AFTER=str(int(loads_after)))
+        result = subprocess.run(['/bin/bash', str(SCRIPT)], env=env, capture_output=True)
+        log = (root / '.local/share/agent-logs/hypertune-guard.log').read_text()
+        values = [subprocess.run(['/usr/libexec/PlistBuddy', '-c', 'Print :' + key, str(mesh)],
+                                 capture_output=True, text=True).stdout.strip()
+                  for key in ('RunAtLoad', 'StartInterval')]
+        return result, log, values
+
+    def test_verified_mesh_enforcement_succeeds(self):
+        result, log, values = self.run_mesh()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('mesh policy enforced', log)
+        self.assertEqual(values, ['false', '600'])
+
+    def test_failed_bootstrap_is_not_logged_as_enforced(self):
+        result, log, _ = self.run_mesh(bootstrap_ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('mesh policy enforced', log)
+        self.assertIn('NOT enforced', log)
+
+    def test_unverified_load_is_not_logged_as_enforced(self):
+        result, log, _ = self.run_mesh(loads_after=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('mesh policy enforced', log)
+
+
 if __name__ == '__main__':
     unittest.main()

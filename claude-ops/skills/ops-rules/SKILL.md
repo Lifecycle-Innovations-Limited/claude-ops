@@ -191,7 +191,7 @@ During `/ops:setup` and any skill's setup/configure flow, use `run_in_background
 
 5. **Subagents are not an escape hatch.** When spawning an `Agent` with access to send-tools (`mcp__gog__gmail_send`, `mcp__whatsapp__send_message`, Bash with `gog` / `curl resend.com` / etc), the subagent's prompt MUST explicitly say _"You are read-only. Do NOT send any outbound messages. Return drafts to the orchestrator who will stage them one-by-one."_ For autonomous orchestration, prefer subagents with only read/search tools (`mcp__gog__gmail_search`, `gog gmail thread get`) so they physically cannot send.
 
-6. **MCP ≡ Bash ≡ API.** `mcp__gog__gmail_send` is the same gate as `gog gmail send` (Bash) is the same gate as `curl -X POST https://api.resend.com/emails` is the same gate as `mcp__whatsapp__send_message`. Surface doesn't matter — if it produces outbound comms, it needs its own per-message approval.
+6. **MCP, Bash and API senders are transports, not gates.** `mcp__gog__gmail_send`, `gog gmail send` (Bash), `curl -X POST https://api.resend.com/emails` and `mcp__whatsapp__send_message` all deliver a message; none of them can replace or stand in for the host's approved outbound gate. Choosing a different surface never changes the rule: an outbound message goes only through that gate, with its own per-message approval.
 
 7. **Forbidden patterns:** blanket approval of unseen text, cloning one decision across drafts, treating a typed yes after a refused/cancelled native gate as approval, or promising a ready batch without separately valid records. A drain may process individually approved records, each through its gate and fresh live-thread check; it never uses a direct sender or replays an earlier approval word.
 

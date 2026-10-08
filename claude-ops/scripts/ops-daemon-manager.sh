@@ -129,7 +129,11 @@ SERVICES_FILE="$DATA_DIR/daemon-services.json"
 MONITOR_MODE=0
 if [[ -e "$DATA_DIR/daemon-monitor.json" || -L "$DATA_DIR/daemon-monitor.json" ||
       -e "$DATA_DIR/bin/ops-daemon-monitor-selector.py" || -L "$DATA_DIR/bin/ops-daemon-monitor-selector.py" ]]; then
-  OPS_DATA_DIR="$DATA_DIR" python3 -I "$PLUGIN_ROOT/scripts/ops-daemon-monitor-selector.py" --validate || exit 78
+  # Executable is not the same as trusted: the same validation pass also
+  # byte-verifies the data-dir selector against this release and requires the
+  # wrapper to begin with the exact reviewed prefix before monitor mode is used.
+  OPS_DATA_DIR="$DATA_DIR" python3 -I "$PLUGIN_ROOT/scripts/ops-daemon-monitor-selector.py" \
+    --validate --reviewed-scripts "$PLUGIN_ROOT/scripts" || exit 78
   if [[ ! -x "$DATA_DIR/bin/ops-daemon.sh" || ! -r "$DATA_DIR/bin/ops-daemon-monitor-selector.py" ]]; then
     echo "Monitor-only wrapper or selector missing; refusing legacy fallback." >&2
     exit 78

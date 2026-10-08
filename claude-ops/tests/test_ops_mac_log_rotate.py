@@ -129,6 +129,47 @@ class RotationTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), original)
         self.assertFalse((path.parent / module.ARCHIVE_SUBDIR).exists())
 
+    def test_failed_steps_never_leave_partial_files(self):
+        targets = (('compress', 'gzip', 'GzipFile'), ('ownership', 'os', 'chown'), ('publish', 'os', 'link'))
+        for name, owner, attribute in targets:
+            with self.subTest(step=name):
+                path = self.fixture()
+                original = path.read_bytes()
+                target = getattr(module, owner)
+                with mock.patch.object(target, attribute, side_effect=OSError('fixture ' + name)):
+                    changed, message = module.rotate(str(path), 'fixture', 1, 10, False, False)
+                self.assertFalse(changed, message)
+                self.assertEqual(path.read_bytes(), original)
+                archive = path.parent / module.ARCHIVE_SUBDIR
+                leftovers = list(archive.glob('*.partial')) if archive.exists() else []
+                self.assertEqual(leftovers, [])
+                self.assertEqual(list(archive.glob('*.gz')) if archive.exists() else [], [])
+
+    def test_published_archive_is_kept_when_source_changes_afterwards(self):
+        path = self.fixture()
+        original = path.read_bytes()
+        link = module.os.link
+        def link_then_append(source, dest):
+            link(source, dest)
+            with path.open('ab') as writer:
+                writer.write(b'late line\n')
+        with mock.patch.object(module.os, 'link', side_effect=link_then_append):
+            changed, message = module.rotate(str(path), 'fixture', 1, 10, False, False)
+        self.assertFalse(changed, message)
+        archive = path.parent / module.ARCHIVE_SUBDIR
+        self.assertEqual(list(archive.glob('*.partial')), [])
+        published = list(archive.glob('*.gz'))
+        self.assertEqual(len(published), 1)
+        self.assertEqual(module.gzip.decompress(published[0].read_bytes()), original)
+        self.assertEqual(path.read_bytes(), original + b'late line\n')
+
+    def test_success_reports_best_effort_truncation(self):
+        path = self.fixture()
+        changed, message = module.rotate(str(path), 'fixture', 1, 10, False, False)
+        self.assertTrue(changed, message)
+        self.assertIn('best-effort', message)
+        self.assertIn('BEST EFFORT', module.__doc__)
+
     def test_archival_failure_never_truncates(self):
         path = self.fixture()
         original = path.read_bytes()

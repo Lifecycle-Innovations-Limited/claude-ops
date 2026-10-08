@@ -67,7 +67,8 @@ class MonitorContractTests(unittest.TestCase):
         self.plugin = self.base / "plugin"
         (self.plugin / "scripts").mkdir(parents=True)
         (self.plugin / "bin").mkdir()
-        for name in ("ops-daemon-manager.sh", "com.claude-ops.daemon.plist", "ops-daemon-launcher.sh"):
+        for name in ("ops-daemon-manager.sh", "com.claude-ops.daemon.plist", "ops-daemon-launcher.sh",
+                     "ops-daemon-monitor-prefix.sh"):
             shutil.copy2(ROOT / "scripts" / name, self.plugin / "scripts" / name)
         if candidate.exists():
             shutil.copy2(candidate, self.plugin / "scripts" / candidate.name)
@@ -171,6 +172,24 @@ class MonitorContractTests(unittest.TestCase):
         self.manifest_path.unlink()
         self.assertNotEqual(self.run_wrapper("--run-once").returncode, 0)
         self.assertFalse(self.sentinel.exists())
+
+    def test_tampered_selector_or_wrapper_is_never_enabled(self):
+        original_selector = self.selector.read_bytes()
+        original_wrapper = self.wrapper.read_bytes()
+        for target, payload in ((self.selector, original_selector + b"\n# edited\n"),
+                                (self.wrapper, b'#!/usr/bin/env bash\necho legacy >> "$FORBIDDEN_MARKER"\n' + original_wrapper)):
+            self.selector.write_bytes(original_selector)
+            self.wrapper.write_bytes(original_wrapper)
+            target.write_bytes(payload)
+            for command in ("upgrade", "ensure-current", "restart"):
+                result = self.run_manager(command)
+                self.assertEqual(result.returncode, 78, (target.name, command, result.stderr))
+                self.assertIn("reviewed bytes", result.stderr)
+            self.assertFalse((self.base / "launchctl.log").exists())
+            self.assertFalse(self.sentinel.exists())
+        self.selector.write_bytes(original_selector)
+        self.wrapper.write_bytes(original_wrapper)
+        self.assertEqual(self.run_manager("ensure-current").returncode, 0)
 
     def test_missing_manifest_with_installed_selector_blocks_manager_upgrade(self):
         self.manifest_path.unlink()

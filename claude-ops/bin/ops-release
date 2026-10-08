@@ -174,6 +174,38 @@ pr_checks_json() {
          else "fail" end)} ]'
 }
 
+# Tag the PR's merge commit. Every step is checked; on any failure it prints
+# "merged, NOT tagged" with an exact recovery command and returns 3.
+release_tag_merge() {
+  local pr_ref="$1" ver="$2" number merged_pr tag_commit existing
+  number="${pr_ref##*/}"
+  local sha_cmd="gh api repos/$GH_REPO/pulls/$number --jq .merge_commit_sha"
+  local recover="git -C \"$REPO_ROOT\" fetch origin && git -C \"$REPO_ROOT\" tag -a v$ver -m \"claude-ops v$ver\" \"\$($sha_cmd)\" && git -C \"$REPO_ROOT\" push origin v$ver"
+  release_not_tagged() {
+    echo "ops-release: v$ver merged, NOT tagged: $1" >&2
+    echo "ops-release: recover with: $recover" >&2
+    return 3
+  }
+  merged_pr="$(gh api "repos/$GH_REPO/pulls/$number" 2>/dev/null)" || { release_not_tagged "could not read the merged PR"; return 3; }
+  tag_commit="$(jq -er 'select(.merged == true) | .merge_commit_sha // empty' <<<"$merged_pr" 2>/dev/null)" || tag_commit=""
+  if [[ ! "$tag_commit" =~ ^[0-9a-f]{40}$ ]]; then
+    release_not_tagged "merge commit SHA unavailable"; return 3
+  fi
+  recover="git -C \"$REPO_ROOT\" fetch origin && git -C \"$REPO_ROOT\" tag -a v$ver -m \"claude-ops v$ver\" $tag_commit && git -C \"$REPO_ROOT\" push origin v$ver"
+  # Fetch objects, never choose whatever concurrent main points at.
+  git -C "$REPO_ROOT" fetch origin --quiet || { release_not_tagged "git fetch failed"; return 3; }
+  if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/tags/v$ver"; then
+    existing="$(git -C "$REPO_ROOT" rev-parse "v$ver^{commit}" 2>/dev/null)" || existing=""
+    [ "$existing" = "$tag_commit" ] || { release_not_tagged "local tag v$ver exists on a different commit; preserved"; return 3; }
+  else
+    git -C "$REPO_ROOT" tag -a "v$ver" -m "claude-ops v$ver" "$tag_commit" || { release_not_tagged "local tag creation failed"; return 3; }
+  fi
+  if ! git -C "$REPO_ROOT" push origin "v$ver" && ! push_tag_via_api "$ver" "$tag_commit"; then
+    release_not_tagged "tag push failed over git and API"; return 3
+  fi
+  echo "ops-release: tagged PR merge commit v$ver ($tag_commit)"
+}
+
 RELEASE_REQUIRED_CHECKS='["lint-and-check (ubuntu-latest)","lint-and-check (ubuntu-24.04)","pii-gate","test-suite (ubuntu-latest)","test-suite (ubuntu-24.04)","CodeQL"]'
 
 # Read-only pre-merge proof for the exact checked head. Queries are bounded;
@@ -546,22 +578,11 @@ if [ "$do_merge" -eq 1 ]; then
   release_review_gate "$PR_URL" "$stable_head" || { echo "ops-release: same-head CI/review/Copilot/conflict proof missing; PR left open" >&2; exit 1; }
   gh pr merge "$PR_URL" --repo "$GH_REPO" --squash --delete-branch --match-head-commit "$stable_head"
   echo "ops-release: merged v$NEW to main"
+  tag_status=0
   if [ "$do_tag" -eq 1 ]; then
-    # The merge is already done, so a tag failure must never abort the run and
-    # leave main released but untagged. Resolve the commit from the API when the
-    # git transport is unreachable, and push the tag the same way if needed.
-    merged_pr="$(gh api "repos/$GH_REPO/pulls/${PR_URL##*/}")"
-    tag_commit="$(jq -er 'select(.merged == true) | .merge_commit_sha // empty' <<<"$merged_pr")" || exit 1
-    [[ "$tag_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "ops-release: merge SHA unavailable; not tagged" >&2; exit 1; }
-    # Fetch objects, never choose whatever concurrent main points at.
-    git -C "$REPO_ROOT" fetch origin --quiet
-    if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/tags/v$NEW"; then
-      [ "$(git -C "$REPO_ROOT" rev-parse "v$NEW^{commit}")" = "$tag_commit" ] || { echo "ops-release: existing tag differs; preserved" >&2; exit 1; }
-    else
-      git -C "$REPO_ROOT" tag -a "v$NEW" -m "claude-ops v$NEW" "$tag_commit"
-    fi
-    git -C "$REPO_ROOT" push origin "v$NEW" || push_tag_via_api "$NEW" "$tag_commit"
-    echo "ops-release: tagged PR merge commit v$NEW"
+    # The merge is already done. A tag failure never aborts silently: the run
+    # continues to the wiki and then exits non-zero with a recovery command.
+    release_tag_merge "$PR_URL" "$NEW" || tag_status=$?
   fi
 
   # ----- wiki: keep the GitHub wiki's counts/version in lockstep + log the release -----
@@ -596,12 +617,15 @@ if [ "$do_merge" -eq 1 ]; then
       rm -f "$relpage.new"
       if [ -n "$(git -C "$wiki_tmp" status --porcelain)" ]; then
         git -C "$wiki_tmp" add -A
+        wiki_committed=0
         git -C "$wiki_tmp" -c user.email="ops-release@example.com" -c user.name="ops-release" \
-          commit -m "wiki: sync to v$NEW (counts + release notes)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" >/dev/null
-        if git -C "$wiki_tmp" push origin HEAD >/dev/null 2>&1; then
+          commit -m "wiki: sync to v$NEW (counts + release notes)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" >/dev/null 2>&1 && wiki_committed=1
+        if [ "$wiki_committed" -ne 1 ]; then
+          echo "ops-release: WARNING wiki commit failed (non-fatal; release is unaffected)" >&2
+        elif git -C "$wiki_tmp" push origin HEAD >/dev/null 2>&1; then
           echo "ops-release: wiki synced to v$NEW"
         else
-          echo "ops-release: wiki push failed (non-fatal — check write access)"
+          echo "ops-release: WARNING wiki push failed (non-fatal; check write access)" >&2
         fi
       else
         echo "ops-release: wiki already in sync"
@@ -612,6 +636,10 @@ if [ "$do_merge" -eq 1 ]; then
     rm -rf "$wiki_tmp"
   fi
 
+  if [ "$tag_status" -ne 0 ]; then
+    echo "ops-release: v$NEW is MERGED but NOT TAGGED. Run the recovery command printed above." >&2
+    exit 3
+  fi
   echo "ops-release: done. Refresh local install with: /plugin marketplace update ops-marketplace"
 else
   echo "ops-release: PR left open for review (use: gh pr merge $PR_URL --squash)"

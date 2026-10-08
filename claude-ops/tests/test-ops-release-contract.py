@@ -39,7 +39,7 @@ class ReleaseTests(unittest.TestCase):
         text = RELEASE.read_text()
         self.assertIn('package-lock.json', text)
         self.assertIn('packages[""].version', text)
-        tagging = block('  if [ "$do_tag" -eq 1 ]; then', '\n  # ----- wiki:')
+        tagging = block('release_tag_merge() {', '\nRELEASE_REQUIRED_CHECKS=')
         self.assertIn('merge_commit_sha', tagging)
         self.assertNotIn('rev-parse origin/main', tagging)
         self.assertNotIn('/commits/main', tagging)
@@ -110,17 +110,65 @@ class ReleaseTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn('BUMP', result.stdout)
 
+    def tag_run(self, failure=''):
+        function = 'release_tag_merge() {' + block('release_tag_merge() {', '\nRELEASE_REQUIRED_CHECKS=')
+        code = '''set -euo pipefail; GH_REPO=fixture/repo; REPO_ROOT=fixture
+ gh() { [ "$FAIL" != pr-read ] || return 1
+        [ "$FAIL" != no-sha ] || { echo '{"merged":true}'; return 0; }
+        echo '{"merged":true,"merge_commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'; }
+ git() { case "$*" in
+   *fetch*) [ "$FAIL" != fetch ] ;;
+   *show-ref*) [ "$FAIL" = tag-differs ] ;;
+   *rev-parse*) echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
+   *'tag -a'*) [ "$FAIL" != tag-create ] && printf '%s\\n' "$*" ;;
+   *push*) [ "$FAIL" != push ] ;;
+   *) echo WRONG_MAIN; return 92 ;;
+ esac; }
+ push_tag_via_api() { [ "$FAIL" != push ]; }
+''' + function + '\nrelease_tag_merge https://example.com/pull/7 1.0.1'
+        return subprocess.run(['bash', '-c', code], env=dict(os.environ, FAIL=failure), capture_output=True, text=True)
+
     def test_tag_uses_pr_merge_sha_not_concurrent_main(self):
-        tag = block('    merged_pr=', '\n  # ----- wiki:')
-        tag = 'merged_pr=' + tag.rsplit('\n  fi', 1)[0]
-        code = '''set -e; PR_URL=https://example.com/pull/7; GH_REPO=fixture; REPO_ROOT=fixture; NEW=1.0.1
- gh() { echo '{"merged":true,"merge_commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'; }
- git() { case "$*" in *show-ref*) return 1;; *tag*) printf '%s\\n' "$*";; *fetch*|*push*) return 0;; *) echo WRONG_MAIN; return 92;; esac; }
-''' + tag
-        result = subprocess.run(['bash', '-c', code], capture_output=True, text=True)
+        result = self.tag_run()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', result.stdout)
         self.assertNotIn('WRONG_MAIN', result.stdout)
+
+    def test_tag_failures_report_merged_not_tagged_with_recovery(self):
+        for failure in ('pr-read', 'no-sha', 'fetch', 'tag-differs', 'tag-create', 'push'):
+            with self.subTest(failure=failure):
+                result = self.tag_run(failure)
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn('merged, NOT tagged', result.stderr)
+                self.assertIn('recover with: ', result.stderr)
+                self.assertIn('push origin v1.0.1', result.stderr)
+
+    def test_release_exit_is_not_success_when_untagged(self):
+        text = RELEASE.read_text()
+        self.assertIn('release_tag_merge "$PR_URL" "$NEW" || tag_status=$?', text)
+        tail = text.split('release_tag_merge "$PR_URL" "$NEW" || tag_status=$?', 1)[1]
+        self.assertIn('if [ "$tag_status" -ne 0 ]', tail)
+        self.assertIn('exit 3', tail.split('ops-release: done.', 1)[0])
+
+    def test_wiki_failures_stay_warnings(self):
+        wiki = block('  # ----- wiki:', '\n  if [ "$tag_status" -ne 0 ]')
+        for failure in ('commit', 'push'):
+            with self.subTest(failure=failure):
+                code = '''set -euo pipefail; do_wiki=1; GH_REPO=fixture/repo; NEW=1.0.1; REL_DATE=2026-01-01; notes=x
+ WT="$(mktemp -d)"; mkdir -p "$WT/claude-ops/skills" "$WT/claude-ops/agents"
+ git() { case "$*" in
+   *clone*) mkdir -p "${@: -1}"; echo page > "${@: -1}/Home.md" ;;
+   *status*) echo ' M Home.md' ;;
+   *'add -A'*) return 0 ;;
+   *commit*) [ "$FAIL" != commit ] ;;
+   *push*) [ "$FAIL" != push ] ;;
+   *) return 0 ;;
+ esac; }
+#''' + wiki + '\necho REACHED_END'
+                result = subprocess.run(['bash', '-c', code], env=dict(os.environ, FAIL=failure), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('REACHED_END', result.stdout)
+                self.assertIn('WARNING wiki ' + failure + ' failed', result.stderr)
 
     def test_version_and_lock_bump_actual_code(self):
         bump = block('# 1+2+3. bump version in plugin.json, the marketplace registry, and package.json', '\nwHERMES=')
