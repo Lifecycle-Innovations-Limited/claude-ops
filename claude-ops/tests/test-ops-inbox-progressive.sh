@@ -119,6 +119,14 @@ for tool in ('mcp__gog__gmail_send', 'mcp__whatsapp__send_message',
     check('frontmatter does not preauthorize ' + tool,
           re.search(r'^\s+-\s+' + re.escape(tool) + r'\s*$', frontmatter, re.M) is None)
 
+# Public docs name the gate generically; a host-specific tool name is not a contract.
+for name, text in (('SKILL.md', docs['SKILL.md']), ('cli.md', docs['cli.md']),
+                   ('details.md', docs['details.md']), ('ops-rules', rules)):
+    check("generic outbound gate wording in " + name,
+          "host's approved outbound gate" in re.sub(r'\s+', ' ', text))
+check('gate send return is not tied to a host tool name',
+      'When the gate returns `sent=false`' in preflight)
+
 # Required review fields live in normative sections, not scenario-table echoes.
 packet = section(docs['fan-out.md'], 'Minimum evidence packet')
 runtime_accounts = section(docs['runtime.md'], 'Enumerate once')

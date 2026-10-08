@@ -81,7 +81,8 @@ No continuation menu, channel picker, or second "start drafting" prompt.
    sources or the rest of the inbox. Recheck its live thread before showing it.
    Every later ready candidate joins the parent's queue as evidence arrives.
 6. One draft → one explicit approval → one send. Use the installed approved
-   outbound gate; for email, WhatsApp and Slack this is only samimizer `message`.
+   outbound gate; email, WhatsApp and Slack go only through the host's approved
+   outbound gate.
    Populate its real session/thread/recipient metadata on the first call.
    Go is not approval. No self-created approval proof or alternate send route.
 7. After sent=false, show the gate-returned full draft and end that presentation

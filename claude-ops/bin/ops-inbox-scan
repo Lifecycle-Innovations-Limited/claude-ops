@@ -1521,7 +1521,7 @@ result["notes"].append(
 )
 result["notes"].append(
     "WhatsApp store may lag phone-sent messages; confirm 'did I already reply?' with the human "
-    "for any NEEDS_REPLY before drafting (FULL-THREAD AWARENESS GATE)."
+    "for any NEEDS_REPLY before drafting (ops-inbox details.md, 'Full context per candidate')."
 )
 
 print(json.dumps(result, indent=2 if PRETTY else None, ensure_ascii=False))

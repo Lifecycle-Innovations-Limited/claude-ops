@@ -17,7 +17,7 @@ not guaranteed API parameters. Load only tools needed for the current candidate.
   show/tour/travel sources for an availability claim.
 
 Use the actual mailbox/account options from current installed help. Replies are
-samimizer `message` only, with canonical thread/reply-all identifiers. Never use
+the host's approved outbound gate only, with canonical thread/reply-all identifiers. Never use
 an independent CLI or raw API send route from this reference.
 
 ## WhatsApp
@@ -35,7 +35,7 @@ request state. Keep account/source retention gaps explicit.
 
 Use only existing host-approved live/snapshot/merged-thread read helpers. A client
 read failure does not authorize local-store fallback, pairing, restart, backfill,
-auth repair, session reset or raw transport. Sends use samimizer `message`.
+auth repair, session reset or raw transport. Sends use the host's approved outbound gate.
 
 ## Slack
 

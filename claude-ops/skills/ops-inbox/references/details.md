@@ -58,8 +58,9 @@ An inaccessible load-bearing source prevents this draft, not unrelated drafts.
 ## Exact first-call preflight
 
 Immediately before showing a draft, the parent re-reads its live tail and checks
-for a changed ask or newer reply from any client. Then use samimizer `message`
-for email, WhatsApp and Slack, using its **live schema**, not invented fields:
+for a changed ask or newer reply from any client. Then use the host's approved
+outbound gate for email, WhatsApp and Slack, using its **live schema**, not
+invented fields:
 
 - Real current `sessionUUID` from the harness, passed as `session_id` on the first
   call too, never a random or borrowed UUID.
@@ -74,7 +75,7 @@ for email, WhatsApp and Slack, using its **live schema**, not invented fields:
 - Do not pass a yes-word. The user approves themselves; gate-call parameters
   are never a substitute for native consent.
 
-When `message` returns `sent=false`, the next visible reply must contain literally
+When the gate returns `sent=false`, the next visible reply must contain literally
 its `draft_id`, every bubble verbatim, every recipient, and the sending number
 for WhatsApp. Then wait for the user; do not append a second menu or silently retry.
 Use the gate-returned identifiers and text, never placeholders or a reconstructed
