@@ -127,8 +127,23 @@ done
 # (self-referential echo loop) and filled the disk to 100%. Sweep: any task
 # *.output >2GB with no open writer and idle >30min gets truncated in place
 # (truncate, not delete — a late writer reopening by path still works).
+# FAIL CLOSED: only lsof's explicit "nothing has it open" result (exit 1 with no
+# output and no diagnostics) permits truncation. A missing lsof, an error, a
+# diagnostic or any other status is an unknown writer state: log and keep.
 find "${REAPER_TASK_ROOT:-/private/tmp/claude-$(id -u)}" -type f -name '*.output' -size +2G -mmin +30 2>/dev/null | while read -r f; do
-  lsof "$f" >/dev/null 2>&1 && continue
+  if ! command -v lsof >/dev/null 2>&1; then
+    log "kept task output (lsof unavailable; writer state unknown): $f"
+    continue
+  fi
+  lsof_out=$(lsof -- "$f" 2>&1)
+  lsof_rc=$?
+  if [ "$lsof_rc" -eq 0 ]; then
+    continue
+  fi
+  if [ "$lsof_rc" -ne 1 ] || [ -n "$lsof_out" ]; then
+    log "kept task output (lsof rc=$lsof_rc, writer state unknown): $f"
+    continue
+  fi
   sz=$(du -m "$f" 2>/dev/null | cut -f1)
   : > "$f" && log "truncated runaway task output ${sz}MB: $f"
 done

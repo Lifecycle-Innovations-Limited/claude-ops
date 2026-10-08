@@ -42,11 +42,12 @@ done
 # Mesh: keep but enforce deferred policy (no RunAtLoad, interval >= 600)
 MESH="${LA}/${MESH_LABEL}.plist"
 if [ -f "$MESH" ]; then
-  run=$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$MESH" 2>/dev/null || echo true)
-  iv=$(/usr/libexec/PlistBuddy -c 'Print :StartInterval' "$MESH" 2>/dev/null || echo 0)
-  need=0
-  if [ "$run" = "true" ] || [ "$run" = "1" ]; then need=1; fi
-  if [ "${iv:-0}" -lt 600 ] 2>/dev/null; then need=1; fi
+  run=$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$MESH" 2>/dev/null || echo missing)
+  iv=$(/usr/libexec/PlistBuddy -c 'Print :StartInterval' "$MESH" 2>/dev/null || echo missing)
+  # FAIL CLOSED: only an explicit RunAtLoad=false and an integer interval of at
+  # least 600 are compliant. Missing, malformed or other values get repaired.
+  need=1
+  if [ "$run" = "false" ] && [[ "$iv" =~ ^[0-9]+$ ]] && [ "$iv" -ge 600 ]; then need=0; fi
   if [ "$need" -eq 1 ]; then
     # Every mutation is checked and the result read back. Only a verified
     # result is logged as enforced; anything else marks the run failed.
@@ -55,21 +56,25 @@ if [ -f "$MESH" ]; then
     launchctl bootout "${GUI}/${MESH_LABEL}" 2>/dev/null || true
     if launchctl print "${GUI}/${MESH_LABEL}" >/dev/null 2>&1; then mesh_ok=0; fi
     if [ "$mesh_ok" = 1 ]; then
-      /usr/libexec/PlistBuddy -c 'Set :RunAtLoad false' "$MESH" 2>/dev/null || \
-        /usr/libexec/PlistBuddy -c 'Add :RunAtLoad bool false' "$MESH" 2>/dev/null || mesh_ok=0
-      /usr/libexec/PlistBuddy -c 'Set :StartInterval 600' "$MESH" 2>/dev/null || \
+      # Delete then Add rewrites a malformed or wrongly typed value with the
+      # correct type; Delete of an absent key is not an error worth stopping on.
+      /usr/libexec/PlistBuddy -c 'Delete :RunAtLoad' "$MESH" >/dev/null 2>&1 || true
+      /usr/libexec/PlistBuddy -c 'Add :RunAtLoad bool false' "$MESH" 2>/dev/null || mesh_ok=0
+      if ! [[ "$iv" =~ ^[0-9]+$ ]] || [ "$iv" -lt 600 ]; then
+        /usr/libexec/PlistBuddy -c 'Delete :StartInterval' "$MESH" >/dev/null 2>&1 || true
         /usr/libexec/PlistBuddy -c 'Add :StartInterval integer 600' "$MESH" 2>/dev/null || mesh_ok=0
+      fi
       run=$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$MESH" 2>/dev/null || echo unknown)
-      iv=$(/usr/libexec/PlistBuddy -c 'Print :StartInterval' "$MESH" 2>/dev/null || echo 0)
+      iv=$(/usr/libexec/PlistBuddy -c 'Print :StartInterval' "$MESH" 2>/dev/null || echo missing)
       [ "$run" = "false" ] || mesh_ok=0
-      { [ "${iv:-0}" -ge 600 ] 2>/dev/null; } || mesh_ok=0
+      { [[ "$iv" =~ ^[0-9]+$ ]] && [ "$iv" -ge 600 ]; } || mesh_ok=0
     fi
     if [ "$mesh_ok" = 1 ]; then
       launchctl bootstrap "$GUI" "$MESH" 2>/dev/null || mesh_ok=0
       launchctl print "${GUI}/${MESH_LABEL}" >/dev/null 2>&1 || mesh_ok=0
     fi
     if [ "$mesh_ok" = 1 ]; then
-      log "mesh policy enforced RunAtLoad=false StartInterval=600 (verified)"
+      log "mesh policy enforced RunAtLoad=false StartInterval=$iv (verified)"
     else
       log "ERROR mesh policy NOT enforced; plist or launchd result unverified"
       printf 'mac-hypertune-guard: mesh policy not enforced\n' >&2

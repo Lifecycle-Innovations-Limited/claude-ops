@@ -185,7 +185,8 @@ resolve_bash_path() {
 mac_generate_plist() {
   local template="$PLUGIN_ROOT/scripts/com.claude-ops.daemon.plist"
   local bash_path
-  bash_path="$(resolve_bash_path)"
+  : "${RESOLVED_BASH_PATH:=$(resolve_bash_path)}"
+  bash_path="$RESOLVED_BASH_PATH"
   if [[ -z "$bash_path" ]]; then
     log "ERROR: bash 4+ not found. Install with: brew install bash"
     exit 78
@@ -323,14 +324,27 @@ cmd_upgrade() {
   esac
 }
 
+# "Current" means exactly what mac_generate_plist would write: the full argument
+# vector, including the interpreter, and the OPS_DATA_DIR the selector reads.
+# Anything else (another executable, another data directory, a missing entry)
+# is stale and gets regenerated. Unknown bash means not current.
 monitor_plist_current() {
-  python3 - "$PLIST_DEST" "$DATA_DIR" <<'PY'
+  local expected_bash
+  # Resolve once per run; mac_generate_plist reuses the same value.
+  : "${RESOLVED_BASH_PATH:=$(resolve_bash_path)}"
+  expected_bash="$RESOLVED_BASH_PATH"
+  [[ -n "$expected_bash" ]] || return 1
+  python3 - "$PLIST_DEST" "$DATA_DIR" "$expected_bash" <<'PY'
 import plistlib, sys
+path, data, bash = sys.argv[1:]
 try:
-    with open(sys.argv[1], "rb") as stream:
-        args = plistlib.load(stream).get("ProgramArguments", [])
-    valid = len(args) == 3 and args[1:] == [sys.argv[2] + "/bin/ops-daemon.sh", "--monitor-only"]
-except (OSError, ValueError):
+    with open(path, "rb") as stream:
+        plist = plistlib.load(stream)
+    args = plist.get("ProgramArguments")
+    env = plist.get("EnvironmentVariables")
+    valid = (args == [bash, data + "/bin/ops-daemon.sh", "--monitor-only"]
+             and isinstance(env, dict) and env.get("OPS_DATA_DIR") == data)
+except (OSError, ValueError, AttributeError):
     valid = False
 sys.exit(0 if valid else 1)
 PY

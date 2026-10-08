@@ -69,7 +69,10 @@ class MonitorContractTests(unittest.TestCase):
         (self.plugin / "bin").mkdir()
         for name in ("ops-daemon-manager.sh", "com.claude-ops.daemon.plist", "ops-daemon-launcher.sh",
                      "ops-daemon-monitor-prefix.sh"):
-            shutil.copy2(ROOT / "scripts" / name, self.plugin / "scripts" / name)
+            source = ROOT / "scripts" / name
+            if name == "ops-daemon-manager.sh" and os.environ.get("OPS_DAEMON_MANAGER_SOURCE"):
+                source = Path(os.environ["OPS_DAEMON_MANAGER_SOURCE"])
+            shutil.copy2(source, self.plugin / "scripts" / name)
         if candidate.exists():
             shutil.copy2(candidate, self.plugin / "scripts" / candidate.name)
         (self.plugin / "scripts/ops-daemon.sh").write_text('#!/bin/sh\necho legacy >> "$FORBIDDEN_MARKER"\n')
@@ -85,8 +88,11 @@ class MonitorContractTests(unittest.TestCase):
     def save_manifest(self):
         self.manifest_path.write_text(json.dumps(self.manifest))
 
-    def write_plist(self, args):
-        self.plist_path.write_bytes(plistlib.dumps({"Label": "com.claude-ops.daemon", "ProgramArguments": args}))
+    def write_plist(self, args, env=None):
+        # Mirrors mac_generate_plist: monitor mode always carries OPS_DATA_DIR.
+        plist = {"Label": "com.claude-ops.daemon", "ProgramArguments": args,
+                 "EnvironmentVariables": {"OPS_DATA_DIR": str(self.data)} if env is None else env}
+        self.plist_path.write_bytes(plistlib.dumps(plist))
 
     def run_manager(self, command):
         return subprocess.run([BASH, str(self.plugin / "scripts/ops-daemon-manager.sh"), command],
@@ -121,6 +127,23 @@ class MonitorContractTests(unittest.TestCase):
         args = plistlib.loads(self.plist_path.read_bytes())["ProgramArguments"]
         self.assertEqual(args, [BASH, str(self.wrapper), "--monitor-only"])
         self.assertFalse(self.sentinel.exists())
+
+    def test_ensure_current_rejects_wrong_interpreter_or_data_dir(self):
+        expected_args = [BASH, str(self.wrapper), "--monitor-only"]
+        stale = {
+            "wrong interpreter": ([ "/bin/false", str(self.wrapper), "--monitor-only"], None),
+            "injected data dir": (expected_args, {"OPS_DATA_DIR": str(self.base / "other-data")}),
+            "missing data dir": (expected_args, {}),
+        }
+        for name, (args, env) in stale.items():
+            with self.subTest(stale=name):
+                self.write_plist(args, env)
+                result = self.run_manager("ensure-current")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                plist = plistlib.loads(self.plist_path.read_bytes())
+                self.assertEqual(plist["ProgramArguments"], expected_args)
+                self.assertEqual(plist["EnvironmentVariables"]["OPS_DATA_DIR"], str(self.data))
+                self.assertFalse(self.sentinel.exists())
 
     def test_restart_never_bootstraps_a_legacy_plist_when_mode_is_pinned(self):
         self.write_plist([BASH, str(self.plugin / "scripts/ops-daemon.sh")])

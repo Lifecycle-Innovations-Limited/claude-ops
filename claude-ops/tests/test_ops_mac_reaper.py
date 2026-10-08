@@ -62,6 +62,49 @@ sleep() { return 0; }
             self.assertEqual(result.returncode, 0, result.stderr)
             return (root / 'actions').read_text() if (root / 'actions').exists() else ''
 
+    def task_output(self, lsof_mode):
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / '.claude').mkdir()
+            task = root / 'task.output'
+            task.write_bytes(b'still needed\n')
+            policy = root / 'policy.sh'
+            policy.write_text('ORPHAN_PAT=a^\nSTATEFUL_PAT=a^\nSINGLETON_NAMES=()\n')
+            mocks = root / 'mocks.sh'
+            mocks.write_text('''pgrep() { return 1; }
+find() { printf '%s\\n' "$TASK_FILE"; }
+du() { printf '2049\\t%s\\n' "$2"; }
+lsof() { case "$LSOF_MODE" in
+  none) return 1 ;;
+  open) echo "cat 1 user 3w REG"; return 0 ;;
+  diag) echo "lsof: WARNING: can't stat() fuse file system" >&2; return 1 ;;
+  error) return 2 ;;
+esac; }
+command() { if [ "$1" = -v ] && [ "$2" = lsof ] && [ "$LSOF_MODE" = missing ]; then return 1; fi; builtin command "$@"; }
+kill() { echo "kill $*" >>"$HOME/actions"; }
+pkill() { echo "pkill $*" >>"$HOME/actions"; }
+''')
+            env = dict(os.environ, HOME=str(root), BASH_ENV=str(mocks), OPS_MAC_POLICY=str(policy),
+                       TASK_FILE=str(task), REAPER_TASK_ROOT=str(root), LSOF_MODE=lsof_mode)
+            result = subprocess.run(['/bin/bash', str(LIB.parent / 'claude-reaper.sh')], env=env, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            log = (root / '.claude/claude-reaper.log').read_text() if (root / '.claude/claude-reaper.log').exists() else ''
+            return task.read_bytes(), log
+
+    def test_task_output_truncated_only_on_explicit_no_writer(self):
+        content, log = self.task_output('none')
+        self.assertEqual(content, b'')
+        self.assertIn('truncated runaway task output', log)
+
+    def test_task_output_kept_when_writer_state_unknown(self):
+        for mode in ('open', 'diag', 'error', 'missing'):
+            with self.subTest(lsof=mode):
+                content, log = self.task_output(mode)
+                self.assertEqual(content, b'still needed\n')
+                self.assertNotIn('truncated runaway task output', log)
+                if mode != 'open':
+                    self.assertIn('kept task output', log)
+
     def test_broad_scan_and_auth_candidates_are_observation_only(self):
         for parent, managed, tty, reused in ((42, False, '?', False), (1, True, '?', False), (1, False, 'ttys001', False), (1, False, '?', True)):
             with self.subTest(parent=parent, managed=managed, tty=tty, reused=reused):

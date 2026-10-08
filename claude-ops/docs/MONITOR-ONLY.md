@@ -69,7 +69,9 @@ install these files without changing the guard:
 Missing, malformed, out-of-directory, symlinked or hash-mismatched state is
 rejected before legacy execution. The manager also byte-verifies the data-dir
 selector against the release's selector and requires the wrapper to begin with
-the exact reviewed prefix; an edited entry point is never enabled. An installed data-dir selector is also a
+the exact reviewed prefix; an edited entry point is never enabled. A plist is
+"current" only when its full argument vector, interpreter included, and its
+`OPS_DATA_DIR` match what the manager would generate; anything else is rewritten. An installed data-dir selector is also a
 persistent mode marker: the updated manager refuses a missing manifest instead
 of rebuilding legacy configuration. The prefix dispatches even without a
 launchd mode flag. Reverting mode requires an explicit operator restoration of

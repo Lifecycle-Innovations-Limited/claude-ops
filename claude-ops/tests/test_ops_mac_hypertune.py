@@ -57,16 +57,18 @@ orbctl() { echo 0; }
 class MeshEnforcementTests(unittest.TestCase):
     """Real PlistBuddy on a temporary plist; launchctl is a state-file mock."""
 
-    def run_mesh(self, bootstrap_ok=True, loads_after=True):
+    def run_mesh(self, bootstrap_ok=True, loads_after=True,
+                 plist_commands=('Add :RunAtLoad bool true', 'Add :StartInterval integer 60')):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = pathlib.Path(tmp.name)
         la = root / 'Library/LaunchAgents'
         la.mkdir(parents=True)
         mesh = la / 'com.example.mesh.plist'
-        subprocess.run(['/usr/libexec/PlistBuddy', '-c', 'Add :Label string com.example.mesh',
-                        '-c', 'Add :RunAtLoad bool true', '-c', 'Add :StartInterval integer 60', str(mesh)],
-                       check=True, capture_output=True)
+        command = ['/usr/libexec/PlistBuddy', '-c', 'Add :Label string com.example.mesh']
+        for entry in plist_commands:
+            command += ['-c', entry]
+        subprocess.run(command + [str(mesh)], check=True, capture_output=True)
         (root / 'loaded').touch()
         policy = root / 'policy.sh'
         policy.write_text('NEVER_AUTO=()\nKEEP_LABEL=\nMESH_LABEL=com.example.mesh\n')
@@ -98,6 +100,26 @@ orbctl() { echo 0; }
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('mesh policy enforced', log)
         self.assertEqual(values, ['false', '600'])
+
+    def test_malformed_or_missing_values_are_repaired_not_trusted(self):
+        cases = {
+            'malformed both': ('Add :RunAtLoad string unexpected', 'Add :StartInterval string unexpected'),
+            'missing both': (),
+            'missing interval': ('Add :RunAtLoad bool false',),
+            'malformed interval': ('Add :RunAtLoad bool false', 'Add :StartInterval string soon'),
+        }
+        for name, commands in cases.items():
+            with self.subTest(case=name):
+                result, log, values = self.run_mesh(plist_commands=commands)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('mesh policy enforced', log)
+                self.assertEqual(values, ['false', '600'])
+
+    def test_compliant_values_are_left_alone(self):
+        result, log, values = self.run_mesh(plist_commands=('Add :RunAtLoad bool false', 'Add :StartInterval integer 900'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('mesh policy enforced', log)
+        self.assertEqual(values, ['false', '900'])
 
     def test_failed_bootstrap_is_not_logged_as_enforced(self):
         result, log, _ = self.run_mesh(bootstrap_ok=False)
