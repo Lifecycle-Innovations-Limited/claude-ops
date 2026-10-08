@@ -88,6 +88,44 @@ else
   err "Hermes plugin still registers shadowing slash commands: $registration_json"
 fi
 
+# A copy install (what sync-companion-clis.sh writes into $HERMES_HOME/plugins/ops)
+# must register exactly as many ops skills as the source has. Before the bundled
+# skills/ fix it registered 0: SKILLS_DIR pointed at the copy's parent dir.
+count_registered() {
+  PYTHONPYCACHEPREFIX="$(mktemp -d)" python3 - "$1" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ops_copy_install", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+class C:
+    n = 0
+    def register_skill(self, name, path, description=""):
+        if name != "hermes-runtime":
+            C.n += 1
+m.register(C())
+print(C.n)
+PY
+}
+src_count=$(find "$PLUGIN_ROOT/skills" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')
+copy_home="$(mktemp -d)"
+mkdir -p "$copy_home/plugins/ops"
+cp -R "$HP/." "$copy_home/plugins/ops/"
+cp -R "$PLUGIN_ROOT/skills" "$copy_home/plugins/ops/skills"
+copy_count="$(count_registered "$copy_home/plugins/ops/__init__.py")"
+if [[ "$copy_count" == "$src_count" ]]; then
+  ok "copy install with bundled skills/ registers all $src_count source skills"
+else
+  err "copy install registered $copy_count skills, source has $src_count"
+fi
+rm -rf "$copy_home/plugins/ops/skills"
+legacy_count="$(count_registered "$copy_home/plugins/ops/__init__.py")"
+if [[ "$legacy_count" == "0" ]]; then
+  ok "a legacy copy without skills/ registers 0 (the parity check reports it as DRIFT)"
+else
+  err "legacy copy registered $legacy_count; expected 0 with no skills tree"
+fi
+rm -rf "$copy_home"
+
 skill_count=$(find "$PLUGIN_ROOT/skills" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')
 if ((skill_count >= 50)); then
   ok "sibling skills/ has $skill_count SKILL.md files"
