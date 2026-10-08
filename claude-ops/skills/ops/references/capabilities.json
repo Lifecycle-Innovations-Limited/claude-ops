@@ -163,6 +163,14 @@
       "summary": "This skill should be used when the user asks to \"release the plugin\", \"publish ops version\", or \"/ops:ops-release\". Publish a new version of the claude-ops (\"ops\") plugin in one command — bump plugin.json + marketplace.json + package.json, prepend the CHANGELOG, open the release PR, wait for CI, squash-merge it to main, and tag vX.Y.Z. Use when shipping a fix/feature that has already merged to main and you want it published so /ops:ops-update can pull it down. This is the publish side; /ops:ops-update is the consume side."
     },
     {
+      "name": "ops-research-audit",
+      "summary": "This skill should be used when the user asks to \"audit my search tools\", \"check my MCP research setup\", \"which search MCPs actually work\", or \"/ops:ops-research-audit\". Read-only audit of the CLI and MCP research/search configuration: what is offered, whether one harmless read call per tool really works, and what official sources recommend, without changing anything."
+    },
+    {
+      "name": "ops-research",
+      "summary": "This skill should be used when the user asks to \"research this\", \"find the best practice for\", \"what do the docs say about\", or \"/ops:ops-research\". Answers a question with sourced evidence: internal evidence first, Context7 for library/API/CLI docs, at most two search routes per open question, original passages per claim, and honest engine and cost reporting."
+    },
+    {
       "name": "ops-resume",
       "summary": "This skill should be used when the user asks to \"resume sessions\", \"reopen ghostty tabs\", or \"/ops:ops-resume\". Reopen recently-closed Claude Code sessions, one per Ghostty tab. Finds recent session transcripts in ~/.claude/projects and resumes each in its own new tab via `claude --resume`, from the directory it was running in. macOS + Ghostty only."
     },

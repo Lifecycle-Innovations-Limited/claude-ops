@@ -2,7 +2,7 @@
 
 # Skills Reference
 
-_All 66 skills available in claude-ops — your business operations command surface (v2.0 added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`; v2.0.6 added `/ops:credentials`; v2.0.8 added multi-workspace Slack; feature-dev overlay via `/ops:ops-feature-dev`)_
+_All 68 skills available in claude-ops — your business operations command surface (v2.0 added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`; v2.0.6 added `/ops:credentials`; v2.0.8 added multi-workspace Slack; feature-dev overlay via `/ops:ops-feature-dev`)_
 
 [![version](https://img.shields.io/badge/version-3.10.29-blue)](../CHANGELOG.md)
 [![skills](https://img.shields.io/badge/skills-66-8b5cf6)](.)
@@ -324,6 +324,26 @@ Autonomous multi-project orchestration engine. Audits all registered projects, s
 - `/ops:orchestrate --fires-only` — only fix production incidents
 - `/ops:orchestrate --project my-app` — single project
 - `/ops:orchestrate --max-waves 2` — limit parallelism
+
+---
+
+## 🔎 Research
+
+Both commands share one rule set: [`skills/ops-research/references/research-contract.md`](../skills/ops-research/references/research-contract.md) (a byte-identical copy ships with the audit skill). Handbook: [`ops-research.md`](ops-research.md).
+
+### `/ops:ops-research` · `skills/ops-research/SKILL.md`
+
+Answers a question with sourced evidence. Internal evidence first, Context7 (`query-docs`) for library/API/CLI docs, at most two distinct search routes per open question, the read original passage and URL per claim, and the engine plus cost status (`unknown` when not known).
+
+- `/ops:ops-research how does library X configure retries in v5?`
+- `/ops:ops-research what is the current best practice for Y?`
+
+### `/ops:ops-research-audit` · `skills/ops-research-audit/SKILL.md`
+
+Read-only audit of the research/search tooling this CLI offers: discovery/configuration, one harmless read call per tool, and official best-practice evidence, reported separately. Never installs, changes config, sends anything or restarts services.
+
+- `/ops:ops-research-audit` — all offered research/search tools
+- `/ops:ops-research-audit context7` — one tool or server
 
 ---
 
