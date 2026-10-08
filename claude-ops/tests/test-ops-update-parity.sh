@@ -9,7 +9,7 @@
 #   - A companion CLI that ends non-clean after the Claude Code update makes the
 #     run "partial" (exit 3) with the per-target summary; the Claude step is
 #     not undone. A clean companion sync still prints "upgrade complete", exit 0.
-#     (Sam's approved ENG-3 contract.)
+#     (approved partial-exit contract.)
 #
 # Throwaway git repos and stubs only; nothing touches a real install.
 set -uo pipefail

@@ -7,7 +7,7 @@
 # script runs unattended. A regression in it would silently stop propagating
 # updates to every non-Claude harness while the update reported success.
 #
-# CONTRACT CHANGE (approved skill-parity plan, decision ENG-3, 2026-10-08)
+# CONTRACT CHANGE (approved skill-parity plan, approved 2026-10-08)
 #
 # This suite used to assert "the script exits 0 even when a harness is
 # broken". That assertion is replaced, not deleted: the Claude Code step in
@@ -248,7 +248,7 @@ else
   err "--dry-run leaves HOME untouched" "rc=$rc $(diff <(echo "$before") <(snapshot "$H") | head -5 | tr '\n' ' ')"
 fi
 
-# --- 10. Broken target: recorded, others processed, partial exit (ENG-3) --------
+# --- 10. Broken target: recorded, others processed, partial exit (the partial-exit decision) --------
 H="$WORK/home-broken"
 mkdir -p "$H/.hermes/plugins"
 printf 'not a directory\n' >"$H/.hermes/plugins/ops"

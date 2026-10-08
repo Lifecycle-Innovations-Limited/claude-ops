@@ -6,7 +6,7 @@
 # Called as step 10 of bin/ops-update, after the Claude Code plugin itself is
 # updated. Safe to run standalone.
 #
-# Contract (approved skill-parity plan, decision ENG-3):
+# Contract (approved skill-parity plan, partial-exit decision):
 #   - Every selected target is processed even when an earlier one fails.
 #   - A failed target keeps its previous working registration.
 #   - Each target gets one record: status (lib/parity/status.json), problem,
