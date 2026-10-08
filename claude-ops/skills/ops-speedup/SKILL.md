@@ -77,7 +77,7 @@ All modes:
 | Kernel tune (vnodes/somaxconn) | ✓                      | ✓                     | ✓               | —       |
 | TCP BBR                        | —                      | ✓ (aggressive)        | ✓ (aggressive)  | —       |
 | DNS flush                      | ✓ (dscacheutil)        | ✓ (resolved)          | ✓ (via Windows) | —       |
-| Memory purge                   | ✓ (`purge`)            | ✓ (drop_caches)       | ✓               | —       |
+| Memory purge                   | ✓ (`purge`)            | ✓ (drop_caches, aggressive) | ✓ (aggressive) | —       |
 | Stale build dir prune (>14d)   | ✓                      | ✓                     | ✓               | —       |
 
 ## Phase 1 — Visual header
