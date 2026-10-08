@@ -183,9 +183,9 @@ During `/ops:setup` and any skill's setup/configure flow, use `run_in_background
 
 1. **Stage ONE draft, show the user EVERYTHING** — to, cc, bcc, subject, full body, attachments. Not a summary. Not a line count. The full message the recipient will see.
 
-2. **Call `AskUserQuestion` for THAT ONE message** with options like `[Send]`, `[Edit]`, `[Skip]`. Wait for the user's choice. A plain-chat approval word (`ok`, `send`, `go`, `yes`, `approved`, `ship it`) is also a valid signal — but only for the single staged message.
+2. **Obtain explicit approval for THAT ONE message** through the installed approved gate. Where the host uses samimizer, use only `message`: its latest delivered full-draft shown-id plus native current-session user proof binds approval to the exact recipient and bytes. `ok`, `ja`, `send`, or `yes` counts only with that proof. Go is not approval. Never mint or waive proof. Use `[Send]`, `[Edit]`, `[Skip]` only when approval is still needed; do not ask twice for an unchanged, actually proven approved draft.
 
-3. **Execute the send.** Then — and only then — stage the next draft.
+3. **Execute through the same approved gate**, after a fresh live-thread check. Populate real session, recipient, thread/reply-all, language and thread-derived timezone metadata on the first call. A gate refusal is a concrete precondition to diagnose, not permission for a direct transport or another approval menu. If outcome is uncertain, read the destination before retrying. Verify delivery, then stage the next draft.
 
 4. **Never stack.** If you have 6 replies to send, that's 6 separate draft-show-approve-send cycles. Never "approve all 6", never "I'll fire them in order", never batch.
 
