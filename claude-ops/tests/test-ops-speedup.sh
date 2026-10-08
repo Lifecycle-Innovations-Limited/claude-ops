@@ -360,6 +360,18 @@ SHIM
   chmod +x "$shimdir/$tool"
 done
 
+# `kill` is a bash builtin, so a PATH shim never runs. An exported function
+# takes precedence over the builtin in the child bash, keeping --aggressive
+# from signalling real host processes.
+kill() { echo "kill $*" >> "$shimlog"; return 0; }
+export -f kill
+export shimlog
+
+# Canary: a child bash must hit the shim, not the real builtin.
+: > "$shimlog"
+bash -c 'kill -TERM 999999' >/dev/null 2>&1 || true
+assert_true "kill is shimmed in child bash (hermetic --aggressive)" grep -q '^kill -TERM 999999' "$shimlog"
+
 run_with_shims() {
   : > "$shimlog"
   PATH="$shimdir:$PATH" "$BIN" "$@" > "$tmpdir/shim-run.out" 2> "$tmpdir/shim-run.err"
