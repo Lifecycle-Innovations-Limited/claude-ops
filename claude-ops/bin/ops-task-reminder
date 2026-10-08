@@ -66,7 +66,9 @@ acquire_lock() {
 
 acquire_lock || exit 0
 
-case "$tool" in
+# Reset on any Task* tool, including namespaced names such as
+# "mcp__<server>__TaskUpdate": only the segment after the last "__" counts.
+case "${tool##*__}" in
   Task*) echo 0 > "$state_file"; exit 0 ;;
 esac
 

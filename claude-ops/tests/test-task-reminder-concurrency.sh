@@ -97,13 +97,26 @@ for impl in $impls; do
     fail "[$impl] reminder output missing or not valid JSON"
   fi
 
-  # 4. Task* still resets the counter.
-  run_hook "$impl" 1000 "$TMP/state-count-$impl" "$TMP/reset-$impl" TaskUpdate || true
+  # 4. Task* resets a non-zero counter to 0, silently; so does a namespaced
+  #    Task tool name (only the segment after the last "__" counts).
+  for t in TaskUpdate mcp__tasks__TaskCreate; do
+    echo 7 >"$TMP/state-count-$impl/task-reminder-$SID"
+    run_hook "$impl" 1000 "$TMP/state-count-$impl" "$TMP/reset-$impl" "$t" || true
+    got="$(cat "$TMP/state-count-$impl/task-reminder-$SID" 2>/dev/null || echo missing)"
+    if [ "$got" = "0" ] && [ ! -s "$TMP/reset-$impl" ]; then
+      pass "[$impl] $t resets the counter 7 -> 0 silently"
+    else
+      fail "[$impl] $t reset -> counter $got"
+    fi
+  done
+  # A non-Task tool whose namespace merely contains "Task" still counts.
+  echo 7 >"$TMP/state-count-$impl/task-reminder-$SID"
+  run_hook "$impl" 1000 "$TMP/state-count-$impl" "$TMP/reset-$impl" mcp__Tasks__Bash || true
   got="$(cat "$TMP/state-count-$impl/task-reminder-$SID" 2>/dev/null || echo missing)"
-  if [ "$got" = "0" ] && [ ! -s "$TMP/reset-$impl" ]; then
-    pass "[$impl] Task* resets the counter silently"
+  if [ "$got" = "8" ]; then
+    pass "[$impl] mcp__Tasks__Bash counts (7 -> 8), no reset"
   else
-    fail "[$impl] Task* reset -> counter $got"
+    fail "[$impl] mcp__Tasks__Bash -> counter $got (want 8)"
   fi
 done
 
@@ -133,6 +146,47 @@ if [ ! -d "$state/task-reminder-$SID.lockd" ] && [ "$(cat "$state/task-reminder-
   pass "mkdir lock released after a run"
 else
   fail "mkdir lock left behind or counter wrong"
+fi
+
+# 7. A stale mkdir lock (left by a killed hook) is reclaimed, not waited on.
+mkdir "$state/task-reminder-$SID.lockd"
+touch -t 200001010000 "$state/task-reminder-$SID.lockd"
+LOCK_TIMEOUT=2
+run_hook mkdir 1000 "$state" "$TMP/stale-out" || true
+if [ ! -d "$state/task-reminder-$SID.lockd" ] && [ "$(cat "$state/task-reminder-$SID")" = "7" ]; then
+  pass "stale mkdir lock reclaimed, counter 6 -> 7"
+else
+  fail "stale mkdir lock not reclaimed (counter $(cat "$state/task-reminder-$SID"))"
+fi
+
+# 8. Wiring: hooks.json must route Task* PostToolUse events to this hook,
+#    otherwise the reset above is unreachable in production. Matcher
+#    semantics follow Claude Code: "*"/"" match all; a value of only
+#    letters, digits, "_" and "|" is an exact name list; anything else is a
+#    regex.
+HOOKS="$ROOT/hooks/hooks.json"
+entry="$(jq -c '[.hooks.PostToolUse[] | select(any(.hooks[]; .command | test("ops-task-reminder")))][0]' "$HOOKS")"
+matcher="$(printf '%s' "$entry" | jq -r '.matcher // ""')"
+matches() {
+  local m="$1" name="$2"
+  case "$m" in "" | "*") return 0 ;; esac
+  if printf '%s' "$m" | grep -Eq '^[A-Za-z0-9_|]+$'; then
+    printf '%s' "$m" | tr '|' '\n' | grep -Fxq "$name"
+  else
+    printf '%s' "$name" | grep -Eq "$m"
+  fi
+}
+for t in TaskCreate TaskUpdate TaskList TaskGet Bash Edit Write; do
+  if matches "$matcher" "$t"; then
+    pass "wiring: PostToolUse $t reaches ops-task-reminder"
+  else
+    fail "wiring: PostToolUse $t does not match matcher '$matcher'"
+  fi
+done
+if printf '%s' "$entry" | jq -e '.hooks[0].async == true and .hooks[0].timeout > 2' >/dev/null; then
+  pass "wiring: hook is async with timeout above the 2s lock deadline"
+else
+  fail "wiring: hook must be async with timeout > 2 (got $(printf '%s' "$entry" | jq -c '.hooks[0] | {async, timeout}'))"
 fi
 
 echo "test-task-reminder-concurrency.sh: $PASS passed, $FAIL failed"
