@@ -593,7 +593,7 @@ function nextStep(host, status) {
   }
 }
 
-function makeRecord(host, status, fields = {}) {
+export function makeRecord(host, status, fields = {}) {
   const rec = {
     target: host,
     status,
@@ -804,7 +804,7 @@ export function checkTargets({ source, hosts, required, env = process.env, confi
   return report;
 }
 
-function finish(records) {
+export function finish(records) {
   const cls = aggregateClass(records);
   return { class: cls, exit_code: exitCodeFor(cls) };
 }
