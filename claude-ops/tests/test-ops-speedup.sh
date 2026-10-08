@@ -396,6 +396,35 @@ if [ "$(uname -s)" = "Linux" ] && ! grep -qi microsoft /proc/version 2>/dev/null
   assert_true "--aggressive still drops caches" grep -q 'drop_caches' "$shimlog"
 fi
 
+# macOS: the System Events login-items query took 66s on a busy Mac and only
+# --json reads its result, so --clean must not run it. Force the Darwin branch
+# with a uname shim; osascript is shimmed so nothing real is queried.
+for tool in osascript; do
+  cat > "$shimdir/$tool" <<SHIM
+#!/usr/bin/env bash
+echo "$tool \$*" >> "$shimlog"
+echo 0
+exit 0
+SHIM
+  chmod +x "$shimdir/$tool"
+done
+cat > "$shimdir/uname" <<'SHIM'
+#!/usr/bin/env bash
+case "${1:-}" in
+  -s) echo Darwin ;;
+  -m|-p) echo arm64 ;;
+  -r) echo 25.0.0 ;;
+  *) echo Darwin ;;
+esac
+SHIM
+chmod +x "$shimdir/uname"
+HOME_BAK="$HOME"; export HOME="$tmpdir/darwin-home"; mkdir -p "$HOME/Library/LaunchAgents"
+if run_with_shims --clean; then pass "--clean exits 0 on forced Darwin"; else fail "--clean exits 0 on forced Darwin"; fi
+assert_true "--clean on macOS skips the login-items osascript query" bash -c "! grep -q 'login items' '$shimlog'"
+if run_with_shims --json; then pass "--json exits 0 on forced Darwin"; else fail "--json exits 0 on forced Darwin"; fi
+assert_true "--json on macOS still queries login items" grep -q 'login items' "$shimlog"
+export HOME="$HOME_BAK"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
