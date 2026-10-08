@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+- PreToolUse(Skill) `ops-pretool-skill-update` and PostToolUse `ops-task-reminder` now run async, so neither holds up the tool call it observes.
+
+### Fixed
+- `ops-task-reminder` takes a per-session exclusive lock (flock, or a portable mkdir lock where flock is missing) around its counter update, so overlapping async runs no longer lose counts. Fails open after ~2s.
+
 ## [3.10.28] - 2026-10-04
 
 ### Changed
