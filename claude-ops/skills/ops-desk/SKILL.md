@@ -20,7 +20,6 @@ allowed-tools:
   - mcp__gog__gmail_search
   - mcp__gog__gmail_read_thread
   - mcp__whatsapp__list_messages
-  - mcp__whatsapp__send_message
   - mcp__whatsapp__archive_chat
   - mcp__linear__list_issues
   - mcp__linear__get_issue

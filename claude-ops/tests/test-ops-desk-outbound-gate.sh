@@ -44,6 +44,11 @@ def failures(text):
     for phrase in REQUIRED:
         if phrase not in flat:
             found.append('missing gate-only clause: ' + phrase)
+    # Frontmatter must not preauthorize a direct sender either.
+    front = text.split('---', 2)[1] if text.startswith('---') else ''
+    for tool in re.findall(r'^\s*-\s*(\S+)\s*$', front, re.M):
+        if re.search(r'__send_|gmail_send|imessage__reply', tool):
+            found.append('frontmatter preauthorizes direct sender: ' + tool)
     return found
 
 
@@ -63,7 +68,8 @@ mutations = [
     ('bridge', lambda t: t + '\nWhatsApp sends go via the bridge.\n'),
     ('send-token', lambda t: t + '\nRemind the owner once about the send token.\n'),
     ('mcp-send', lambda t: t + '\nUse mcp__whatsapp__send_message directly.\n'),
-    ('drop-gate', lambda t: re.sub(r"only through the host's\s+approved outbound gate", 'through any sender', t)),
+    ('frontmatter-send', lambda t: t.replace('  - mcp__whatsapp__archive_chat\n', '  - mcp__whatsapp__send_message\n  - mcp__whatsapp__archive_chat\n', 1)),
+    ('drop-gate',lambda t: re.sub(r"only through the host's\s+approved outbound gate", 'through any sender', t)),
 ]
 for name, mutate in mutations:
     checks += 1

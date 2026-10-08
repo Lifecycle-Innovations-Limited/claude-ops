@@ -24,7 +24,7 @@ Wraps `my-project-leadgen` CLI for the daily leadgen review-and-send loop.
 | Argument             | Action                                           |
 | -------------------- | ------------------------------------------------ |
 | `review` (default)   | Show pending drafts one-by-one, approve or skip  |
-| `send --draft-id N`  | Send a single approved draft (Rule-6 gated)      |
+| `send --draft-id N`  | Hand one draft to the host's approved outbound gate (Rule 6) |
 | `usage`              | Print today's Apollo reveals + Apify runs        |
 | `scrape [--limit N]` | Discover new NL HR contacts via Apollo           |
 | `enrich`             | Run Apify enrichment on unenriched leads         |
@@ -39,11 +39,16 @@ Wraps `my-project-leadgen` CLI for the daily leadgen review-and-send loop.
    - Lead: name, title, company, email
    - Language, subject, full body
 3. Ask: `[Send]` / `[Skip]` / `[Stop review]`
-4. On `[Send]`:
-   a. Show complete draft one final time
-   b. Wait for the owner to type `ok` / `send` / `ship it` — this creates `/tmp/.claude-send-ok`
-   c. Run: `doppler run --project my-project-b2b-leadgen --config dev -- my-project-leadgen send --draft-id N`
-   d. Confirm output shows `Sent OK. Gmail message ID: <id>`
+4. On `[Send]`: one draft, one approval, one send, only through the host's
+   approved outbound gate.
+   a. Pass the exact recipient, subject and full latest body to that gate; it shows
+      the complete text and binds the owner's native yes to those bytes.
+   b. Approval is that native yes on the shown draft only. A typed word, file, token
+      or counter is never consent, and one approval never covers another draft.
+   c. After the gate reports delivery, confirm it on a fresh read of the sent mail,
+      then record the send in the leadgen database.
+   d. If the gate refuses or cannot send this channel, keep the draft pending with the
+      exact diagnostic. Never run a direct sender as a substitute for the gate.
 5. Move to the next draft only after the current one is fully resolved.
 
 ## Scrape → enrich → draft (pipeline)
@@ -92,7 +97,7 @@ sqlite3 ~/Projects/my-project-b2b-leadgen/leads.db \
 
 ## Rule 6 — no exceptions
 
-Per CLAUDE.md Rule 6: every outbound send requires individual staging + approval.
-The `my-project-leadgen send` command physically blocks unless `/tmp/.claude-send-ok` exists.
-the owner creates this token by typing `ok` / `send it` / `ship it` in the chat.
-Token is one-shot — consumed on send. Next send needs a new approval.
+Per `ops-rules` Rule 6: every outbound send is one draft, one approval, one send,
+only through the host's approved outbound gate. A local file, shell token or
+counter is defense in depth at most, never the owner's consent. Each draft needs its
+own native approval on the latest shown text.
