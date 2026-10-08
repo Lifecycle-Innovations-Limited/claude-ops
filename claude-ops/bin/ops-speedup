@@ -567,7 +567,15 @@ probe_startup() {
 run_parallel_scan() {
   local tmp; tmp=$(mktemp -d "/tmp/ops-speedup.XXXXXX")
 
-  probe_disk_reclaimable "$tmp/disk" &
+  # The reclaimable-size probe walks multi-GB caches (du over npm/pnpm/yarn,
+  # /var/log, Downloads) and costs ~40s on a busy Linux host. Only the --json
+  # report and the bare banner path read DISK_*; a plain cleanup run never does,
+  # so skip the scan there. This keeps --clean inside a 60s cron budget.
+  if $MODE_JSON || ! $MODE_CLEAN; then
+    probe_disk_reclaimable "$tmp/disk" &
+  else
+    : > "$tmp/disk"
+  fi
   probe_memory "$tmp/mem" &
   probe_cpu_hogs "$tmp/cpu" &
   probe_runtime "$tmp/runtime" &
@@ -1022,9 +1030,15 @@ action_memory_purge() {
       echo "  ${GRN}✓${RST} Memory purged (pressure=${pressure}% free, swap=${swap}MB)"
     fi
   elif $IS_LINUX || $IS_WSL; then
-    if sudo -n true 2>/dev/null; then
+    # drop_caches throws away the whole page cache (tens of GB on a busy host),
+    # which forces every service to re-read from disk and itself causes the IO
+    # spike the next health sweep measures. It is not a safe --clean action, so
+    # it runs only under the explicit --aggressive tier.
+    if $MODE_AGGRESSIVE && sudo -n true 2>/dev/null; then
       sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
-      echo "  ${GRN}✓${RST} Memory caches dropped"
+      echo "  ${GRN}✓${RST} Memory caches dropped (aggressive)"
+    else
+      echo "  ${DIM}-${RST} Page cache kept (drop_caches only under --aggressive)"
     fi
   fi
   if $IS_WINDOWS; then

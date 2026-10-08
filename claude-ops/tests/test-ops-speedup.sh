@@ -342,6 +342,48 @@ assert_eq "linux cpu parse sys" "2.0" "$parsed_sys"
 assert_eq "linux cpu parse idle" "91.5" "$parsed_idle"
 assert_true "bin uses robust linux cpu parse" grep -q 'grep -oE .*(us|user)' "$BIN"
 
+# --clean must finish inside a 60s cron budget (fleet-speedup sweep). On a busy
+# Linux host it took 86s: ~43s in the reclaimable-size du scan that --clean never
+# reads, ~30s in drop_caches, which also discards the page cache and causes the
+# IO spike the next health sweep measures. Run the real binary with every
+# side-effecting or slow tool replaced by a logging shim so the test is
+# hermetic: nothing is deleted, reniced, pruned or dropped on the host.
+shimdir="$tmpdir/shims"
+shimlog="$tmpdir/shim-calls.log"
+mkdir -p "$shimdir"
+for tool in sudo du find rm docker pnpm brew renice ionice kill killall sync systemctl journalctl apt-get yum launchctl purge sysctl; do
+  cat > "$shimdir/$tool" <<SHIM
+#!/usr/bin/env bash
+echo "$tool \$*" >> "$shimlog"
+exit 0
+SHIM
+  chmod +x "$shimdir/$tool"
+done
+
+run_with_shims() {
+  : > "$shimlog"
+  PATH="$shimdir:$PATH" "$BIN" "$@" > "$tmpdir/shim-run.out" 2> "$tmpdir/shim-run.err"
+}
+
+SECONDS=0
+if run_with_shims --clean; then pass "--clean exits 0 with shimmed tools"; else fail "--clean exits 0 with shimmed tools"; fi
+assert_true "--clean finishes under the 60s cron budget" test "$SECONDS" -lt 60
+assert_true "--clean does not run the du reclaimable-size scan" bash -c "! grep -q '^du ' '$shimlog'"
+assert_true "--clean never writes drop_caches" bash -c "! grep -q 'drop_caches' '$shimlog'"
+assert_true "--clean never runs macOS purge" bash -c "! grep -q '^sudo purge' '$shimlog'"
+assert_true "--clean never runs the standalone purge binary" bash -c "! grep -q '^purge' '$shimlog'"
+
+# The size scan must stay available where it is read: --json reports sizes.
+if run_with_shims --json; then pass "--json exits 0 with shimmed tools"; else fail "--json exits 0 with shimmed tools"; fi
+assert_true "--json still runs the du reclaimable-size scan" grep -q '^du ' "$shimlog"
+assert_true "--json output is valid JSON" "$PY" -c "import json,sys; json.load(open(sys.argv[1]))" "$tmpdir/shim-run.out"
+
+# Only the explicit --aggressive tier may drop the page cache on Linux.
+if [ "$(uname -s)" = "Linux" ] && ! grep -qi microsoft /proc/version 2>/dev/null; then
+  if run_with_shims --aggressive; then pass "--aggressive exits 0 with shimmed tools"; else fail "--aggressive exits 0 with shimmed tools"; fi
+  assert_true "--aggressive still drops caches" grep -q 'drop_caches' "$shimlog"
+fi
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
