@@ -87,6 +87,11 @@ setup_sandbox() {
 PL
   export CLAUDE_PLUGIN_DATA_DIR="$ROOT/data"
   mkdir -p "$CLAUDE_PLUGIN_DATA_DIR"
+  # The migration derives installed_plugins.json, current/ and its orphan marker
+  # from CLAUDE_CONFIG_DIR, falling back to HOME. The real-HOME controls below
+  # must therefore keep this sandbox config, or they can rewrite live metadata.
+  export CLAUDE_CONFIG_DIR="$ROOT/claude-config"
+  mkdir -p "$CLAUDE_CONFIG_DIR/plugins"
   export WHATSAPP_BRIDGE_HOME="$ROOT/bridge"
   mkdir -p "$WHATSAPP_BRIDGE_HOME/logs"
   # wrapper present, so the migration takes the branch that loads a LaunchAgent
@@ -103,6 +108,18 @@ PL
 run() { CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$SCRIPT" >/dev/null 2>&1 || true; }
 
 REAL_HOME_VALUE="$(python3 -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
+
+# Read-only fingerprint of the plugin metadata the migration can rewrite.
+config_fingerprint() {
+  local plugins="$1/plugins" current
+  current="$plugins/cache/ops-marketplace/ops/current"
+  for p in "$plugins/installed_plugins.json" "$current/.claude-plugin/plugin.json"; do
+    if [[ -f "$p" ]]; then shasum -a256 "$p" | awk '{print $1}'; else echo absent; fi
+  done
+  [[ -e "$current/.orphaned_at" ]] && echo orphan-present || echo orphan-absent
+  [[ -L "$current" ]] && echo current-symlink || echo current-not-symlink
+}
+REAL_CONFIG_BEFORE="$(config_fingerprint "$REAL_HOME_VALUE/.claude")"
 
 echo "=== sandboxed HOME must not touch the real launchd domain ==="
 setup_sandbox
@@ -133,6 +150,7 @@ TEST_PLIST="$LAUNCH_AGENTS_DIR/com.${FAKE_USER}.whatsapp-bridge.plist"
 CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" \
   HOME="$REAL_HOME_VALUE" \
   USER="$FAKE_USER" \
+  CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   CLAUDE_PLUGIN_DATA_DIR="$CLAUDE_PLUGIN_DATA_DIR" \
   WHATSAPP_BRIDGE_HOME="$WHATSAPP_BRIDGE_HOME" \
   bash "$SCRIPT" >/dev/null 2>&1 || true
@@ -160,6 +178,7 @@ CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" \
   HOME="$REAL_HOME_VALUE" \
   USER="$FAKE_USER" \
   OPS_MIGRATE_NO_LAUNCHCTL=1 \
+  CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   CLAUDE_PLUGIN_DATA_DIR="$CLAUDE_PLUGIN_DATA_DIR" \
   WHATSAPP_BRIDGE_HOME="$WHATSAPP_BRIDGE_HOME" \
   bash "$SCRIPT" >/dev/null 2>&1 || true
@@ -186,6 +205,7 @@ CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" \
   PATH="$BREAK_DIR:$PATH" \
   HOME="$SANDBOXED_HOME" \
   USER="$FAKE_USER" \
+  CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   CLAUDE_PLUGIN_DATA_DIR="$CLAUDE_PLUGIN_DATA_DIR" \
   WHATSAPP_BRIDGE_HOME="$WHATSAPP_BRIDGE_HOME" \
   bash "$SCRIPT" >/dev/null 2>&1 || true
@@ -210,6 +230,47 @@ if grep -Fq "$direct_path" "$0"; then
 else
   ck "no direct launchctl path bypasses the shim" "safe" "safe"
 fi
+
+echo
+echo "=== plugin metadata outside the sandbox config stays untouched ==="
+# A decoy HOME holds metadata that the repair branch WOULD rewrite: a broken
+# installPath, an existing canonical current/ and an aged orphan marker. With
+# the sandbox CLAUDE_CONFIG_DIR exported it must stay byte-identical. The control
+# run without that variable proves this fixture detects the mutation class.
+make_decoy() {
+  DECOY_HOME="$ROOT/decoy-home"
+  local plugins="$DECOY_HOME/.claude/plugins" current
+  current="$plugins/cache/ops-marketplace/ops/current"
+  rm -rf "$DECOY_HOME"
+  mkdir -p "$current/.claude-plugin"
+  echo '{"version":"9.9.9-test"}' >"$current/.claude-plugin/plugin.json"
+  printf '1000000000000\n' >"$current/.orphaned_at"
+  printf '{"plugins":{"ops@ops-marketplace":[{"scope":"user","installPath":"%s","version":"9.9.9-test"}]}}\n' \
+    "$ROOT/missing-install" >"$plugins/installed_plugins.json"
+}
+run_decoy() {
+  rm -rf "$CLAUDE_PLUGIN_DATA_DIR"; mkdir -p "$CLAUDE_PLUGIN_DATA_DIR"
+  CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" HOME="$DECOY_HOME" USER="$FAKE_USER" \
+    CLAUDE_PLUGIN_DATA_DIR="$CLAUDE_PLUGIN_DATA_DIR" WHATSAPP_BRIDGE_HOME="$WHATSAPP_BRIDGE_HOME" \
+    "$@" bash "$SCRIPT" >/dev/null 2>&1 || true
+}
+setup_sandbox
+make_decoy
+DECOY_BEFORE="$(config_fingerprint "$DECOY_HOME/.claude")"
+: > "$CALLS"
+run_decoy env CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"
+ck "isolated run leaves outside installed_plugins/installPath/current/orphan untouched" \
+  "$(config_fingerprint "$DECOY_HOME/.claude")" "$DECOY_BEFORE"
+make_decoy
+run_decoy env -u CLAUDE_CONFIG_DIR
+if [[ "$(config_fingerprint "$DECOY_HOME/.claude")" != "$DECOY_BEFORE" ]]; then
+  ck "control: without CLAUDE_CONFIG_DIR the fixture detects HOME metadata mutation" "detected" "detected"
+else
+  ck "control: without CLAUDE_CONFIG_DIR the fixture detects HOME metadata mutation" "undetected" "detected"
+fi
+ck "decoy runs made zero launchctl invocations" "$(wc -l < "$CALLS" | tr -d ' ')" "0"
+ck "real plugin metadata untouched by the whole suite" \
+  "$(config_fingerprint "$REAL_HOME_VALUE/.claude")" "$REAL_CONFIG_BEFORE"
 
 rm -rf "$SHIM_DIR"
 echo

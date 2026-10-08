@@ -86,6 +86,7 @@ cat >"$TMP/stubs/scp" <<SH
 args=("\$@"); n=\${#args[@]}
 src="\${args[\$((n-2))]}"; dst="\${args[\$((n-1))]}"
 path="\${src#*:}"; path="\${path/#\/tmp\//$REMOTE/tmp/}"
+case "\$src" in host-b:*) [ "\${FAIL_SCP_HOST:-}" != host-b ] || { touch "$TMP/b-copied"; exit 1; } ;; esac
 cp "\$path" "\$dst" || exit \$?
 case "\$src" in host-b:*) touch "$TMP/b-copied" ;; esac
 SH
@@ -120,6 +121,23 @@ left_remote="$(find "$REMOTE/tmp" -mindepth 1 | wc -l | tr -d ' ')"
 left_local="$(find "$LOCALTMP" -mindepth 1 -name 'ois-wa.*' | wc -l | tr -d ' ')"
 [ "$left_local" = 0 ] && ok "no local snapshot copy left after the scan" \
   || bad "$left_local local snapshot dir(s) left in TMPDIR"
+
+echo "failed pull cleans only its own snapshot"
+rm -f "$TMP/a-created" "$TMP/b-copied" "$TMP/ssh.log"
+OUT2="$(HOME="$TMP/home" PATH="$TMP/stubs:$PATH" TMPDIR="$LOCALTMP" OIS_NO_REFRESH=1 FAIL_SCP_HOST=host-b \
+       "$TMP/plugin/bin/ops-inbox-scan" --whatsapp-only --no-peer-stores 2>"$TMP/stderr2")"
+SEEN2="$(who_by_account "$OUT2")"
+grep -qx 'account-a=Alpha Contact' <<<"$SEEN2" && ok "a concurrent failure does not disturb the other account" \
+  || bad "account-a got '$(grep '^account-a=' <<<"$SEEN2")' after account-b failed"
+grep -qx 'account-b=Bravo Contact' <<<"$SEEN2" \
+  && bad "failed account-b reported conversations it could not pull" \
+  || ok "failed account-b is not reported as a successful read"
+left_remote2="$(find "$REMOTE/tmp" -mindepth 1 | wc -l | tr -d ' ')"
+[ "$left_remote2" = 0 ] && ok "failed pull leaves no remote snapshot" \
+  || bad "$left_remote2 remote snapshot path(s) left after failure"
+left_local2="$(find "$LOCALTMP" -mindepth 1 -name 'ois-wa.*' | wc -l | tr -d ' ')"
+[ "$left_local2" = 0 ] && ok "failed pull leaves no local snapshot dir" \
+  || bad "$left_local2 local snapshot dir(s) left after failure"
 
 echo "  $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
