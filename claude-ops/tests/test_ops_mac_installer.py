@@ -92,6 +92,72 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(result.stdout, b'verified; dry-run only, no files installed\n')
             self.assertEqual(target.read_bytes(), b'original')
 
+    def test_cooperative_lock_held_across_final_check_and_replace(self):
+        # A cooperating peer that tries to take the target lock while the
+        # installer is replacing must be refused: check and replace are one
+        # critical section, so the peer cannot slip new bytes in between.
+        with tempfile.TemporaryDirectory() as d:
+            source, target = pathlib.Path(d) / 'source', pathlib.Path(d) / 'target'
+            source.write_bytes(b'new')
+            target.write_bytes(b'old')
+            lock_path = pathlib.Path(str(target) + '.install.lock')
+            observed = []
+            real_replace = installer.os.replace
+
+            def peer_then_replace(src, dst):
+                fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+                try:
+                    installer.fcntl.flock(fd, installer.fcntl.LOCK_EX | installer.fcntl.LOCK_NB)
+                    observed.append('peer acquired lock')
+                    installer.fcntl.flock(fd, installer.fcntl.LOCK_UN)
+                except BlockingIOError:
+                    observed.append('peer blocked')
+                finally:
+                    os.close(fd)
+                return real_replace(src, dst)
+
+            with mock.patch.object(installer.os, 'replace', side_effect=peer_then_replace):
+                installer.install(source, target, installer.digest(target))
+            self.assertEqual(observed, ['peer blocked'])
+            self.assertEqual(target.read_bytes(), b'new')
+
+    def test_install_refuses_while_peer_holds_lock(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as d:
+            source, target = pathlib.Path(d) / 'source', pathlib.Path(d) / 'target'
+            source.write_bytes(b'new')
+            target.write_bytes(b'old')
+            fd = os.open(str(target) + '.install.lock', os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                for expected in (installer.digest(target), 'absent'):
+                    with self.subTest(expected=expected):
+                        with self.assertRaises(ValueError):
+                            installer.install(source, target, expected)
+                self.assertEqual(target.read_bytes(), b'old')
+                self.assertEqual(list(pathlib.Path(d).glob('target.bak.*')), [])
+            finally:
+                os.close(fd)
+
+    def test_peer_change_after_backup_is_refused_under_lock(self):
+        # Bytes that change before the locked recheck are never overwritten.
+        with tempfile.TemporaryDirectory() as d:
+            source, target = pathlib.Path(d) / 'source', pathlib.Path(d) / 'target'
+            source.write_bytes(b'new')
+            target.write_bytes(b'old')
+            expected = installer.digest(target)
+            real_chown = installer.os.chown
+
+            def chown_then_peer_write(path, uid, gid):
+                real_chown(path, uid, gid)
+                if '.install.' in str(path):
+                    target.write_bytes(b'peer')
+
+            with mock.patch.object(installer.os, 'chown', side_effect=chown_then_peer_write):
+                with self.assertRaises(ValueError):
+                    installer.install(source, target, expected)
+            self.assertEqual(target.read_bytes(), b'peer')
+
     def test_replace_failure_leaves_original(self):
         with tempfile.TemporaryDirectory() as d:
             source, target = pathlib.Path(d) / 'source', pathlib.Path(d) / 'target'

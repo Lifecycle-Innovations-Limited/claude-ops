@@ -22,13 +22,23 @@ source "$POLICY"
 
 failed=0
 for bad in ${NEVER_AUTO[@]+"${NEVER_AUTO[@]}"}; do
+  # FAIL CLOSED: a loaded job must be booted out, disabled and verified absent
+  # before its plist is archived. Otherwise keep the plist for a clean retry.
+  unloaded=1
   if launchctl print "${GUI}/${bad}" >/dev/null 2>&1; then
-    launchctl bootout "${GUI}/${bad}" 2>/dev/null || true
-    launchctl disable "${GUI}/${bad}" 2>/dev/null || true
-    log "booted out $bad"
+    launchctl bootout "${GUI}/${bad}" 2>/dev/null || unloaded=0
+    launchctl disable "${GUI}/${bad}" 2>/dev/null || unloaded=0
+    if launchctl print "${GUI}/${bad}" >/dev/null 2>&1; then unloaded=0; fi
+    if [ "$unloaded" = 1 ]; then
+      log "booted out $bad (verified)"
+    else
+      log "ERROR $bad NOT booted out or disabled; plist preserved"
+      printf 'mac-hypertune-guard: bootout of %s unverified; plist preserved\n' "$bad" >&2
+      failed=1
+    fi
   fi
   f="${LA}/${bad}.plist"
-  if [ -f "$f" ]; then
+  if [ "$unloaded" = 1 ] && [ -f "$f" ]; then
     if mv "$f" "${ARCH}/${bad}.plist.$(date -u +%Y%m%dT%H%M%SZ)"; then
       log "archived ${bad}.plist (forbidden auto agent)"
     else

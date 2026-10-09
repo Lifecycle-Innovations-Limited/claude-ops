@@ -72,6 +72,29 @@ class PlistTests(unittest.TestCase):
         with mock.patch.object(module, "PLIST_DIRS", [str(self.root)]):
             self.assertEqual(module.discover(), [("com.example.worker", value)])
 
+    def test_malformed_field_types_skipped_and_valid_logs_kept(self):
+        # Valid plists whose fields have the wrong type must not abort the scan.
+        fixtures = {
+            "a-int-label.plist": {"Label": 42, "StandardOutPath": "int-label.log"},
+            "b-list-path.plist": {"Label": "com.example.listpath", "StandardOutPath": ["x.log"],
+                                  "StandardErrorPath": "listpath-err.log"},
+            "c-dict-path.plist": {"Label": "com.example.dictpath", "StandardErrorPath": {"p": 1}},
+            "d-data-label.plist": {"Label": b"bytes", "StandardOutPath": "data-label.log"},
+            "e-valid.plist": {"Label": "com.example.valid", "StandardOutPath": "valid.log"},
+        }
+        for name, data in fixtures.items():
+            (self.root / name).write_bytes(plistlib.dumps(data))
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(module, "PLIST_DIRS", [str(self.root)]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            found = module.discover()
+        self.assertEqual(found, [("com.example.listpath", "listpath-err.log"),
+                                 ("com.example.valid", "valid.log")])
+        self.assertEqual(out.getvalue(), "")
+        report = err.getvalue()
+        for name in ("a-int-label.plist", "b-list-path.plist", "c-dict-path.plist", "d-data-label.plist"):
+            self.assertIn(name, report)
+        self.assertNotIn("e-valid.plist", report)
+
     def test_non_dictionary_rejected(self):
         path = self.write(plistlib.dumps(["unexpected"]))
         with self.assertRaises(ValueError):

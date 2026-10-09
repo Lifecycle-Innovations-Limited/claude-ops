@@ -4,9 +4,19 @@
 Requires an expected hash of the current destination. Prints its backup path.
 Reaper installation also requires its adjacent safety library to be installed
 first. Rollback uses the recorded backup; no service is restarted here.
+
+Concurrency: every install holds an exclusive cooperative lock (flock on the
+sidecar file "<target>.install.lock") from the first digest through the final
+recheck and replace, so two installers can never interleave. The lock is
+advisory: a writer that does not take it (an editor, another tool) can still
+change the destination between the final recheck and os.replace. That window
+is two syscalls wide, but it is not closed; POSIX offers no portable
+compare-and-swap for file contents. The sidecar lock file is kept.
 """
 import argparse
+import contextlib
 import datetime
+import fcntl
 import hashlib
 import os
 from pathlib import Path
@@ -22,8 +32,28 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+@contextlib.contextmanager
+def target_lock(target):
+    """Exclusive cooperative lock on the target; refuse rather than wait."""
+    fd = os.open(str(target) + ".install.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError("another install holds the target lock; refusing install") from None
+        yield
+    finally:
+        # Closing the descriptor releases the lock.
+        os.close(fd)
+
+
 def install(source, target, expected):
     source, target = Path(source), Path(target)
+    with target_lock(target):
+        return _install_locked(source, target, expected)
+
+
+def _install_locked(source, target, expected):
     if expected == "absent":
         if target.exists() or target.is_symlink():
             raise ValueError("destination already exists")
@@ -62,6 +92,7 @@ def install(source, target, expected):
         if (staged_stat.st_uid, staged_stat.st_gid) != (original_stat.st_uid, original_stat.st_gid):
             raise ValueError("could not preserve destination ownership")
         source_hash = digest(source)
+        # Final recheck and replace run inside the target lock (see module docstring).
         if digest(temporary) != source_hash or digest(target) != expected:
             raise ValueError("bytes changed before install")
         os.replace(temporary, target)

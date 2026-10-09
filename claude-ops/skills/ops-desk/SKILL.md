@@ -160,8 +160,13 @@ return await agent(
 
 Per package, in rank order:
 
-- **`already_done` / `archive` / `info_only`** → report in one line, archive/close
-  immediately (tracker status → done). These are the free wins; do them without asking.
+- **`already_done` / `info_only`** → report in one line and close the item in the task
+  tracker (status → done). This is tracker-only closure: no mailbox, chat or file is
+  archived, moved or marked read. These are the free wins.
+- **`archive`** → a package from a read-only agent is a recommendation, not owner
+  authorization. Show the item and the evidence, then archive it only after explicit
+  owner authorization for that item (e.g. via `AskUserQuestion`). Without it, leave the
+  thread where it is and report the item as still open.
 - **`send_email` / `send_whatsapp` / `chase`** → exactly as in `/ops:ops-inbox` and
   `ops-rules` Rule 6: one draft, one approval, one send, only through the host's
   approved outbound gate. The gate shows the exact recipient and full latest text;

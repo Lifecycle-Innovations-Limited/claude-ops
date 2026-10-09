@@ -53,6 +53,71 @@ orbctl() { echo 0; }
         self.assertNotIn('kickstart', actions)
 
 
+class LoadedForbiddenJobTests(unittest.TestCase):
+    """A loaded forbidden job: launchctl is a state-file mock, never the real one."""
+
+    def run_loaded(self, bootout_rc=0, bootout_unloads=True, disable_rc=0):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = pathlib.Path(tmp.name)
+        la = root / 'Library/LaunchAgents'
+        la.mkdir(parents=True)
+        (la / 'com.example.forbidden.plist').write_text('fixture')
+        (root / 'loaded').touch()
+        policy = root / 'policy.sh'
+        policy.write_text('NEVER_AUTO=(com.example.forbidden)\nKEEP_LABEL=\nMESH_LABEL=\n')
+        mocks = root / 'mocks.sh'
+        mocks.write_text('''launchctl() {
+  printf '%s\\n' "$*" >>"$HOME/actions"
+  case "$1" in
+    print) [ -e "$HOME/loaded" ] ;;
+    list) [ -e "$HOME/loaded" ] ;;
+    bootout) [ "$BOOTOUT_UNLOADS" = 1 ] && /bin/rm -f "$HOME/loaded"; return "$BOOTOUT_RC" ;;
+    disable) return "$DISABLE_RC" ;;
+    *) return 0 ;;
+  esac
+}
+rm() { echo rm >>"$HOME/actions"; return 99; }
+pgrep() { return 1; }
+sysctl() { echo 0; }
+orbctl() { echo 0; }
+''')
+        env = dict(os.environ, HOME=str(root), OPS_MAC_POLICY=str(policy), BASH_ENV=str(mocks),
+                   BOOTOUT_RC=str(bootout_rc), BOOTOUT_UNLOADS=str(int(bootout_unloads)),
+                   DISABLE_RC=str(disable_rc))
+        result = subprocess.run(['/bin/bash', str(SCRIPT)], env=env, capture_output=True)
+        log = (root / '.local/share/agent-logs/hypertune-guard.log').read_text()
+        plist = la / 'com.example.forbidden.plist'
+        return result, log, plist
+
+    def test_verified_bootout_archives_and_succeeds(self):
+        result, log, plist = self.run_loaded()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(plist.exists())
+        self.assertIn('booted out com.example.forbidden (verified)', log)
+        self.assertIn('archived com.example.forbidden.plist', log)
+
+    def test_failed_bootout_keeps_plist_and_fails(self):
+        result, log, plist = self.run_loaded(bootout_rc=5, bootout_unloads=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(plist.exists(), 'plist must be kept for a clean retry')
+        self.assertNotIn('booted out com.example.forbidden', log.replace('NOT booted out', ''))
+        self.assertNotIn('archived com.example.forbidden.plist', log)
+        self.assertIn('guard failed', log)
+
+    def test_bootout_success_but_still_loaded_fails_closed(self):
+        result, log, plist = self.run_loaded(bootout_rc=0, bootout_unloads=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(plist.exists())
+        self.assertNotIn('archived com.example.forbidden.plist', log)
+
+    def test_failed_disable_keeps_plist_and_fails(self):
+        result, log, plist = self.run_loaded(disable_rc=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(plist.exists())
+        self.assertNotIn('archived com.example.forbidden.plist', log)
+
+
 @unittest.skipUnless(os.path.exists('/usr/libexec/PlistBuddy'), 'SKIP: mesh enforcement needs macOS PlistBuddy')
 class MeshEnforcementTests(unittest.TestCase):
     """Real PlistBuddy on a temporary plist; launchctl is a state-file mock."""

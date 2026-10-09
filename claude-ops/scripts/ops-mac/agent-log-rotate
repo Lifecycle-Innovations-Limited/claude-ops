@@ -89,11 +89,23 @@ def discover() -> list[tuple[str, str]]:
             except Exception as exc:
                 print(f"agent-log-rotate: cannot parse {path}: {exc}", file=sys.stderr)
                 continue
+            # A valid plist can still carry wrongly typed fields. Skip and
+            # report the malformed entry; one bad file never aborts the scan.
             label = pl.get("Label", n[:-6])
+            if not isinstance(label, str):
+                print(f"agent-log-rotate: skipping {path}: Label is "
+                      f"{type(label).__name__}, not a string", file=sys.stderr)
+                continue
             if label.startswith(("com.apple.", "org.")):
                 continue
             for key in ("StandardOutPath", "StandardErrorPath"):
                 p = pl.get(key)
+                if p is None:
+                    continue
+                if not isinstance(p, str):
+                    print(f"agent-log-rotate: skipping {key} in {path}: "
+                          f"{type(p).__name__}, not a string", file=sys.stderr)
+                    continue
                 if not p or p == "/dev/null" or p in seen:
                     continue
                 seen.add(p)
