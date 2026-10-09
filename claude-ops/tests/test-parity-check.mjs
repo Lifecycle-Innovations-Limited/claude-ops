@@ -113,14 +113,30 @@ function rec(report, host) {
   return report.records.find((r) => r.target === host);
 }
 
+// Open first, then fstat the descriptor, so the hash belongs to the inode that
+// was stat'ed. O_NOFOLLOW turns a symlink into ELOOP, read as a link instead.
+function statAndHash(p) {
+  let fd;
+  try {
+    fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } catch (e) {
+    if (e.code !== 'ELOOP') throw e;
+    return { st: fs.lstatSync(p), extra: fs.readlinkSync(p) };
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    const extra = st.isFile() ? crypto.createHash('sha256').update(fs.readFileSync(fd)).digest('hex') : '';
+    return { st, extra };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 // Full snapshot: every path with lstat type, size, mtime, link text, content hash.
 function snapshot(root) {
   const out = [];
   const walk = (p) => {
-    const st = fs.lstatSync(p);
-    let extra = '';
-    if (st.isSymbolicLink()) extra = fs.readlinkSync(p);
-    else if (st.isFile()) extra = crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+    const { st, extra } = statAndHash(p);
     out.push(`${path.relative(root, p)}|${st.mode}|${st.size}|${st.mtimeMs}|${extra}`);
     if (st.isDirectory()) for (const c of fs.readdirSync(p).sort()) walk(path.join(p, c));
   };
@@ -149,12 +165,16 @@ process.stdout.write('=== parity check core ===\n');
 {
   const w = makeWorld();
   const f = path.join(w.t.grok, 'skills', 'ops-a', 'SKILL.md');
-  fs.utimesSync(f, 1700000000, 1700000000);
-  const st = fs.statSync(f);
-  const orig = fs.readFileSync(f, 'utf8');
-  fs.writeFileSync(f, orig.replace('alpha', 'ALPHA'));
-  fs.utimesSync(f, 1700000000, 1700000000);
-  const st2 = fs.statSync(f);
+  // One descriptor for stat, read and rewrite, so all three see the same file.
+  const fd = fs.openSync(f, 'r+');
+  fs.futimesSync(fd, 1700000000, 1700000000);
+  const st = fs.fstatSync(fd);
+  const next = Buffer.from(fs.readFileSync(fd, 'utf8').replace('alpha', 'ALPHA'));
+  fs.ftruncateSync(fd, 0);
+  fs.writeSync(fd, next, 0, next.length, 0);
+  fs.futimesSync(fd, 1700000000, 1700000000);
+  const st2 = fs.fstatSync(fd);
+  fs.closeSync(fd);
   const r = run(w);
   ok(st2.size === st.size && st2.mtimeMs === st.mtimeMs, 'fixture keeps size and mtime equal');
   ok(

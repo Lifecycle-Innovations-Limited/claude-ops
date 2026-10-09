@@ -63,18 +63,31 @@ function assert(cond, msg, detail) {
 
 function snapshot(root) {
   const out = [];
-  const walk = (p) => {
-    let st;
+  // Open first, then fstat the descriptor, so the hash belongs to the inode that
+  // was stat'ed. O_NOFOLLOW turns a symlink into ELOOP, read as a link instead.
+  const statAndHash = (p) => {
+    let fd;
     try {
-      st = fs.lstatSync(p);
-    } catch (_e) {
-      return;
+      fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    } catch (e) {
+      if (e.code === "ENOENT") return null;
+      if (e.code !== "ELOOP") throw e;
+      return { st: fs.lstatSync(p), extra: fs.readlinkSync(p) };
     }
-    const extra = st.isSymbolicLink()
-      ? fs.readlinkSync(p)
-      : st.isFile()
-        ? crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex")
+    try {
+      const st = fs.fstatSync(fd);
+      const extra = st.isFile()
+        ? crypto.createHash("sha256").update(fs.readFileSync(fd)).digest("hex")
         : "";
+      return { st, extra };
+    } finally {
+      fs.closeSync(fd);
+    }
+  };
+  const walk = (p) => {
+    const got = statAndHash(p);
+    if (!got) return;
+    const { st, extra } = got;
     out.push(`${path.relative(root, p)}|${st.size}|${st.mtimeMs}|${extra}`);
     if (st.isDirectory())
       for (const c of fs.readdirSync(p).sort()) walk(path.join(p, c));

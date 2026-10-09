@@ -189,8 +189,16 @@ export function gitTop(start, maxUp = 2) {
 export function gitHead(top) {
   try {
     let gitDir = path.join(top, '.git');
-    if (fs.statSync(gitDir).isFile()) {
-      const m = /gitdir:\s*(.+)/.exec(fs.readFileSync(gitDir, 'utf8'));
+    // Read first and let EISDIR mark a normal checkout: a stat-then-read pair
+    // can see a different file than the one it checked.
+    let gitFile = null;
+    try {
+      gitFile = fs.readFileSync(gitDir, 'utf8');
+    } catch (e) {
+      if (e.code !== 'EISDIR') throw e;
+    }
+    if (gitFile !== null) {
+      const m = /gitdir:\s*(.+)/.exec(gitFile);
       if (!m) return null;
       gitDir = path.resolve(top, m[1].trim());
     }
