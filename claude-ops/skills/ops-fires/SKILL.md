@@ -354,3 +354,7 @@ ledger write \
   --title "Fire: <issue title>" \
   --context "fixed: <brief resolution> | escalated: <reason>"
 ```
+
+## Appendix: merged from the other machine
+
+If `in_progress` or `done` exists, skip the issue. If `awaiting_user` exists, surface

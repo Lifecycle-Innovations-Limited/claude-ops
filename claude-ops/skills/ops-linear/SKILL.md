@@ -200,3 +200,7 @@ ledger write \
   --title "Linear: <identifier> — <title>" \
   --context "status→<new_state> | assignee→<assignee>"
 ```
+
+## Appendix: merged from the other machine
+
+acted on this issue. Surface `awaiting_user` entries as "update already staged."

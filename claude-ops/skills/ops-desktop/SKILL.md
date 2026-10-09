@@ -203,3 +203,7 @@ On non-Linux platforms, prefer Kapture (`mcp__kapture__*`) or Playwright for bro
 ## $ARGUMENTS
 
 $ARGUMENTS
+
+## Appendix: merged from the other machine
+
+/ops:desktop launch Firefox and navigate to https://example.com

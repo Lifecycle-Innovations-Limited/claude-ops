@@ -494,3 +494,7 @@ ledger write \
 ## Additional resources
 
 CLI detail: `references/cli.md`.
+
+## Appendix: merged from the other machine
+
+`awaiting_user` entries as "draft already staged — resend or edit?"

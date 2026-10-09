@@ -588,3 +588,7 @@ A rule enforced from a file someone else overwrites is not enforced.
   the work.
 - **A guard, hook, or test you rely on gets re-verified after any update that
   could touch it.** "It passed when I wrote it" is not a current fact.
+
+## Appendix: merged from the other machine
+
+`pre-tool-dispatcher.py`) hard-blocks `whatsapp_unread`,
