@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Login once: enforce SSOT agents; remove recreations that hurt cold boot.
+set -euo pipefail
+export PATH="/opt/homebrew/bin:$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+LOG_DIR="${HOME}/.local/share/agent-logs"
+mkdir -p "$LOG_DIR" "${HOME}/.config/hypertune/disabled-launchagents"
+LOG="${LOG_DIR}/hypertune-guard.log"
+ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+log() { echo "$(ts) $*" >>"$LOG"; }
+UID_NUM="$(id -u)"
+GUI="gui/${UID_NUM}"
+ARCH="${HOME}/.config/hypertune/disabled-launchagents"
+LA="${HOME}/Library/LaunchAgents"
+
+# Only operator-owned local policy may name machine-specific jobs.
+POLICY="${OPS_MAC_POLICY:-$HOME/.config/claude-ops/ops-mac-policy.sh}"
+[ -r "$POLICY" ] || { echo "mac-hypertune-guard: local policy required" >&2; exit 2; }
+NEVER_AUTO=()
+KEEP_LABEL=""
+MESH_LABEL=""
+source "$POLICY"
+
+failed=0
+for bad in ${NEVER_AUTO[@]+"${NEVER_AUTO[@]}"}; do
+  # FAIL CLOSED: a loaded job must be booted out, disabled and verified absent
+  # before its plist is archived. Otherwise keep the plist for a clean retry.
+  unloaded=1
+  if launchctl print "${GUI}/${bad}" >/dev/null 2>&1; then
+    launchctl bootout "${GUI}/${bad}" 2>/dev/null || unloaded=0
+    launchctl disable "${GUI}/${bad}" 2>/dev/null || unloaded=0
+    if launchctl print "${GUI}/${bad}" >/dev/null 2>&1; then unloaded=0; fi
+    if [ "$unloaded" = 1 ]; then
+      log "booted out $bad (verified)"
+    else
+      log "ERROR $bad NOT booted out or disabled; plist preserved"
+      printf 'mac-hypertune-guard: bootout of %s unverified; plist preserved\n' "$bad" >&2
+      failed=1
+    fi
+  fi
+  f="${LA}/${bad}.plist"
+  if [ "$unloaded" = 1 ] && [ -f "$f" ]; then
+    if mv "$f" "${ARCH}/${bad}.plist.$(date -u +%Y%m%dT%H%M%SZ)"; then
+      log "archived ${bad}.plist (forbidden auto agent)"
+    else
+      log "ERROR archive failed for $bad; original preserved"
+      printf 'mac-hypertune-guard: archive failed; original preserved\n' >&2
+      failed=1
+    fi
+  fi
+done
+
+# Mesh: keep but enforce deferred policy (no RunAtLoad, interval >= 600)
+MESH="${LA}/${MESH_LABEL}.plist"
+if [ -f "$MESH" ]; then
+  run=$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$MESH" 2>/dev/null || echo missing)
+  iv=$(/usr/libexec/PlistBuddy -c 'Print :StartInterval' "$MESH" 2>/dev/null || echo missing)
+  # FAIL CLOSED: only an explicit RunAtLoad=false and an integer interval of at
+  # least 600 are compliant. Missing, malformed or other values get repaired.
+  need=1
+  if [ "$run" = "false" ] && [[ "$iv" =~ ^[0-9]+$ ]] && [ "$iv" -ge 600 ]; then need=0; fi
+  if [ "$need" -eq 1 ]; then
+    # Every mutation is checked and the result read back. Only a verified
+    # result is logged as enforced; anything else marks the run failed.
+    mesh_ok=1
+    # Bootout of an unloaded job is not a failure; a loaded job must be gone after it.
+    launchctl bootout "${GUI}/${MESH_LABEL}" 2>/dev/null || true
+    if launchctl print "${GUI}/${MESH_LABEL}" >/dev/null 2>&1; then mesh_ok=0; fi
+    if [ "$mesh_ok" = 1 ]; then
+      # Delete then Add rewrites a malformed or wrongly typed value with the
+      # correct type; Delete of an absent key is not an error worth stopping on.
+      /usr/libexec/PlistBuddy -c 'Delete :RunAtLoad' "$MESH" >/dev/null 2>&1 || true
+      /usr/libexec/PlistBuddy -c 'Add :RunAtLoad bool false' "$MESH" 2>/dev/null || mesh_ok=0
+      if ! [[ "$iv" =~ ^[0-9]+$ ]] || [ "$iv" -lt 600 ]; then
+        /usr/libexec/PlistBuddy -c 'Delete :StartInterval' "$MESH" >/dev/null 2>&1 || true
+        /usr/libexec/PlistBuddy -c 'Add :StartInterval integer 600' "$MESH" 2>/dev/null || mesh_ok=0
+      fi
+      run=$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$MESH" 2>/dev/null || echo unknown)
+      iv=$(/usr/libexec/PlistBuddy -c 'Print :StartInterval' "$MESH" 2>/dev/null || echo missing)
+      [ "$run" = "false" ] || mesh_ok=0
+      { [[ "$iv" =~ ^[0-9]+$ ]] && [ "$iv" -ge 600 ]; } || mesh_ok=0
+    fi
+    if [ "$mesh_ok" = 1 ]; then
+      launchctl bootstrap "$GUI" "$MESH" 2>/dev/null || mesh_ok=0
+      launchctl print "${GUI}/${MESH_LABEL}" >/dev/null 2>&1 || mesh_ok=0
+    fi
+    if [ "$mesh_ok" = 1 ]; then
+      log "mesh policy enforced RunAtLoad=false StartInterval=$iv (verified)"
+    else
+      log "ERROR mesh policy NOT enforced; plist or launchd result unverified"
+      printf 'mac-hypertune-guard: mesh policy not enforced\n' >&2
+      failed=1
+    fi
+  fi
+fi
+
+# Keepawake SSOT only
+KEEP="${LA}/${KEEP_LABEL}.plist"
+if [ -f "$KEEP" ]; then
+  if ! launchctl print "${GUI}/${KEEP_LABEL}" >/dev/null 2>&1; then
+    if launchctl bootstrap "$GUI" "$KEEP" 2>/dev/null &&
+       launchctl print "${GUI}/${KEEP_LABEL}" >/dev/null 2>&1; then
+      log "bootstrapped keepawake SSOT (verified)"
+    else
+      log "ERROR keepawake SSOT bootstrap unverified"
+      failed=1
+    fi
+  fi
+fi
+# Extra caffeinate processes can belong to active agents/evals. Count is not
+# ownership or a health check: never stop them or restart our healthy job.
+if matches=$(pgrep -x caffeinate 2>/dev/null); then
+  n=$(printf '%s\n' "$matches" | wc -l | tr -d ' ')
+  if [ "$n" -gt 1 ]; then
+    log "INFO multiple caffeinate ($n); unrelated sleep protection preserved"
+  fi
+else
+  rc=$?
+  if [ "$rc" -ne 1 ]; then
+    log "ERROR pgrep failed rc=$rc"
+    failed=1
+  fi
+fi
+
+wired="$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo missing)"
+mem="$(orbctl config get memory_mib 2>/dev/null || echo n/a)"
+if [ "$failed" = 0 ]; then
+  log "guard ok wired=$wired orb_mem=$mem keepawake=owned mesh=deferred"
+else
+  log "guard failed wired=$wired orb_mem=$mem; see earlier errors"
+fi
+exit "$failed"
