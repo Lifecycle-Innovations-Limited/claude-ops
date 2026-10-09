@@ -2,12 +2,15 @@
 
 ## Unreleased
 
-### Changed
-- PreToolUse(Skill) `ops-pretool-skill-update` and PostToolUse `ops-task-reminder` now run async, so neither holds up the tool call it observes.
+## [3.10.29] - 2026-10-09
 
 ### Fixed
-- `ops-task-reminder` takes a per-session exclusive lock (flock, or a portable mkdir lock where flock is missing) around its counter update, so overlapping async runs no longer lose counts. Fails open after ~2s.
-- `ops-task-reminder` now also fires on `TaskCreate|TaskUpdate|TaskList|TaskGet`, so its documented counter reset on Task* tools is reachable; previously the `Bash|Edit|Write` matcher never delivered a Task* event and the reminder could fire right after a task update.
+- `ops-speedup --clean` stays under 60s: the cleanup no longer runs the slow macOS login-items query (#1035, #1036).
+- `ops-inbox` shows validated drafts as soon as each one is ready instead of after the whole scan (#1031).
+
+### Changed
+- Hooks `ops-pretool-skill-update` and `ops-task-reminder` run async; the reminder takes a per-session lock so concurrent runs no longer lose counts, and it now also resets on Task* tools (#1032).
+
 
 ## [3.10.28] - 2026-10-04
 
