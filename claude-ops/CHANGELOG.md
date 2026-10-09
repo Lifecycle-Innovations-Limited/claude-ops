@@ -5,7 +5,7 @@
 ## [3.10.29] - 2026-10-09
 
 ### Fixed
-- `ops-speedup --clean` stays under 60s: the cleanup no longer runs the slow macOS login-items query (#1035, #1036).
+- `ops-speedup --clean` stays under 60s: on macOS it skips the slow login-items query (#1036); on Linux it skips the unused disk-reclaim scan and keeps the page cache unless `--aggressive` is set (#1035).
 - `ops-inbox` shows validated drafts as soon as each one is ready instead of after the whole scan (#1031).
 
 ### Changed
