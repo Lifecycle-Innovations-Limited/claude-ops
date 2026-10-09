@@ -15,6 +15,13 @@ fail() {
 	exit 1
 }
 
+# GNU and BSD stat differ; failed probes must not leak stdout into the inode.
+file_inode() {
+	local inode
+	inode=$(stat -c %i "$1" 2>/dev/null) || inode=$(stat -f %i "$1") || return 1
+	printf '%s\n' "$inode"
+}
+
 # $1 = label, $2 = "rsync" | "nossync"
 run_case() {
 	local label="$1" mode="$2"
@@ -69,7 +76,7 @@ run_case() {
 JSON
 	chmod 600 "$installed"
 	local inode_before
-	inode_before="$(stat -c %i "$installed")"
+	inode_before="$(file_inode "$installed")"
 
 	local path_override="$PATH"
 	if [[ "$mode" == "nossync" ]]; then
@@ -124,7 +131,7 @@ PY
 	# 4. the rewrite swapped a new file in rather than truncating in place.
 	#    os.replace() always lands a fresh inode; open(path, "w") reuses it.
 	local inode_after
-	inode_after="$(stat -c %i "$installed")"
+	inode_after="$(file_inode "$installed")"
 	[[ "$inode_before" != "$inode_after" ]] ||
 		fail "$label: installed_plugins.json rewritten in place (inode $inode_after unchanged) — not an atomic replace"
 

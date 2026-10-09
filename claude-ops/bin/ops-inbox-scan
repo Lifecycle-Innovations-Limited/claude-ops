@@ -289,19 +289,41 @@ BRIDGE_API="http://127.0.0.1:${BRIDGE_PORT}"
 # remote sqlite read-only into a temp file and classify it exactly like a local
 # store. Only when that genuinely fails do we fall back to the remote-only note.
 WA_REMOTE_PULLED=0
+# One cleanup owner for every temporary path in this process. Later sections add
+# to this list instead of replacing the EXIT trap, so a pulled snapshot cannot
+# be orphaned by an unrelated trap registration.
+OIS_CLEANUP_PATHS=()
+ois_cleanup() {
+  local _p
+  for _p in ${OIS_CLEANUP_PATHS[@]+"${OIS_CLEANUP_PATHS[@]}"}; do
+    [ -n "$_p" ] && rm -rf -- "$_p" 2>/dev/null || true
+  done
+}
+trap ois_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if [ "$DO_WA" = 1 ] && [ ! -f "$WA_MSGDB" ]; then
   _rs="${OIS_REMOTE_STORE:-$WA_MSGDB}"
   for _host in "${OIS_SSH:-}" "${OIS_SSH_FALLBACK:-}"; do
     [ -n "$_host" ] || continue
     _tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/ois-wa.XXXXXX")"
+    OIS_CLEANUP_PATHS+=("$_tmpdir")
+    # Each account/run gets its own remote directory. A fixed shared path let
+    # concurrent account pulls overwrite or delete one another's snapshot.
+    _rdir="$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$_host" \
+      "mktemp -d /tmp/ois-snap.XXXXXX" 2>/dev/null | tail -1 | tr -d '\r')" || _rdir=""
+    if [[ ! "$_rdir" =~ ^/tmp/ois-snap\.[A-Za-z0-9]+$ ]]; then
+      rm -rf -- "$_tmpdir"
+      continue
+    fi
     # VACUUM INTO is the only safe way to copy a live sqlite db: it takes a
     # consistent snapshot without a writer lock and never risks the WAL. A plain
     # `scp` of a hot db can copy a torn page set.
     if ssh -o BatchMode=yes -o ConnectTimeout=8 "$_host" \
-         "rm -f /tmp/ois-snap.db && sqlite3 'file:${_rs}?mode=ro' \"VACUUM INTO '/tmp/ois-snap.db'\"" \
+         "sqlite3 'file:${_rs}?mode=ro' \"VACUUM INTO '${_rdir}/messages.db'\"" \
          >/dev/null 2>&1 &&
-       scp -q -o BatchMode=yes -o ConnectTimeout=8 "$_host:/tmp/ois-snap.db" "$_tmpdir/messages.db" 2>/dev/null; then
-      ssh -o BatchMode=yes -o ConnectTimeout=8 "$_host" "rm -f /tmp/ois-snap.db" >/dev/null 2>&1 || true
+       scp -q -o BatchMode=yes -o ConnectTimeout=8 "$_host:${_rdir}/messages.db" "$_tmpdir/messages.db" 2>/dev/null; then
+      ssh -o BatchMode=yes -o ConnectTimeout=8 "$_host" "rm -rf -- '${_rdir}'" >/dev/null 2>&1 || true
       WA_MSGDB="$_tmpdir/messages.db"
       WA_STORE="$_tmpdir"
       WA_WADB="$_tmpdir/whatsapp.db"   # optional; absent => lid map falls back
@@ -309,7 +331,9 @@ if [ "$DO_WA" = 1 ] && [ ! -f "$WA_MSGDB" ]; then
       WA_ACCOUNT_SOURCE="${WA_ACCOUNT_SOURCE}+ssh:${_host}"
       break
     fi
-    rm -rf "$_tmpdir"
+    # Failed pulls remove only the directory this run created, on both sides.
+    ssh -o BatchMode=yes -o ConnectTimeout=8 "$_host" "rm -rf -- '${_rdir}'" >/dev/null 2>&1 || true
+    rm -rf -- "$_tmpdir"
   done
 fi
 export OIS_WA_REMOTE_PULLED="$WA_REMOTE_PULLED"
@@ -406,7 +430,7 @@ fi
 OIS_SENDLOG_FILE=""
 if [ "$DO_WA" = 1 ]; then
   OIS_SENDLOG_FILE="$(mktemp "${TMPDIR:-/tmp}/ois-sendlog.XXXXXX")"
-  trap 'rm -f "$OIS_SENDLOG_FILE" "${GMAIL_JSON_FILE:-}"' EXIT
+  OIS_CLEANUP_PATHS+=("$OIS_SENDLOG_FILE")
   if command -v journalctl >/dev/null 2>&1; then
     journalctl --user -u whatsapp-bridge.service -o short-unix --no-pager \
       --since "${DAYS} days ago" 2>/dev/null \
@@ -430,7 +454,7 @@ GMAIL_ERR=""
 GMAIL_OK=0
 if [ "$DO_EMAIL" = 1 ]; then
   GMAIL_JSON_FILE="$(mktemp "${TMPDIR:-/tmp}/ois-gmail.XXXXXX")"
-  trap 'rm -f "$GMAIL_JSON_FILE" "${OIS_SENDLOG_FILE:-}"' EXIT
+  OIS_CLEANUP_PATHS+=("$GMAIL_JSON_FILE" "${GMAIL_JSON_FILE}.err")
   # gog rejects a bare call once more than one token is stored, and again when
   # the keyring is locked. Resolve the account and unlock first, so a config
   # problem never reads as an empty inbox.
@@ -488,7 +512,7 @@ if [ "$DO_EMAIL" = 1 ]; then
       >"$GMAIL_DEBT_OUT_FILE" 2>/dev/null || : >"$GMAIL_DEBT_OUT_FILE"
     export OIS_GMAIL_DEBT_IN_FILE="$GMAIL_DEBT_IN_FILE" \
            OIS_GMAIL_DEBT_OUT_FILE="$GMAIL_DEBT_OUT_FILE"
-    trap 'rm -f "$GMAIL_JSON_FILE" "${OIS_SENDLOG_FILE:-}" "${GMAIL_DEBT_IN_FILE:-}" "${GMAIL_DEBT_OUT_FILE:-}"' EXIT
+    OIS_CLEANUP_PATHS+=("$GMAIL_DEBT_IN_FILE" "$GMAIL_DEBT_OUT_FILE")
   fi
 fi
 export OIS_GMAIL_JSON_FILE="$GMAIL_JSON_FILE" OIS_GMAIL_ERR="$GMAIL_ERR" OIS_GMAIL_OK="$GMAIL_OK"
@@ -1497,7 +1521,7 @@ result["notes"].append(
 )
 result["notes"].append(
     "WhatsApp store may lag phone-sent messages; confirm 'did I already reply?' with the human "
-    "for any NEEDS_REPLY before drafting (FULL-THREAD AWARENESS GATE)."
+    "for any NEEDS_REPLY before drafting (ops-inbox details.md, 'Full context per candidate')."
 )
 
 print(json.dumps(result, indent=2 if PRETTY else None, ensure_ascii=False))
