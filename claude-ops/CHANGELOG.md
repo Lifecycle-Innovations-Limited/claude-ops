@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [3.11.0] - 2026-10-09
+
+### Changed
+Release safety, maintenance and inbox fixes from #1033: passive daemon monitoring, timezone-safe AWS audit dates, fail-closed release merge gates (same-head CI, Copilot review, resolved threads), progressive inbox with attachment and archive read-back proofs, and gate-only outbound wording in ops-desk and ops-leadgen.
+
+
 ## [3.10.29] - 2026-10-09
 
 ### Fixed
