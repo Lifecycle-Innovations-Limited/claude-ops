@@ -342,6 +342,89 @@ assert_eq "linux cpu parse sys" "2.0" "$parsed_sys"
 assert_eq "linux cpu parse idle" "91.5" "$parsed_idle"
 assert_true "bin uses robust linux cpu parse" grep -q 'grep -oE .*(us|user)' "$BIN"
 
+# --clean must finish inside a 60s cron budget (fleet-speedup sweep). On a busy
+# Linux host it took 86s: ~43s in the reclaimable-size du scan that --clean never
+# reads, ~30s in drop_caches, which also discards the page cache and causes the
+# IO spike the next health sweep measures. Run the real binary with every
+# side-effecting or slow tool replaced by a logging shim so the test is
+# hermetic: nothing is deleted, reniced, pruned or dropped on the host.
+shimdir="$tmpdir/shims"
+shimlog="$tmpdir/shim-calls.log"
+mkdir -p "$shimdir"
+for tool in sudo du find rm docker pnpm brew renice ionice kill killall sync systemctl journalctl apt-get yum launchctl purge sysctl; do
+  cat > "$shimdir/$tool" <<SHIM
+#!/usr/bin/env bash
+echo "$tool \$*" >> "$shimlog"
+exit 0
+SHIM
+  chmod +x "$shimdir/$tool"
+done
+
+# `kill` is a bash builtin, so a PATH shim never runs. An exported function
+# takes precedence over the builtin in the child bash, keeping --aggressive
+# from signalling real host processes.
+kill() { echo "kill $*" >> "$shimlog"; return 0; }
+export -f kill
+export shimlog
+
+# Canary: a child bash must hit the shim, not the real builtin.
+: > "$shimlog"
+bash -c 'kill -TERM 999999' >/dev/null 2>&1 || true
+assert_true "kill is shimmed in child bash (hermetic --aggressive)" grep -q '^kill -TERM 999999' "$shimlog"
+
+run_with_shims() {
+  : > "$shimlog"
+  PATH="$shimdir:$PATH" "$BIN" "$@" > "$tmpdir/shim-run.out" 2> "$tmpdir/shim-run.err"
+}
+
+SECONDS=0
+if run_with_shims --clean; then pass "--clean exits 0 with shimmed tools"; else fail "--clean exits 0 with shimmed tools"; fi
+assert_true "--clean finishes under the 60s cron budget" test "$SECONDS" -lt 60
+assert_true "--clean does not run the du reclaimable-size scan" bash -c "! grep -q '^du ' '$shimlog'"
+assert_true "--clean never writes drop_caches" bash -c "! grep -q 'drop_caches' '$shimlog'"
+# macOS purge is not asserted here: that branch is unchanged and still runs
+# under --clean when memory pressure is high, so the result depends on the host.
+
+# The size scan must stay available where it is read: --json reports sizes.
+if run_with_shims --json; then pass "--json exits 0 with shimmed tools"; else fail "--json exits 0 with shimmed tools"; fi
+assert_true "--json still runs the du reclaimable-size scan" grep -q '^du ' "$shimlog"
+assert_true "--json output is valid JSON" "$PY" -c "import json,sys; json.load(open(sys.argv[1]))" "$tmpdir/shim-run.out"
+
+# Only the explicit --aggressive tier may drop the page cache on Linux.
+if [ "$(uname -s)" = "Linux" ] && ! grep -qi microsoft /proc/version 2>/dev/null; then
+  if run_with_shims --aggressive; then pass "--aggressive exits 0 with shimmed tools"; else fail "--aggressive exits 0 with shimmed tools"; fi
+  assert_true "--aggressive still drops caches" grep -q 'drop_caches' "$shimlog"
+fi
+
+# macOS: the System Events login-items query took 66s on a busy Mac and only
+# --json reads its result, so --clean must not run it. Force the Darwin branch
+# with a uname shim; osascript is shimmed so nothing real is queried.
+for tool in osascript; do
+  cat > "$shimdir/$tool" <<SHIM
+#!/usr/bin/env bash
+echo "$tool \$*" >> "$shimlog"
+echo 0
+exit 0
+SHIM
+  chmod +x "$shimdir/$tool"
+done
+cat > "$shimdir/uname" <<'SHIM'
+#!/usr/bin/env bash
+case "${1:-}" in
+  -s) echo Darwin ;;
+  -m|-p) echo arm64 ;;
+  -r) echo 25.0.0 ;;
+  *) echo Darwin ;;
+esac
+SHIM
+chmod +x "$shimdir/uname"
+HOME_BAK="$HOME"; export HOME="$tmpdir/darwin-home"; mkdir -p "$HOME/Library/LaunchAgents"
+if run_with_shims --clean; then pass "--clean exits 0 on forced Darwin"; else fail "--clean exits 0 on forced Darwin"; fi
+assert_true "--clean on macOS skips the login-items osascript query" bash -c "! grep -q 'login items' '$shimlog'"
+if run_with_shims --json; then pass "--json exits 0 on forced Darwin"; else fail "--json exits 0 on forced Darwin"; fi
+assert_true "--json on macOS still queries login items" grep -q 'login items' "$shimlog"
+export HOME="$HOME_BAK"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
