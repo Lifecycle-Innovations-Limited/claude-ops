@@ -99,8 +99,11 @@ run_sync() {
   env -i PATH="$BASE_PATH" HOME="$home" ${HH:+HERMES_HOME="$HH"} ${FAULT:+OPS_SYNC_FAULT="$FAULT"} \
     bash "$SYNC" "$@" 2>&1
 }
+# Name, size, mtime, mode, link target. GNU stat reads -f as "filesystem", whose
+# free-block counts move with every write, so pick the format by stat flavour.
+if stat -c '%n' . >/dev/null 2>&1; then STAT_FMT=(-c '%n %s %Y %f %N'); else STAT_FMT=(-f '%N %z %m %p %Y'); fi
 snapshot() {
-  (cd "$1" && find . -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 stat -f '%N %z %m %p %Y' 2>/dev/null)
+  (cd "$1" && find . -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 stat "${STAT_FMT[@]}" 2>/dev/null)
 }
 ver() { grep -m1 version "$1" 2>/dev/null; }
 # Legacy (pre-manifest) Hermes copy at version 1.0.0, same file length as 9.9.9.

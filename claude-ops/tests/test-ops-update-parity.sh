@@ -40,7 +40,9 @@ tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/ops-update-parity.XXXXXX")"
 trap 'rm -rf "$tmpdir"' EXIT
 git_quiet() { git -c init.defaultBranch=main -c user.email=ops-test -c user.name=t "$@" >/dev/null 2>&1; }
 
-snapshot() { (cd "$1" && find . -print0 | LC_ALL=C sort -z | xargs -0 stat -f '%N %z %m %Y'); }
+# GNU stat reads -f as "filesystem" (free blocks move with every write); pick by flavour.
+if stat -c '%n' . >/dev/null 2>&1; then STAT_FMT=(-c '%n %s %Y %N'); else STAT_FMT=(-f '%N %z %m %Y'); fi
+snapshot() { (cd "$1" && find . -print0 | LC_ALL=C sort -z | xargs -0 stat "${STAT_FMT[@]}"); }
 
 # ── 1. --check: read-only, no pull, no claude needed ──────────────────────────
 b="$tmpdir/check"
