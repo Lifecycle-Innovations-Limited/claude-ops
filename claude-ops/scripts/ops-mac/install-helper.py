@@ -120,6 +120,8 @@ def main():
         if args.expected_sha256 == "absent":
             if args.target.exists() or args.target.is_symlink():
                 parser.error("destination already exists")
+        elif not args.target.is_file() or args.target.is_symlink():
+            parser.error("destination must be an existing plain file")
         elif digest(args.target) != args.expected_sha256:
             parser.error("destination bytes changed")
         print("verified; dry-run only, no files installed")

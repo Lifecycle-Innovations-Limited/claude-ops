@@ -168,6 +168,18 @@ class InstallerTests(unittest.TestCase):
                     installer.install(source, target, installer.digest(target))
             self.assertEqual(target.read_bytes(), b'old')
 
+    def test_dry_run_missing_target_is_user_friendly_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            target = root / 'missing-target'
+            result = subprocess.run(
+                [sys.executable, str(PATH), 'agent-log-rotate',
+                 '--target', str(target), '--expected-sha256', '0' * 64],
+                capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b'destination must be an existing plain file', result.stderr)
+            self.assertNotIn(b'Traceback', result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()
