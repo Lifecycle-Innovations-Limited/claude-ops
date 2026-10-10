@@ -327,6 +327,26 @@ Autonomous multi-project orchestration engine. Audits all registered projects, s
 
 ---
 
+## 🔎 Research
+
+Both commands share one rule set: [`skills/ops-research/references/research-contract.md`](../skills/ops-research/references/research-contract.md) (a byte-identical copy ships with the audit skill). Handbook: [`ops-research.md`](ops-research.md).
+
+### `/ops:ops-research` · `skills/ops-research/SKILL.md`
+
+Answers a question with sourced evidence. Internal evidence first, Context7 (`query-docs`) for library/API/CLI docs, at most two distinct search routes per open question, the read original passage and URL per claim, and the engine plus cost status (`unknown` when not known).
+
+- `/ops:ops-research how does library X configure retries in v5?`
+- `/ops:ops-research what is the current best practice for Y?`
+
+### `/ops:ops-research-audit` · `skills/ops-research-audit/SKILL.md`
+
+Read-only audit of the research/search tooling this CLI offers: discovery/configuration, one harmless read call per tool, and official best-practice evidence, reported separately. Never installs, changes config, sends anything or restarts services.
+
+- `/ops:ops-research-audit` — all offered research/search tools
+- `/ops:ops-research-audit context7` — one tool or server
+
+---
+
 ## 🔧 Setup & Maintenance
 
 ### `/ops:setup` · `skills/setup/SKILL.md`

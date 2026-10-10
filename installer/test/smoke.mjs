@@ -1,9 +1,31 @@
 #!/usr/bin/env node
 // Smoke test: verifies the installer's core invariants without touching the user's box.
+//
+// It re-runs itself with HOME pointed at a throwaway dir first. CACHE_ROOT and
+// the manifest path resolve from os.homedir() at import time, and this test
+// calls saveManifest(): without the re-exec, `npm test` overwrote the real
+// ~/.cache/claude-ops-installer/manifest.json with scratch entries.
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+if (!process.env.OPS_INSTALLER_TEST_ISOLATED) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "installer-smoke-home-"));
+  const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_STATE_HOME: path.join(home, ".local", "state"),
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+      OPS_INSTALLER_TEST_ISOLATED: "1",
+    },
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+  process.exit(r.status ?? 1);
+}
 import { loadConfig } from "../src/config.mjs";
 import { listSourceSkills, listSourceBin } from "../src/source.mjs";
 import { planBinLinks, applyBinLinks } from "../src/bin.mjs";
@@ -76,7 +98,9 @@ try {
     `bin planned ${binPlan.planned.length}/${bins.length}`,
   );
 
-  // Apply both
+  // Apply both. planMirror is pure (it no longer creates the target dir), so
+  // this manual apply creates it the way applyActions does.
+  fs.mkdirSync(path.join(scratch, "skills"), { recursive: true });
   const manifest = newManifest();
   const skillResults = [];
   for (const a of mirror.actions) {
@@ -159,9 +183,12 @@ try {
       installPlan.agents.openclaw.reason === "not detected",
     "undetected agent is skipped during install planning",
   );
+  // Contract change (approved skill-parity plan): a dry-run plan must not
+  // create anything. This used to assert the opposite — planMirror ran
+  // mkdirSync even under --dry-run.
   assert(
-    fs.existsSync(detectedPath),
-    "detected agent target directory is prepared",
+    !fs.existsSync(detectedPath),
+    "dry-run planning does not create the detected agent's target directory",
   );
   assert(
     !fs.existsSync(undetectedPath),

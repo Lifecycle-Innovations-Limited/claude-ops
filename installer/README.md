@@ -9,26 +9,52 @@ npm install
 node bin/claude-ops-installer.mjs install
 ```
 
+## Check first: is every CLI on the same skills? (read-only)
+
+On a machine that already has OPS installed, this answers in one command whether
+Claude Code, Codex, Grok, Cursor and Hermes load byte-identical OPS skills. It
+writes, fetches and locks nothing.
+
+```bash
+node bin/claude-ops-installer.mjs check --source claude-installed
+```
+
+`--source claude-installed` uses the release Claude Code has installed as the
+reference. To compare against a tagged release instead, fetch it into the
+installer cache first (the only step that downloads), then check:
+
+```bash
+node bin/claude-ops-installer.mjs fetch --ref v3.10.28
+node bin/claude-ops-installer.mjs check --ref v3.10.28
+```
+
+`check --source <dir>` needs no npm dependencies. The other subcommands need
+`npm install`; without it they stop with an environment error (exit 5), not a
+drift or auth error. Statuses, every exit code and the fix for each case are in
+the plugin's `docs/skill-parity.md`.
+
 ## What it does
 
 Reads the canonical source (`Lifecycle-Innovations-Limited/claude-ops` at a pinned ref) and mirrors skills + scripts + binstubs into each detected agent's expected layout. One central config governs all agents. Re-run any time to refresh after an upstream release.
 
 ## Supported agents (day-1)
 
-| Agent | Strategy | Default path |
-|---|---|---|
+| Agent       | Strategy                                  | Default path                                           |
+| ----------- | ----------------------------------------- | ------------------------------------------------------ |
 | Claude Code | Marketplace install (or symlink fallback) | `~/.claude/plugins/cache/ops-marketplace/ops/current/` |
-| Codex | Flat `ln -s` | `~/.codex/skills` |
-| Gemini CLI | Flat `ln -s` | `~/.gemini/skills` |
-| OpenClaw | Flat `ln -s` | `~/.openclaw/skills` |
-| Hermes | Hybrid skills + native plugin | `~/.hermes/skills` and `~/.hermes/plugins/ops` |
-| OpenCode | Flat `ln -s` | `~/.config/opencode/skills` |
+| Codex       | Flat `ln -s`                              | `~/.codex/skills`                                      |
+| Gemini CLI  | Flat `ln -s`                              | `~/.gemini/skills`                                     |
+| OpenClaw    | Flat `ln -s`                              | `~/.openclaw/skills`                                   |
+| Hermes      | Hybrid skills + native plugin             | `~/.hermes/skills` and `~/.hermes/plugins/ops`         |
+| OpenCode    | Flat `ln -s`                              | `~/.config/opencode/skills`                            |
 
 Binstubs from upstream `bin/` are symlinked into `~/bin/` (or `$CLAUDE_OPS_BIN_DIR`).
 
 ## Subcommands
 
 ```
+claude-ops-installer check        [--source <dir>|claude-installed] [--ref <ref>] [--host a,b] [--require a,b] [--paths] [--json]
+claude-ops-installer fetch        [--ref <ref>]
 claude-ops-installer install      [--ref <ref>] [--agents a,b,c] [--dry-run] [--force]
 claude-ops-installer update       [--ref <ref>] [--agents a,b,c]
 claude-ops-installer verify       [--agents a,b,c]
@@ -38,12 +64,23 @@ claude-ops-installer agents
 claude-ops-installer --help
 ```
 
-| Flag | Effect |
-|---|---|
-| `--ref <ref>` | Git ref: tag, branch, or sha. Default from config. |
-| `--agents a,b,c` | Limit which agents get touched. Default: all enabled. |
-| `--dry-run` | Print the planned actions, change nothing. |
-| `--force` | Overwrite a real file/dir at the target with a symlink. Refuses by default. |
+| Flag             | Effect                                                                                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--ref <ref>`    | Git ref: tag, branch, or sha. Default from config.                                                                                                          |
+| `--agents a,b,c` | Limit which agents get touched. Default: all enabled.                                                                                                       |
+| `--dry-run`      | Print the planned actions, change nothing.                                                                                                                  |
+| `--force`        | Kept for compatibility. A real file/dir at a target is never deleted: it is reported as `OWNERSHIP_CONFLICT`. The installer only replaces symlinks it owns. |
+| `--source <dir>` | `check` only: reference plugin root, or `claude-installed`.                                                                                                 |
+| `--host a,b`     | `check` only: diagnostic selection. Required hosts left out report `NOT_CHECKED`.                                                                           |
+| `--require a,b`  | `check` only: required hosts. Default: `required` in `~/.config/claude-ops/parity.json`, else none.                                                         |
+| `--offline`      | `check` only: skip the read-only `git ls-remote` that reports a stale cache.                                                                                |
+
+`verify`, `doctor` and `check` never fetch or create the cache. `install`,
+`update` and `fetch` are the only subcommands that download, and they key the
+cache by the resolved commit SHA, so a cache for a moving ref is reported as
+`STALE_SOURCE` instead of passing silently. A failed fetch keeps the existing
+cache and names the error class. One writer per target root: a second run gets
+`LOCKED` (exit 6).
 | `--json` | Emit machine-readable JSON instead of human text. |
 
 ## Central config
@@ -59,16 +96,22 @@ source:
   ref: v3.11.0
 
 agents:
-  claude:    { enabled: true }
-  codex:     { enabled: true,  path: ~/.codex/skills }
-  gemini:    { enabled: true,  path: ~/.gemini/skills }
-  openclaw:  { enabled: true,  path: ~/.openclaw/skills }
-  hermes:    { enabled: true,  flat: ~/.hermes/skills, nested: ~/.hermes/skills/ops, plugin: ~/.hermes/plugins/ops }
-  opencode:  { enabled: false, path: ~/.config/opencode/skills }
+  claude: { enabled: true }
+  codex: { enabled: true, path: ~/.codex/skills }
+  gemini: { enabled: true, path: ~/.gemini/skills }
+  openclaw: { enabled: true, path: ~/.openclaw/skills }
+  hermes:
+    {
+      enabled: true,
+      flat: ~/.hermes/skills,
+      nested: ~/.hermes/skills/ops,
+      plugin: ~/.hermes/plugins/ops,
+    }
+  opencode: { enabled: false, path: ~/.config/opencode/skills }
 
 bin:
   path: ~/bin
-  strategy: symlink    # or copy
+  strategy: symlink # or copy
 ```
 
 Override per call: `--agents codex,hermes` ignores the config's `enabled` flag for this invocation.
@@ -87,13 +130,22 @@ All user-specific data lives in the central config file, which is gitignored by 
 
 ## Exit codes
 
-| Code | Meaning |
-|---|---|
-| 0 | All actions succeeded |
-| 1 | One or more non-fatal errors (verify/doctor found drift, install skipped some targets) |
-| 2 | Source could not be fetched |
-| 3 | Central config invalid |
-| 4 | No agents enabled / no agents detected |
+One table for the installer, `sync-companion-clis.sh` and the parity check
+(`claude-ops/lib/parity/status.json`; a test fails if this table drifts from it):
+
+| Code | Class         | Meaning                                                                                        |
+| ---- | ------------- | ---------------------------------------------------------------------------------------------- |
+| 0    | `clean`       | Everything matched or applied and verified                                                     |
+| 1    | `drift`       | Bytes differ, or a target points at a developer checkout                                       |
+| 2    | `gap`         | A required target or the reference is missing, stale or unverifiable                           |
+| 3    | `partial`     | Some targets applied, others failed or were refused; the failed ones kept their previous state |
+| 4    | `usage`       | Bad arguments, or no agents enabled                                                            |
+| 5    | `environment` | Missing dependency, invalid config, unexpected runtime error                                   |
+| 6    | `locked`      | Another OPS run holds the target lock                                                          |
+
+Earlier versions documented 2 = fetch failed and 3 = config invalid; neither
+was ever returned (both failures exited 1). 4 for "no agents enabled" is
+unchanged.
 
 ## License
 

@@ -1,4 +1,9 @@
-// mirror.mjs — apply the actual symlink plan. Errors as data; no silent swallowing.
+// mirror.mjs — plan and apply the skill symlinks. Errors as data.
+//
+// planMirror is pure: it never creates the target dir (a dry run used to
+// mkdir it). The installer only ever owns SYMLINKS it created; a real file or
+// directory at a target path belongs to someone else, so it is reported as
+// OWNERSHIP_CONFLICT and never removed — not even with --force.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -15,7 +20,6 @@ export function planMirror({
   // Returns: { actions: [{op: 'symlink'|'skip'|'refuse'|'error', skill, from, to, reason?}], errors: [] }
   const actions = [];
   const errors = [];
-  fs.mkdirSync(targetDir, { recursive: true });
 
   for (const name of skillNames) {
     const from = path.join(srcDir, "skills", name);
@@ -67,28 +71,23 @@ export function planMirror({
         continue;
       }
       if (existing.isDirectory() || existing.isFile()) {
-        if (!force) {
-          actions.push({
-            op: "refuse",
-            skill: name,
-            from,
-            to,
-            reason: "target is a real file/dir; pass --force to overwrite",
-          });
-          errors.push({
-            agent: targetDir,
-            path: to,
-            op: "symlink",
-            error: "target is real (refused without --force)",
-          });
-          continue;
-        }
         actions.push({
-          op: "symlink",
+          op: "refuse",
           skill: name,
           from,
           to,
-          reason: "overwrite real file/dir (--force)",
+          status_code: "OWNERSHIP_CONFLICT",
+          reason: force
+            ? "target is a real file/dir not created by the installer; --force never deletes it (OWNERSHIP_CONFLICT)"
+            : "target is a real file/dir not created by the installer (OWNERSHIP_CONFLICT)",
+        });
+        errors.push({
+          agent: targetDir,
+          path: to,
+          op: "symlink",
+          status: "OWNERSHIP_CONFLICT",
+          error:
+            "target is real; move it aside yourself if OPS should own this path",
         });
         continue;
       }
@@ -122,17 +121,22 @@ export function applyActions(actions, { dryRun, onApply }) {
       continue;
     }
     try {
-      // Remove existing real file/dir if present and not a symlink.
+      fs.mkdirSync(path.dirname(a.to), { recursive: true });
+      // Only a symlink may be replaced. Anything else appeared after
+      // planning and is not ours: refuse instead of deleting it.
       let st = null;
       try {
         st = fs.lstatSync(a.to);
       } catch (_e) {}
-      if (st) {
-        if (st.isSymbolicLink() || st.isFile())
-          fs.rmSync(a.to, { force: true });
-        else if (st.isDirectory())
-          fs.rmSync(a.to, { recursive: true, force: true });
+      if (st && !st.isSymbolicLink()) {
+        results.push({
+          ...a,
+          status: "refused",
+          status_code: "OWNERSHIP_CONFLICT",
+        });
+        continue;
       }
+      if (st) fs.unlinkSync(a.to);
       fs.symlinkSync(a.from, a.to);
       if (typeof onApply === "function") onApply(a.to, a.from);
       results.push({ ...a, status: "applied" });

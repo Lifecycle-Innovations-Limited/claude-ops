@@ -12,7 +12,20 @@ from __future__ import annotations
 from pathlib import Path
 
 PLUGIN_DIR = Path(__file__).resolve().parent
-SKILLS_DIR = PLUGIN_DIR.parent / "skills"
+
+
+def _skills_dir() -> Path:
+    # A copy install (scripts/sync-companion-clis.sh) ships the skill tree
+    # inside the plugin dir as skills/. A symlinked install resolves into the
+    # plugin root, where skills/ is a sibling. Without the bundled case a copy
+    # install registered 0 ops skills while reporting success.
+    bundled = PLUGIN_DIR / "skills"
+    if bundled.is_dir():
+        return bundled
+    return PLUGIN_DIR.parent / "skills"
+
+
+SKILLS_DIR = _skills_dir()
 RUNTIME_MD = PLUGIN_DIR / "RUNTIME.md"
 
 
