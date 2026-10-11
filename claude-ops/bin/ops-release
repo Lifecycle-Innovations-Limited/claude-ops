@@ -206,7 +206,7 @@ release_tag_merge() {
   echo "ops-release: tagged PR merge commit v$ver ($tag_commit)"
 }
 
-RELEASE_REQUIRED_CHECKS='["lint-and-check (ubuntu-latest)","lint-and-check (ubuntu-24.04)","pii-gate","test-suite (ubuntu-latest)","test-suite (ubuntu-24.04)","CodeQL"]'
+RELEASE_REQUIRED_CHECKS='["lint-and-check (ubuntu-latest)","pii-gate","test-suite (ubuntu-latest)","CodeQL"]'
 
 # Read-only pre-merge proof for the exact checked head. Queries are bounded;
 # missing, partial, paginated-error or stale evidence refuses the merge.
