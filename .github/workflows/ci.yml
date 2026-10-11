@@ -34,10 +34,13 @@ jobs:
   lint-and-check:
     if: always() && (github.event_name != 'pull_request' || needs.optimize-ci.outputs.skip == 'false')
     needs: optimize-ci
+    # ubuntu-latest is ubuntu-24.04. A second matrix leg ran the same
+    # commands on the same image and doubled the Linux bill. The single
+    # element stays so the check name remains "lint-and-check (ubuntu-latest)".
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04]
+        os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -144,7 +147,7 @@ jobs:
     needs: [optimize-ci, lint-and-check]
     strategy:
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04]
+        os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v7
       - name: Install test dependencies
