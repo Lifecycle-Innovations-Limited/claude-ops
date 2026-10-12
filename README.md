@@ -39,7 +39,7 @@ Turn Claude Code into a complete business operating system — infrastructure he
 
 ## What's new in v3.6
 
-**Current: [v3.6.1](https://github.com/Lifecycle-Innovations-Limited/claude-ops/releases/tag/v3.6.1).** One plugin, three harnesses, official skill shape.
+**Current: see the version badge above and the [latest release](https://github.com/Lifecycle-Innovations-Limited/claude-ops/releases/latest).** One plugin, three harnesses, official skill shape.
 
 | | |
 |---|---|
@@ -117,6 +117,18 @@ node bin/claude-ops-installer.mjs install
 ```
 
 One command mirrors upstream skills + binstubs into every detected CLI's expected layout from a single central config (`~/.config/claude-ops-installer/config.yaml`). See [`installer/README.md`](./installer/README.md) for the schema, supported agents, and `verify` / `doctor` / `update` / `uninstall` subcommands.
+
+**Already installed? Check that every CLI loads the same skills (read-only):**
+
+```bash
+ops-update --check
+# or, from a clone without npm dependencies:
+node claude-ops/lib/parity/check.mjs
+```
+
+It compares the bytes Claude Code, Codex, Grok, Cursor and Hermes actually load
+against the installed release and writes, fetches and locks nothing. Every
+status, exit code and fix is in [`claude-ops/docs/skill-parity.md`](./claude-ops/docs/skill-parity.md).
 
 > [!TIP]
 > **The wizard installs the background daemon EARLY (Step 2c).** While you're still answering "connect Slack? [OAuth/Skip]" questions, `briefing-pre-warm` is already running every 2 minutes — pre-fetching ECS health, git state, PRs, CI, and unread counts. By the time setup finishes, your first `/ops:go` briefing loads in **<3 seconds** from warm cache instead of ~30s cold.

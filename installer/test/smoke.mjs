@@ -1,9 +1,31 @@
 #!/usr/bin/env node
 // Smoke test: verifies the installer's core invariants without touching the user's box.
+//
+// It re-runs itself with HOME pointed at a throwaway dir first. CACHE_ROOT and
+// the manifest path resolve from os.homedir() at import time, and this test
+// calls saveManifest(): without the re-exec, `npm test` overwrote the real
+// ~/.cache/claude-ops-installer/manifest.json with scratch entries.
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+if (!process.env.OPS_INSTALLER_TEST_ISOLATED) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "installer-smoke-home-"));
+  const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_STATE_HOME: path.join(home, ".local", "state"),
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+      OPS_INSTALLER_TEST_ISOLATED: "1",
+    },
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+  process.exit(r.status ?? 1);
+}
 import { loadConfig } from "../src/config.mjs";
 import { listSourceSkills, listSourceBin } from "../src/source.mjs";
 import { planBinLinks, applyBinLinks } from "../src/bin.mjs";
@@ -76,7 +98,9 @@ try {
     `bin planned ${binPlan.planned.length}/${bins.length}`,
   );
 
-  // Apply both
+  // Apply both. planMirror is pure (it no longer creates the target dir), so
+  // this manual apply creates it the way applyActions does.
+  fs.mkdirSync(path.join(scratch, "skills"), { recursive: true });
   const manifest = newManifest();
   const skillResults = [];
   for (const a of mirror.actions) {
@@ -159,9 +183,12 @@ try {
       installPlan.agents.openclaw.reason === "not detected",
     "undetected agent is skipped during install planning",
   );
+  // Contract change (approved skill-parity plan): a dry-run plan must not
+  // create anything. This used to assert the opposite — planMirror ran
+  // mkdirSync even under --dry-run.
   assert(
-    fs.existsSync(detectedPath),
-    "detected agent target directory is prepared",
+    !fs.existsSync(detectedPath),
+    "dry-run planning does not create the detected agent's target directory",
   );
   assert(
     !fs.existsSync(undetectedPath),
@@ -256,6 +283,81 @@ try {
     verifyNativePlugin({ srcDir: SRC, agentName: "codex", pluginPath: null })
       .skipped === true,
     "verifyNativePlugin skips agents with no plugin path",
+  );
+
+  // 5. --force never deletes a real bin file or directory.
+  const ownedBin = path.join(scratch, "owned-bin");
+  fs.mkdirSync(ownedBin, { recursive: true });
+  const realFile = path.join(ownedBin, bins[0]);
+  fs.writeFileSync(realFile, "user-owned\n");
+  const forcePlan = planBinLinks({
+    srcDir: SRC,
+    binPath: ownedBin,
+    binNames: [bins[0]],
+    force: true,
+  });
+  assert(forcePlan.planned.length === 0, "force does not plan a bin overwrite");
+  assert(
+    forcePlan.refused.length === 1 &&
+      forcePlan.refused[0].status === "OWNERSHIP_CONFLICT",
+    "--force on a real bin file is OWNERSHIP_CONFLICT",
+  );
+  applyBinLinks({
+    binPath: ownedBin,
+    plan: {
+      planned: [
+        {
+          op: "symlink",
+          name: bins[0],
+          from: path.join(SRC, "bin", bins[0]),
+          to: realFile,
+          status: "planned",
+        },
+      ],
+      refused: [],
+      errors: [],
+    },
+  });
+  assert(
+    fs.readFileSync(realFile, "utf8") === "user-owned\n" &&
+      !fs.lstatSync(realFile).isSymbolicLink(),
+    "apply leaves a real bin file in place",
+  );
+
+  const dirBin = path.join(scratch, "dir-bin");
+  const realDir = path.join(dirBin, bins[0]);
+  fs.mkdirSync(realDir, { recursive: true });
+  fs.writeFileSync(path.join(realDir, "keep"), "nested\n");
+  const dirPlan = planBinLinks({
+    srcDir: SRC,
+    binPath: dirBin,
+    binNames: [bins[0]],
+    force: true,
+  });
+  assert(
+    dirPlan.refused.length === 1 &&
+      dirPlan.refused[0].status === "OWNERSHIP_CONFLICT",
+    "--force on a real bin directory is OWNERSHIP_CONFLICT",
+  );
+  applyBinLinks({
+    binPath: dirBin,
+    plan: {
+      planned: [
+        {
+          op: "symlink",
+          name: bins[0],
+          from: path.join(SRC, "bin", bins[0]),
+          to: realDir,
+          status: "planned",
+        },
+      ],
+      refused: [],
+      errors: [],
+    },
+  });
+  assert(
+    fs.readFileSync(path.join(realDir, "keep"), "utf8") === "nested\n",
+    "apply leaves a real bin directory in place",
   );
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });

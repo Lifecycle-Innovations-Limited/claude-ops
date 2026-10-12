@@ -25,9 +25,11 @@
 #   8. Fast-forward a linked local source checkout's main → origin/main (if clean)
 #   9. Companion plugins (plugin-dependencies.json): all required companions;
 #      gsd / superpowers / feature-dev if installed. gstack is not managed.
-#  10. Sync companion CLIs (Grok, Cursor) to the same version, no stale caches
-#      left behind. Codex needs no step — see scripts/sync-companion-clis.sh.
-#  11. Report old→new + what changed, and how to apply (/reload-plugins or restart)
+#  10. Sync companion CLIs (Grok, Cursor, Codex, Hermes): one record per target
+#      (scripts/sync-companion-clis.sh). A failed or unproven companion does
+#      not undo the Claude Code update above; the run ends "partial" instead.
+#  11. Report old→new + per-target companion status, and how to apply
+#      (/reload-plugins or restart). Exit 3 when any companion is not clean.
 #
 # Canonical CLI per Claude Code docs:
 #   https://code.claude.com/docs/en/discover-plugins  (marketplace update / plugin update)
@@ -36,7 +38,8 @@
 # Usage:
 #   ops-update [--dry-run] [--force] [--to X.Y.Z] [--allow-downgrade] [--offline]
 #              [--no-prune] [--no-patches] [--no-rewrite] [--no-localsync]
-#              [--no-companions] [--no-clisync]
+#              [--no-companions] [--no-clisync] [--host grok,cursor,codex,hermes]
+#   ops-update --check [--host ...]
 #
 #   --dry-run       show everything that would happen; change nothing
 #   --force         force-reinstall even if the CLI says "already at latest" (bug #61954)
@@ -50,7 +53,19 @@
 #   --no-rewrite    skip the stale-version-path rewrite step
 #   --no-localsync  skip fast-forwarding a linked local source checkout's main
 #   --no-companions skip companion install/update
-#   --no-clisync    skip syncing the ops plugin to other CLIs (Grok, Cursor)
+#   --no-clisync    skip syncing the ops plugin to other CLIs (step 10)
+#   --host LIST     limit step 10 / --check to these hosts (diagnostic: required
+#                   hosts left out are reported, not dropped). Not --target:
+#                   --target stays an alias of --to (a version).
+#   --check         read-only byte parity across Claude Code, Codex, Grok, Cursor
+#                   and Hermes against the installed release. Unlike --dry-run
+#                   (which really pulls the catalogue in step 1) it pulls,
+#                   writes and locks nothing. Exit codes: docs/skill-parity.md
+#
+# Exit codes: 0 done, 1 fatal (nothing or only part of steps 1-9 applied),
+#   2 usage, 3 partial (Claude Code updated, a companion CLI needs attention),
+#   --check returns the parity check's own code (0 clean, 1 drift, 2 gap,
+#   5 environment, 6 locked).
 #
 # Public repo: no personal data. All paths derive from $HOME / env. (Rule 0)
 
@@ -67,7 +82,7 @@ DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$PLUGINS_DIR/data/ops-${MARKETPLACE}}"
 THIS_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 DRY=0; FORCE=0; PRUNE=1; PATCHES=1; REWRITE=1; LOCALSYNC=1; COMPANIONS=1; CLISYNC=1; TARGET=""
-ALLOW_DOWNGRADE=0; OFFLINE=0
+ALLOW_DOWNGRADE=0; OFFLINE=0; CHECK=0; HOSTS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY=1; shift ;;
@@ -81,6 +96,10 @@ while [[ $# -gt 0 ]]; do
     --no-localsync) LOCALSYNC=0; shift ;;
     --no-companions) COMPANIONS=0; shift ;;
     --no-clisync) CLISYNC=0; shift ;;
+    --check) CHECK=1; shift ;;
+    --host)
+      [[ -n "${2:-}" && "$2" != --* ]] || { echo "ops-update: --host needs a value" >&2; exit 2; }
+      HOSTS="$2"; shift 2 ;;
     -h|--help) sed -n '2,/^# Public repo/p' "$0" | sed '$d'; exit 0 ;;
     *) echo "ops-update: unknown arg '$1'" >&2; exit 2 ;;
   esac
@@ -94,6 +113,17 @@ warn() { printf '%s!%s %s\n' "$c_ylw" "$c_rst" "$*"; }
 err()  { printf '%s✗%s %s\n' "$c_red" "$c_rst" "$*" >&2; }
 step() { printf '\n%s── %s%s\n' "$c_dim" "$*" "$c_rst"; }
 run()  { if [[ "$DRY" -eq 1 ]]; then say "  ${c_dim}[dry-run] $*${c_rst}"; else eval "$@"; fi; }
+
+# ── --check: read-only parity, before anything that pulls or writes ───────
+if [[ "$CHECK" -eq 1 ]]; then
+  command -v node >/dev/null 2>&1 || {
+    err "ops-update --check needs Node >= 18 (environment problem, not drift). See docs/skill-parity.md#exit-codes"
+    exit 5
+  }
+  CHECK_ARGS=()
+  [[ -n "$HOSTS" ]] && CHECK_ARGS+=(--host "$HOSTS")
+  exec node "$THIS_ROOT/lib/parity/check.mjs" ${CHECK_ARGS[@]+"${CHECK_ARGS[@]}"}
+fi
 
 command -v claude >/dev/null 2>&1 || { err "claude CLI not found in PATH"; exit 1; }
 command -v jq >/dev/null 2>&1 || { err "jq not found in PATH"; exit 1; }
@@ -447,18 +477,23 @@ else
   fi
 fi
 
-# ── 10. Sync companion CLIs (Grok, Cursor) ─────────────────────────────────
-# Codex needs nothing here — see scripts/sync-companion-clis.sh header.
+# ── 10. Sync companion CLIs (Grok, Cursor, Codex, Hermes) ──────────────────
+# The Claude Code update above is complete and stays complete. The sync writes
+# one record per target; a non-zero exit is captured here and turns the run
+# into "partial" (exit 3) in step 11 — it never aborts or rolls back.
 step "10/11 Sync companion CLIs"
+CLISYNC_RC=0
+CLISYNC_RECORD=""
 CLISYNC_SCRIPT="$NEW_CACHE/scripts/sync-companion-clis.sh"
 [[ -f "$CLISYNC_SCRIPT" ]] || CLISYNC_SCRIPT="$THIS_ROOT/scripts/sync-companion-clis.sh"
 if [[ "$CLISYNC" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-clisync)${c_rst}"
 elif [[ -f "$CLISYNC_SCRIPT" ]]; then
   if [[ "$DRY" -eq 1 ]]; then
-    bash "$CLISYNC_SCRIPT" --dry-run
+    bash "$CLISYNC_SCRIPT" --dry-run ${HOSTS:+--host "$HOSTS"}
   else
-    bash "$CLISYNC_SCRIPT" || warn "sync-companion-clis.sh non-zero (non-fatal)"
+    CLISYNC_RECORD="$(mktemp "${TMPDIR:-/tmp}/ops-clisync.XXXXXX")"
+    bash "$CLISYNC_SCRIPT" --record "$CLISYNC_RECORD" ${HOSTS:+--host "$HOSTS"} || CLISYNC_RC=$?
   fi
 else
   say "  ${c_dim}no sync-companion-clis.sh in new cache (skipped)${c_rst}"
@@ -470,9 +505,22 @@ say "  plugin:   $PLUGIN@$MARKETPLACE"
 say "  version:  ${CUR:-<none>} → ${c_grn}$NEW${c_rst}"
 say "  cache:    $(ls -1 "$CACHE_ROOT" 2>/dev/null | grep -E '^[0-9]+\.' | tr '\n' ' ')"
 say "  companions: required co-install (desktop-act · gsd · gstack · superpowers · feature-dev)"
+if [[ -n "$CLISYNC_RECORD" && -s "$CLISYNC_RECORD" ]]; then
+  say "  companion CLIs:"
+  jq -r '"    \(.target | . + "        " | .[0:8]) \(.status)"' "$CLISYNC_RECORD" 2>/dev/null || true
+fi
 if [[ "$DRY" -eq 1 ]]; then
   warn "DRY RUN — nothing changed. Re-run without --dry-run to apply."
+elif [[ "$CLISYNC_RC" -ne 0 ]]; then
+  bad="$(jq -rs '[.[] | select(.class != "clean") | .target] | join(", ")' "$CLISYNC_RECORD" 2>/dev/null || true)"
+  rm -f "$CLISYNC_RECORD"
+  warn "upgrade partial: Claude Code is on v$NEW; companion CLI(s) need attention: ${bad:-see step 10 output} (sync exit $CLISYNC_RC)."
+  say "  next: read each target's next/docs line in step 10, or run: ops-update --check"
+  say ""
+  say "  ${c_ylw}Restart Claude Code (or run /reload-plugins) to load v$NEW.${c_rst}"
+  exit 3
 else
+  rm -f "$CLISYNC_RECORD"
   ok "upgrade complete."
   say ""
   say "  ${c_ylw}Restart Claude Code (or run /reload-plugins) to load v$NEW.${c_rst}"
