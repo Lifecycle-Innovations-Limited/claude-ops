@@ -284,6 +284,81 @@ try {
       .skipped === true,
     "verifyNativePlugin skips agents with no plugin path",
   );
+
+  // 5. --force never deletes a real bin file or directory.
+  const ownedBin = path.join(scratch, "owned-bin");
+  fs.mkdirSync(ownedBin, { recursive: true });
+  const realFile = path.join(ownedBin, bins[0]);
+  fs.writeFileSync(realFile, "user-owned\n");
+  const forcePlan = planBinLinks({
+    srcDir: SRC,
+    binPath: ownedBin,
+    binNames: [bins[0]],
+    force: true,
+  });
+  assert(forcePlan.planned.length === 0, "force does not plan a bin overwrite");
+  assert(
+    forcePlan.refused.length === 1 &&
+      forcePlan.refused[0].status === "OWNERSHIP_CONFLICT",
+    "--force on a real bin file is OWNERSHIP_CONFLICT",
+  );
+  applyBinLinks({
+    binPath: ownedBin,
+    plan: {
+      planned: [
+        {
+          op: "symlink",
+          name: bins[0],
+          from: path.join(SRC, "bin", bins[0]),
+          to: realFile,
+          status: "planned",
+        },
+      ],
+      refused: [],
+      errors: [],
+    },
+  });
+  assert(
+    fs.readFileSync(realFile, "utf8") === "user-owned\n" &&
+      !fs.lstatSync(realFile).isSymbolicLink(),
+    "apply leaves a real bin file in place",
+  );
+
+  const dirBin = path.join(scratch, "dir-bin");
+  const realDir = path.join(dirBin, bins[0]);
+  fs.mkdirSync(realDir, { recursive: true });
+  fs.writeFileSync(path.join(realDir, "keep"), "nested\n");
+  const dirPlan = planBinLinks({
+    srcDir: SRC,
+    binPath: dirBin,
+    binNames: [bins[0]],
+    force: true,
+  });
+  assert(
+    dirPlan.refused.length === 1 &&
+      dirPlan.refused[0].status === "OWNERSHIP_CONFLICT",
+    "--force on a real bin directory is OWNERSHIP_CONFLICT",
+  );
+  applyBinLinks({
+    binPath: dirBin,
+    plan: {
+      planned: [
+        {
+          op: "symlink",
+          name: bins[0],
+          from: path.join(SRC, "bin", bins[0]),
+          to: realDir,
+          status: "planned",
+        },
+      ],
+      refused: [],
+      errors: [],
+    },
+  });
+  assert(
+    fs.readFileSync(path.join(realDir, "keep"), "utf8") === "nested\n",
+    "apply leaves a real bin directory in place",
+  );
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }

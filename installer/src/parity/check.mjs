@@ -466,14 +466,21 @@ const ADAPTERS = {
       }
       if (real !== refReal) {
         const top = gitTop(real);
-        if (top)
-          return {
-            configured: true,
-            root: p,
-            kind: 'symlink',
-            devSource: { path: real, sha: gitHead(top) },
-            id: () => statId(p),
-          };
+        if (top) {
+          const sha = gitHead(top);
+          // A git checkout whose HEAD is the reference SHA is an installer
+          // cache of this release, not a developer tree. Missing ref.sha
+          // stays DEV_SOURCE: there is no release commit to match.
+          if (!(sha && ref.sha && sha === ref.sha)) {
+            return {
+              configured: true,
+              root: p,
+              kind: 'symlink',
+              devSource: { path: real, sha },
+              id: () => statId(p),
+            };
+          }
+        }
       }
       return {
         configured: true,

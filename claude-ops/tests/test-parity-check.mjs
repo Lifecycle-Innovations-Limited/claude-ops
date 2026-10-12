@@ -233,6 +233,41 @@ process.stdout.write('=== parity check core ===\n');
   ok(h.class === 'drift' && h.error.next.includes('migration'), 'DEV_SOURCE is a drift with a migration next step');
 }
 
+// 5b. Same-SHA installer cache is byte-compared, not labelled a dev tree.
+{
+  const w = makeWorld();
+  const sha = 'd'.repeat(40);
+  write(path.join(w.ref, '.git', 'HEAD'), sha + '\n');
+  fs.rmSync(w.t.hermes, { recursive: true });
+  const cache = path.join(w.base, 'installer-cache');
+  copyTree(w.ref, path.join(cache, 'claude-ops'));
+  write(path.join(cache, 'claude-ops', 'hermes-plugin', 'plugin.yaml'), 'name: ops\nversion: "mutated"\n');
+  fs.symlinkSync(path.join(cache, 'claude-ops', 'hermes-plugin'), w.t.hermes);
+  const h = rec(run(w), 'hermes');
+  ok(
+    h.status === 'DRIFT' && h.status !== 'DEV_SOURCE',
+    'a checkout at the reference SHA is compared, not reported as DEV_SOURCE',
+    JSON.stringify({ status: h.status, observed: h.observed }),
+  );
+}
+
+// 5c. A different SHA is still a developer source.
+{
+  const w = makeWorld();
+  write(path.join(w.ref, '.git', 'HEAD'), 'd'.repeat(40) + '\n');
+  fs.rmSync(w.t.hermes, { recursive: true });
+  const checkout = path.join(w.base, 'other-sha');
+  copyTree(w.ref, path.join(checkout, 'claude-ops'));
+  write(path.join(checkout, 'claude-ops', '.git', 'HEAD'), 'e'.repeat(40) + '\n');
+  fs.symlinkSync(path.join(checkout, 'claude-ops', 'hermes-plugin'), w.t.hermes);
+  const h = rec(run(w), 'hermes');
+  ok(
+    h.status === 'DEV_SOURCE' && h.observed.sha === 'e'.repeat(40),
+    'a checkout at a different SHA stays DEV_SOURCE',
+    JSON.stringify(h.observed),
+  );
+}
+
 // 6. Hermes legacy copy without bundled skills
 {
   const w = makeWorld();
