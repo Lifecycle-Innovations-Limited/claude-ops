@@ -17,7 +17,7 @@ permissions:
 jobs:
   # ─── 1. GitHub Release from CHANGELOG ───────────────────────────────────────
   create-release:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, aws]
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
       notes_file: ${{ steps.changelog.outputs.NOTES_FILE }}
@@ -69,7 +69,7 @@ jobs:
   # squash-merge.
   bump-version-pr:
     needs: create-release
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, aws]
     steps:
       - uses: actions/checkout@v7
         with:

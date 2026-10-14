@@ -8,11 +8,11 @@
 #
 #   1. Classify   — state, draft flag, mergeable, mergeable_state, and the
 #                   check runs for the head sha.
-#   2. Unblock    — a PR from a fork has its workflow runs held at
-#                   `action_required` until a maintainer approves them. Until
-#                   that happens the required checks never start and
-#                   mergeable_state sits at "blocked" forever. Approve the runs
-#                   so CI can actually report.
+#   2. Unblock    — a same-repo run held at `action_required` is approved so
+#                   its required checks can start. A fork pull request is not.
+#                   Approving one would execute the fork's code, and CI for
+#                   this repo runs on an AWS self-hosted runner. A person
+#                   approves those runs.
 #   3. Review     — one background agent per PR: read the diff, judge whether it
 #                   is good, undraft it when ready, and fix failing checks.
 #                   Independent PRs get independent agents, dispatched together.
@@ -42,6 +42,9 @@
 SWEEP_FAIL_CONCLUSIONS="${SWEEP_FAIL_CONCLUSIONS:-failure timed_out action_required error}"
 
 # Checks that must exist and be finished before a PR may merge.
+# Exact ruleset contexts. The CI matrix label stays ubuntu-latest so these
+# names do not change when the jobs run on the AWS self-hosted runner.
+# Match the full check name, the same way ops-release does. Do not drop pii-gate.
 SWEEP_REQUIRED_CHECKS_DEFAULT='["lint-and-check (ubuntu-latest)","pii-gate","test-suite (ubuntu-latest)","CodeQL"]'
 
 # REST core calls we refuse to start a sweep below.
@@ -159,10 +162,9 @@ sweep_failing_names() {
 
 # --- Fork CI unblock ----------------------------------------------------------
 
-# A fork PR's workflow runs sit at status=action_required until a maintainer
-# approves them, so the required checks never start and mergeable_state stays
-# "blocked" forever. This is the defect that stalled two good external PRs.
-# Approve every held run for the head sha. Prints how many it approved.
+# Approve held runs for a same-repo head sha. Fork runs are left held: the
+# workflow checks out that head, and approving it would run untrusted code.
+# Prints how many it approved.
 sweep_approve_held_runs() {
   local repo="$1" sha="$2" ids id approved=0
   ids="$(gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" 2>/dev/null \
@@ -310,17 +312,16 @@ release_pr_sweep() {
     [ -n "$runs" ] || runs='[]'
     verdict="$(sweep_check_verdict "$runs")"
 
-    # The action_required defect: held fork runs mean the required checks never
-    # even start. Approve them, then re-read so the agent sees the truth.
+    # A held same-repo run never starts its required checks. Approve it, then
+    # re-read. Fork runs stay held for a person to approve.
     local held=0
     if jq -e 'any(.[]; .conclusion == "action_required" or .status == "action_required")' <<<"$runs" >/dev/null 2>&1; then
       held=1
     fi
-    if [ "$fork" = "true" ]; then held=1; fi
-    if [ "$held" -eq 1 ]; then
+    if [ "$held" -eq 1 ] && [ "$fork" != "true" ]; then
       approved="$(sweep_approve_held_runs "$repo" "$head_sha")"
       if [ "${approved:-0}" -gt 0 ]; then
-        sweep_log "#$num: approved $approved held workflow run(s) (fork CI was waiting on a maintainer)"
+        sweep_log "#$num: approved $approved held workflow run(s) for this repository"
         runs="$(sweep_check_runs "$repo" "$head_sha")"
         [ -n "$runs" ] || runs='[]'
         verdict="$(sweep_check_verdict "$runs")"
