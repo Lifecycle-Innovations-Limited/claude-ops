@@ -26,7 +26,13 @@ THRESHOLD=$(config task_reminder_threshold 10)
 INPUT=$(cat)
 sid=$(printf '%s' "$INPUT" | jq -r '.session_id // "default"' 2>/dev/null)
 tool=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null)
-state_file="$STATE_DIR/task-reminder-${sid}"
+# Subagents share the parent's session_id; Claude Code sets agent_id only for
+# them. Count each agent separately so subagent calls never fill (or reset) the
+# main thread's counter. Async hook output from a subagent is delivered to the
+# parent's context, where TaskCreate may just have been used, so subagents
+# count but never print the reminder.
+aid=$(printf '%s' "$INPUT" | jq -r '.agent_id // ""' 2>/dev/null | tr -cd 'A-Za-z0-9_-')
+state_file="$STATE_DIR/task-reminder-${sid}${aid:+-agent-$aid}"
 
 # ── per-session lock ───────────────────────────────────────────────────────
 LOCK_TIMEOUT_S="${OPS_TASK_REMINDER_LOCK_TIMEOUT:-2}"
@@ -75,7 +81,9 @@ esac
 count=$(cat "$state_file" 2>/dev/null || echo 0)
 count=$((count + 1))
 
-if [ "$count" -ge "$THRESHOLD" ]; then
+if [ "$count" -ge "$THRESHOLD" ] && [ -n "$aid" ]; then
+  echo 0 > "$state_file"
+elif [ "$count" -ge "$THRESHOLD" ]; then
   echo 0 > "$state_file"
   cat <<JSON
 {
