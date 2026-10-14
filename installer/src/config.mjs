@@ -17,7 +17,7 @@ export const DEFAULT_CONFIG = {
   source: {
     type: "git",
     url: "https://github.com/Lifecycle-Innovations-Limited/claude-ops.git",
-    ref: "v3.11.0",
+    ref: "v3.11.1",
   },
   agents: {
     claude: { enabled: true, type: "marketplace" },

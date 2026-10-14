@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## [3.11.1] - 2026-10-14
+
+### Fixed
+- `ops-task-reminder` counts each subagent separately from the main thread, so subagent calls no longer fill or reset the main counter and subagents never print the reminder (#1045).
+
+### Changed
+- `ops-release` gate no longer requires a Copilot review (#1047).
+- Skill parity across CLIs and a shared MCP research contract (#1034).
+- `ops-mac` bundles its maintenance helpers (#1039).
+- CI no longer runs twice on the same Ubuntu image (#1044).
+- Agent instructions consolidated with `AGENTS.md` as the canonical file.
+- Dependency bumps: anthropics/claude-code-action 1.0.245 (#1041), @modelcontextprotocol/sdk (#1042), proxy-addr (#1038).
+
 ## [3.11.0] - 2026-10-09
 
 ### Changed
