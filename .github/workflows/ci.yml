@@ -21,7 +21,9 @@ jobs:
     name: Graphite CI Optimizer
     if: github.event_name == 'pull_request'
     permissions: {}
-    runs-on: ubuntu-latest
+    # A fork pull_request checks out untrusted code. That stays on GitHub-hosted
+    # ubuntu-latest. Same-repo pull requests and pushes use the AWS runner.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
     outputs:
       skip: ${{ steps.check-skip.outputs.skip }}
     steps:
@@ -37,7 +39,9 @@ jobs:
     # ubuntu-latest is ubuntu-24.04. A second matrix leg ran the same
     # commands on the same image and doubled the Linux bill. The single
     # element stays so the check name remains "lint-and-check (ubuntu-latest)".
-    runs-on: ${{ matrix.os }}
+    # The matrix value is only the required check label. Same-repo work runs
+    # on the AWS runner; a fork pull_request stays on GitHub-hosted ubuntu-latest.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
     strategy:
       matrix:
         os: [ubuntu-latest]
@@ -86,7 +90,7 @@ jobs:
   # the optimizer or secret-scan job's state. Catches the class that leaked into
   # history (scrubbed 2026-06-07).
   pii-gate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
     steps:
       - uses: actions/checkout@v7
       - name: PII / personal-data scan
@@ -110,7 +114,7 @@ jobs:
   # behaves identically on a fork PR, where secrets are unavailable.
   pii-gate-metadata:
     name: pii-gate-metadata
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -143,7 +147,10 @@ jobs:
 
   test-suite:
     if: always() && needs.lint-and-check.result == 'success' && (github.event_name != 'pull_request' || needs.optimize-ci.outputs.skip == 'false')
-    runs-on: ${{ matrix.os }}
+    # The single matrix element keeps the required check name
+    # "test-suite (ubuntu-latest)". Same-repo work runs on the AWS runner;
+    # a fork pull_request stays on GitHub-hosted ubuntu-latest.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
     needs: [optimize-ci, lint-and-check]
     strategy:
       matrix:
