@@ -211,7 +211,7 @@ RELEASE_REQUIRED_CHECKS='["lint-and-check (ubuntu-latest)","pii-gate","test-suit
 # Read-only pre-merge proof for the exact checked head. Queries are bounded;
 # missing, partial, paginated-error or stale evidence refuses the merge.
 release_review_gate() {
-  local pr_ref="$1" expected_head="$2" number owner name detail reviews threads checks query
+  local pr_ref="$1" expected_head="$2" number owner name detail threads checks query
   number="${pr_ref##*/}"; owner="${GH_REPO%%/*}"; name="${GH_REPO#*/}"
   [[ "$number" =~ ^[0-9]+$ ]] || return 1
   detail="$(run_bounded 25 gh api "repos/$GH_REPO/pulls/$number")" || return 1
@@ -220,16 +220,9 @@ release_review_gate() {
     and .head.sha == $head and .mergeable == true and .mergeable_state == "clean"
   ' <<<"$detail" >/dev/null || return 1
 
-  reviews="$(run_bounded 25 gh api --paginate --slurp "repos/$GH_REPO/pulls/$number/reviews?per_page=100")" || return 1
-  jq -e --arg head "$expected_head" '
-    type == "array" and length > 0 and all(.[]; type == "array")
-    and any(.[][]; .commit_id == $head and .user.type == "Bot"
-      and ((.user.login | ascii_downcase) == "copilot-pull-request-reviewer[bot]"
-        or (.user.login | ascii_downcase) == "copilot-pull-request-reviewer"
-        or (.user.login | ascii_downcase) == "copilot")
-      and (.state == "COMMENTED" or .state == "APPROVED"))
-  ' <<<"$reviews" >/dev/null || return 1
-
+  # No review sign-off is required: per the org-wide decision of 2026-10-14
+  # the merge gate is green CI on the final head + all review threads
+  # resolved. A Copilot review is optional and never blocks a release.
   query='query($owner:String!,$name:String!,$number:Int!,$endCursor:String) {
     repository(owner:$owner,name:$name) {
       pullRequest(number:$number) {
@@ -260,7 +253,7 @@ release_review_gate() {
     and all(.[]; .bucket == "pass")
   ' <<<"$checks" >/dev/null || return 1
   # Last read immediately precedes --match-head-commit; a concurrent head or
-  # conflict change cannot borrow reviews/checks from the earlier head.
+  # conflict change cannot borrow thread/check proof from the earlier head.
   detail="$(run_bounded 25 gh api "repos/$GH_REPO/pulls/$number")" || return 1
   jq -e --arg head "$expected_head" '
     .state == "open" and .draft == false and .head.sha == $head
@@ -575,7 +568,7 @@ if [ "$do_merge" -eq 1 ]; then
   fi
   stable_head="$(cat "$stable_head_file")"
   rm -f "$stable_head_file"
-  release_review_gate "$PR_URL" "$stable_head" || { echo "ops-release: same-head CI/review/Copilot/conflict proof missing; PR left open" >&2; exit 1; }
+  release_review_gate "$PR_URL" "$stable_head" || { echo "ops-release: same-head CI/threads/conflict proof missing; PR left open" >&2; exit 1; }
   gh pr merge "$PR_URL" --repo "$GH_REPO" --squash --delete-branch --match-head-commit "$stable_head"
   echo "ops-release: merged v$NEW to main"
   tag_status=0
