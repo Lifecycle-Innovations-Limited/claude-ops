@@ -52,8 +52,8 @@ class ReleaseTests(unittest.TestCase):
         result = subprocess.run(['bash', '-c', code], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0, 'failed status read was accepted as empty statuses')
 
-    def test_merge_gate_requires_review_proof(self):
-        self.assertTrue('release_review_gate() {' in RELEASE.read_text(), 'same-head review/thread/Copilot gate is absent')
+    def test_merge_gate_requires_ci_and_thread_proof(self):
+        self.assertTrue('release_review_gate() {' in RELEASE.read_text(), 'same-head CI/thread gate is absent')
 
     def test_same_head_review_gate_negative_fixtures(self):
         import copy
@@ -68,13 +68,14 @@ class ReleaseTests(unittest.TestCase):
         threads = [page(True, True), page(True, False)]
         required = json.loads(required_line.split('=', 1)[1].strip("'"))
         checks = [{'name': name, 'bucket': 'pass'} for name in required]
-        for case in ('valid', 'copilot_missing', 'copilot_stale', 'copilot_spoofed', 'unresolved_second_page', 'partial_pagination', 'graphql_error', 'graphql_head_changed', 'final_head_changed', 'conflict', 'unknown_mergeable', 'skipped_ci', 'missing_ci', 'reviews_read_error', 'threads_read_error', 'checks_read_error', 'final_read_error'):
+        for case in ('valid', 'no_copilot_review', 'unresolved_second_page', 'partial_pagination', 'graphql_error', 'graphql_head_changed', 'final_head_changed', 'conflict', 'unknown_mergeable', 'skipped_ci', 'missing_ci', 'threads_read_error', 'checks_read_error', 'final_read_error'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as d:
                 root = Path(d)
                 current, final, r, t, c = (copy.deepcopy(value) for value in (detail, detail, reviews, threads, checks))
-                if case == 'copilot_missing': r = [[]]
-                elif case == 'copilot_stale': r[0][0]['commit_id'] = 'b' * 40
-                elif case == 'copilot_spoofed': r[0][0]['user']['type'] = 'User'
+                # Copilot review is optional since the 2026-10-14 decision:
+                # a PR with no Copilot review on the head must still pass when
+                # CI is green and every review thread is resolved.
+                if case == 'no_copilot_review': r = [[]]
                 elif case == 'unresolved_second_page': t[1]['data']['repository']['pullRequest']['reviewThreads']['nodes'][0]['isResolved'] = False
                 elif case == 'partial_pagination': t[-1]['data']['repository']['pullRequest']['reviewThreads']['pageInfo']['hasNextPage'] = True
                 elif case == 'graphql_error': t[1]['errors'] = [{'message': 'read failed'}]
@@ -99,7 +100,7 @@ class ReleaseTests(unittest.TestCase):
 '''
                 code = 'set -euo pipefail; GH_REPO=fixture/repo; ' + required_line + '\n' + mocks + function + '\nrelease_review_gate https://example.com/pull/7 ' + head
                 result = subprocess.run(['bash', '-c', code], env=dict(os.environ, FIX=str(root), CASE=case), capture_output=True, text=True)
-                if case == 'valid': self.assertEqual(result.returncode, 0, result.stderr)
+                if case in ('valid', 'no_copilot_review'): self.assertEqual(result.returncode, 0, result.stderr)
                 else: self.assertNotEqual(result.returncode, 0, case)
 
     def test_inventory_failure_and_open_prs_stop_before_bump(self):
