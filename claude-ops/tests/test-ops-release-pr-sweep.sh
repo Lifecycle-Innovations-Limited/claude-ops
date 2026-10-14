@@ -2,8 +2,8 @@
 # test-ops-release-pr-sweep.sh — the pre-release pull-request sweep.
 #
 # Covers the behaviour the sweep exists for:
-#   - a fork PR whose workflow runs sit at action_required gets them approved
-#     (the defect that stalled two good external PRs behind checks that never ran)
+#   - a fork PR whose workflow runs sit at action_required is left held
+#     (approving it would run the fork's code)
 #   - a good, green PR is merged
 #   - a red PR is left open and reported
 #   - a good draft is undrafted and then merged
@@ -140,8 +140,8 @@ reset_fixtures() {
   unset SWEEP_FAKE_1 SWEEP_FAKE_2 SWEEP_FAKE_3 SWEEP_FAKE_4 2>/dev/null || true
 }
 
-# 1. A fork PR held at action_required: the sweep approves the runs, the checks
-#    then report green, and it merges.
+# 1. A fork PR held at action_required: the sweep does not approve the run
+#    and does not merge it. The checks stay held for a person.
 reset_fixtures
 cat >"$FIX/pulls.json" <<'EOF'
 [{"number":1,"title":"external fix","draft":false,
@@ -165,12 +165,45 @@ cat >"$FIX/pr-1.json" <<'EOF'
 EOF
 export SWEEP_FAKE_1=GOOD; release_pr_sweep "$SWEEP_TEST_REPO" >"$FIX/out1.txt" 2>&1
 
-grep -q 'approve 99' "$FIX/approvals.log" 2>/dev/null \
-  && ok "a fork PR's action_required run is approved" \
-  || err "the held fork workflow run was never approved"
+if [ -f "$FIX/approvals.log" ] && grep -q 'approve 99' "$FIX/approvals.log"; then
+  err "a fork PR's held run was approved"
+else
+  ok "a fork PR's action_required run stays held"
+fi
 grep -q 'merge 1 ' "$FIX/merges.log" 2>/dev/null \
-  && ok "a good, green PR is merged once its fork CI is unblocked" \
-  || err "the good green PR was not merged"
+  && err "a held fork PR was merged" \
+  || ok "a held fork PR is left open"
+
+# 1b. A same-repo run held at action_required is approved, then merged once green.
+reset_fixtures
+cat >"$FIX/pulls.json" <<'EOF'
+[{"number":11,"title":"same repo fix","draft":false,
+  "head":{"sha":"sha11","label":"octo-org:patch","repo":{"full_name":"octo-org/example"}},
+  "base":{"ref":"main","repo":{"full_name":"octo-org/example"}}}]
+EOF
+cat >"$FIX/checkruns-sha11.json" <<'EOF'
+{"check_runs":[{"name":"build","status":"completed","conclusion":"action_required"}]}
+EOF
+cat >"$FIX/checkruns-sha11.after.json" <<'EOF'
+{"check_runs":[{"name":"build","status":"completed","conclusion":"success"},
+               {"name":"test","status":"completed","conclusion":"success"}]}
+EOF
+cat >"$FIX/runs-sha11.json" <<'EOF'
+{"workflow_runs":[{"id":111,"status":"action_required","head_sha":"sha11"}]}
+EOF
+printf 'sha11' >"$FIX/run-111.sha"
+cat >"$FIX/pr-11.json" <<'EOF'
+{"number":11,"draft":false,"state":"open","head":{"sha":"sha11"},
+ "base":{"ref":"main"},"mergeable":true,"mergeable_state":"clean"}
+EOF
+export SWEEP_FAKE_11=GOOD; release_pr_sweep "$SWEEP_TEST_REPO" >"$FIX/out1b.txt" 2>&1
+
+grep -q 'approve 111' "$FIX/approvals.log" 2>/dev/null \
+  && ok "a same-repo action_required run is approved" \
+  || err "the held same-repo workflow run was never approved"
+grep -q 'merge 11 ' "$FIX/merges.log" 2>/dev/null \
+  && ok "a good, green same-repo PR is merged once its CI is unblocked" \
+  || err "the good green same-repo PR was not merged"
 
 # 2. A red PR is left open and reported; the release proceeds without it.
 reset_fixtures

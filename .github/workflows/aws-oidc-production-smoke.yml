@@ -14,7 +14,7 @@ concurrency:
 jobs:
   log-query:
     environment: production
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, aws]
     steps:
       - name: Require repository variables
         env:
