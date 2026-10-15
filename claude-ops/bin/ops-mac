@@ -36,6 +36,7 @@
 #   ops-mac defaults [args]      # macfig hidden-preferences passthrough
 #   ops-mac update               # updater app-update check
 #   ops-mac run <tool> [args...] # raw passthrough to any toolkit binary
+#   ops-mac maintenance <helper> # bundled maintenance safety helpers
 
 set -uo pipefail
 
@@ -240,6 +241,29 @@ audit() {
   echo "Tip: this is read-only. Remediate with /ops:mac fix (stale daemons, cache clean)."
 }
 
+# Maintenance helpers are bundled source, not automatically installed jobs.
+# No toolkit provisioning, launchd registration or background work here.
+maintenance() {
+  local helper="${1:-}" root
+  [[ $# -gt 0 ]] && shift || true
+  root=$(python3 -c 'import os,sys; print(os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[1]))))' "$0") || return 2
+  case "$helper" in
+    agent-log-rotate)
+      # Read-only when called without arguments; rotation needs explicit flags.
+      if [[ $# = 0 ]]; then set -- --list; fi
+      python3 "$root/scripts/ops-mac/$helper" "$@" ;;
+    brain-recall-seed)
+      python3 "$root/scripts/ops-mac/$helper" "$@" ;;
+    mac-hypertune-guard|claude-reaper.sh)
+      /bin/bash "$root/scripts/ops-mac/$helper" "$@" ;;
+    install)
+      python3 "$root/scripts/ops-mac/install-helper.py" "$@" ;;
+    *)
+      echo 'ops-mac maintenance <agent-log-rotate|brain-recall-seed|mac-hypertune-guard|claude-reaper.sh|install>' >&2
+      return 2 ;;
+  esac
+}
+
 # ─── dispatch ────────────────────────────────────────────────────────────────
 cmd="${1:-}"; [[ $# -gt 0 ]] && shift || true
 case "$cmd" in
@@ -255,6 +279,7 @@ case "$cmd" in
   power)               p_power ;;
   defaults)            p_defaults "$@" ;;
   update|updates)      p_update ;;
+  maintenance)         maintenance "$@" ;;
   run)                 t="${1:-}"; shift || true; require_tool "$t"; "$t" "$@" ;;
   -h|--help|help)
     sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'

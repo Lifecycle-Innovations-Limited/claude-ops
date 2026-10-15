@@ -126,6 +126,24 @@ PLIST_LABEL="com.claude-ops.daemon"
 PLIST_DEST="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 HEALTH_FILE="$DATA_DIR/daemon-health.json"
 SERVICES_FILE="$DATA_DIR/daemon-services.json"
+MONITOR_MODE=0
+if [[ -e "$DATA_DIR/daemon-monitor.json" || -L "$DATA_DIR/daemon-monitor.json" ||
+      -e "$DATA_DIR/bin/ops-daemon-monitor-selector.py" || -L "$DATA_DIR/bin/ops-daemon-monitor-selector.py" ]]; then
+  # Executable is not the same as trusted: the same validation pass also
+  # byte-verifies the data-dir selector against this release and requires the
+  # wrapper to begin with the exact reviewed prefix before monitor mode is used.
+  OPS_DATA_DIR="$DATA_DIR" python3 -I "$PLUGIN_ROOT/scripts/ops-daemon-monitor-selector.py" \
+    --validate --reviewed-scripts "$PLUGIN_ROOT/scripts" || exit 78
+  if [[ ! -x "$DATA_DIR/bin/ops-daemon.sh" || ! -r "$DATA_DIR/bin/ops-daemon-monitor-selector.py" ]]; then
+    echo "Monitor-only wrapper or selector missing; refusing legacy fallback." >&2
+    exit 78
+  fi
+  if [[ "$OS" != "macos" ]]; then
+    echo "Monitor-only service management is supported only on macOS; refusing legacy fallback." >&2
+    exit 78
+  fi
+  MONITOR_MODE=1
+fi
 
 log() { printf '[daemon-manager] %s\n' "$*" >&2; }
 run() {
@@ -167,7 +185,8 @@ resolve_bash_path() {
 mac_generate_plist() {
   local template="$PLUGIN_ROOT/scripts/com.claude-ops.daemon.plist"
   local bash_path
-  bash_path="$(resolve_bash_path)"
+  : "${RESOLVED_BASH_PATH:=$(resolve_bash_path)}"
+  bash_path="$RESOLVED_BASH_PATH"
   if [[ -z "$bash_path" ]]; then
     log "ERROR: bash 4+ not found. Install with: brew install bash"
     exit 78
@@ -185,6 +204,18 @@ mac_generate_plist() {
     -e "s|__HOME__|$HOME|g" \
     -e "s|__PLUGIN_ROOT__|$PLUGIN_ROOT|g" \
     "$template" > "$tmp"
+  if (( MONITOR_MODE )); then
+    python3 - "$tmp" "$bash_path" "$DATA_DIR" <<'PY'
+import plistlib, sys
+path, bash, data = sys.argv[1:]
+with open(path, "rb") as stream:
+    plist = plistlib.load(stream)
+plist["ProgramArguments"] = [bash, data + "/bin/ops-daemon.sh", "--monitor-only"]
+plist.setdefault("EnvironmentVariables", {})["OPS_DATA_DIR"] = data
+with open(path, "wb") as stream:
+    plistlib.dump(plist, stream)
+PY
+  fi
   # Validate before installing
   if command -v plutil >/dev/null 2>&1; then
     if ! plutil -lint "$tmp" >/dev/null 2>&1; then
@@ -293,7 +324,39 @@ cmd_upgrade() {
   esac
 }
 
+# "Current" means exactly what mac_generate_plist would write: the full argument
+# vector, including the interpreter, and the OPS_DATA_DIR the selector reads.
+# Anything else (another executable, another data directory, a missing entry)
+# is stale and gets regenerated. Unknown bash means not current.
+monitor_plist_current() {
+  local expected_bash
+  # Resolve once per run; mac_generate_plist reuses the same value.
+  : "${RESOLVED_BASH_PATH:=$(resolve_bash_path)}"
+  expected_bash="$RESOLVED_BASH_PATH"
+  [[ -n "$expected_bash" ]] || return 1
+  python3 - "$PLIST_DEST" "$DATA_DIR" "$expected_bash" <<'PY'
+import plistlib, sys
+path, data, bash = sys.argv[1:]
+try:
+    with open(path, "rb") as stream:
+        plist = plistlib.load(stream)
+    args = plist.get("ProgramArguments")
+    env = plist.get("EnvironmentVariables")
+    valid = (args == [bash, data + "/bin/ops-daemon.sh", "--monitor-only"]
+             and isinstance(env, dict) and env.get("OPS_DATA_DIR") == data)
+except (OSError, ValueError, AttributeError):
+    valid = False
+sys.exit(0 if valid else 1)
+PY
+}
+
 cmd_ensure_current() {
+  if (( MONITOR_MODE )); then
+    [[ "$OS" == "macos" && -f "$PLIST_DEST" ]] || exit 0
+    monitor_plist_current && exit 0
+    cmd_upgrade
+    return
+  fi
   # Always run post-update migrations FIRST (idempotent — sentinel-gated per-version).
   # This catches version bumps even when the daemon plist itself didn't change.
   local migrate_bin="$PLUGIN_ROOT/bin/ops-post-update-migrate"
@@ -347,6 +410,10 @@ cmd_uninstall() {
 }
 
 cmd_restart() {
+  if (( MONITOR_MODE )) && [[ "$OS" == "macos" ]] && ! monitor_plist_current; then
+    cmd_upgrade
+    return
+  fi
   case "$OS" in
     macos)
       mac_unload
@@ -371,7 +438,9 @@ cmd_status() {
   if [[ -f "$PLIST_DEST" ]]; then
     installed=true
     script_path="$(mac_plist_script_path)"
-    if [[ "$script_path" == "$current_script_path" ]]; then
+    if (( MONITOR_MODE )); then
+      monitor_plist_current && plist_version_match=true
+    elif [[ "$script_path" == "$current_script_path" ]]; then
       plist_version_match=true
     fi
   fi

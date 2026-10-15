@@ -39,8 +39,8 @@ bash -n "$RELEASE" && ok "bin/ops-release still parses"  || err "bin/ops-release
 grep -q -- '--no-sweep)'   "$RELEASE" && ok "ops-release accepts --no-sweep"   || err "--no-sweep is not parsed"
 grep -q -- '--sweep-only)' "$RELEASE" && ok "ops-release accepts --sweep-only" || err "--sweep-only is not parsed"
 
-# The sweep has to land PRs BEFORE the bump, or the changelog and tag miss them.
-sweep_line="$(grep -n 'release_pr_sweep "\$GH_REPO"' "$RELEASE" | head -1 | cut -d: -f1)"
+# Inventory must stop on unfinished work BEFORE the bump, never merge broadly.
+sweep_line="$(grep -n '^# ----- read-only pre-release inventory -----' "$RELEASE" | head -1 | cut -d: -f1)"
 bump_line="$(grep -n '^# ----- version base -----' "$RELEASE" | head -1 | cut -d: -f1)"
 if [ -n "$sweep_line" ] && [ -n "$bump_line" ] && [ "$sweep_line" -lt "$bump_line" ]; then
   ok "the sweep runs before the version bump"
@@ -253,24 +253,35 @@ rc=$?
 [ "$rc" -ne 0 ] && ok "a thin REST budget aborts the sweep" || err "the sweep ran on a thin REST budget"
 [ ! -f "$FIX/merges.log" ] && ok "nothing is merged on a thin REST budget" || err "the sweep merged on a thin REST budget"
 
-# 6. --no-sweep skips the whole stage.
-BLOCK="$(awk '/^# ----- pre-release PR sweep -----$/{f=1} f{print} /^# ----- version base -----$/{if(f)exit}' "$RELEASE" \
-  | sed '$d')"
+# 6. The actual release inventory is read-only and fails closed on unfinished work.
+BLOCK="$(awk '/^# ----- read-only pre-release inventory -----$/{f=1} f{print} /^# ----- version base -----$/{if(f)exit}' "$RELEASE" | sed '$d')"
 if [ -z "$BLOCK" ]; then
-  err "the sweep stage block was not found in bin/ops-release"
+  err "the inventory stage block was not found in bin/ops-release"
 else
-  ok "the sweep stage block is present in bin/ops-release"
-  ran="$FIX/stage-ran"
-  release_pr_sweep() { : >"$ran"; }
-  rm -f "$ran"
-  ( do_sweep=0 dry_run=0 sweep_only=0 GH_REPO="$SWEEP_TEST_REPO"; eval "$BLOCK" ) >/dev/null 2>&1
-  [ ! -f "$ran" ] && ok "--no-sweep skips the sweep stage" || err "--no-sweep still ran the sweep"
-  rm -f "$ran"
-  ( do_sweep=1 dry_run=0 sweep_only=0 GH_REPO="$SWEEP_TEST_REPO"; eval "$BLOCK" ) >/dev/null 2>&1
-  [ -f "$ran" ] && ok "the sweep is on by default" || err "the sweep did not run by default"
-  rm -f "$ran"
-  ( do_sweep=1 dry_run=1 sweep_only=0 GH_REPO="$SWEEP_TEST_REPO"; eval "$BLOCK" ) >/dev/null 2>&1
-  [ ! -f "$ran" ] && ok "--dry-run never merges anything" || err "--dry-run ran the real sweep"
+  ok "the actual inventory stage is present"
+  ran="$FIX/stage-ran"; proceeded="$FIX/bump-reached"
+  gh() {
+    case "$*" in 'api --paginate '*'/pulls?state=open&base=main&per_page=100'*) ;; *) return 93 ;; esac
+    : >"$ran"
+    case "$inventory_fixture" in empty) return 0 ;; open) echo '#7 unfinished fix' ;; fail) return 1 ;; esac
+  }
+  for scenario in no-sweep empty open fail dry-run inventory-only; do
+    rm -f "$ran" "$proceeded"
+    inventory_fixture=empty; do_sweep=1; dry_run=0; sweep_only=0
+    case "$scenario" in no-sweep) do_sweep=0 ;; open) inventory_fixture=open ;; fail) inventory_fixture=fail ;; dry-run) dry_run=1 ;; inventory-only) sweep_only=1 ;; esac
+    ( GH_REPO="$SWEEP_TEST_REPO"; eval "$BLOCK"; : >"$proceeded" ) >"$FIX/inventory-$scenario.log" 2>&1
+    rc=$?
+    case "$scenario" in
+      no-sweep|dry-run)
+        [ "$rc" -eq 0 ] && [ ! -e "$ran" ] && [ -e "$proceeded" ] && ok "$scenario performs no inventory mutation/query" || err "$scenario was not read-only" ;;
+      empty)
+        [ "$rc" -eq 0 ] && [ -e "$ran" ] && [ -e "$proceeded" ] && ok "empty inventory permits the bump" || err "empty inventory did not permit bump" ;;
+      open|fail)
+        [ "$rc" -ne 0 ] && [ -e "$ran" ] && [ ! -e "$proceeded" ] && ok "$scenario inventory stops before bump" || err "$scenario inventory silently skipped requested work" ;;
+      inventory-only)
+        [ "$rc" -eq 0 ] && [ -e "$ran" ] && [ ! -e "$proceeded" ] && ok "inventory-only stops without a release" || err "inventory-only reached bump" ;;
+    esac
+  done
 fi
 
 rm -rf "$FIX"

@@ -1,0 +1,88 @@
+{
+  "$comment": "Single status enum and exit-code table for skill parity. Read by lib/parity/check.mjs (node) and mirrored by scripts/sync-companion-clis.sh --print-status-table (bash); tests/test-parity-status-table.sh fails when the two diverge. Docs anchor for every status: docs/skill-parity.md#status-<lowercase-with-dashes>.",
+  "schema_version": 1,
+  "exit_codes": {
+    "clean": 0,
+    "drift": 1,
+    "gap": 2,
+    "partial": 3,
+    "usage": 4,
+    "environment": 5,
+    "locked": 6
+  },
+  "severity": ["clean", "drift", "gap", "partial", "locked"],
+  "statuses": {
+    "MATCH": {
+      "class": "clean",
+      "summary": "Every compared file is byte-identical to the reference release."
+    },
+    "EXCEPTION": {
+      "class": "clean",
+      "summary": "Differences exist, but each one is covered by a complete, documented host/file exception record."
+    },
+    "NOT_CONFIGURED": {
+      "class": "clean",
+      "summary": "The host has no OPS install and is not in the required set."
+    },
+    "APPLIED": {
+      "class": "clean",
+      "summary": "An apply step ran and the target was verified against the reference afterwards."
+    },
+    "DRIFT": {
+      "class": "drift",
+      "summary": "At least one compared file is missing, extra or has different bytes."
+    },
+    "DEV_SOURCE": {
+      "class": "drift",
+      "summary": "The target points at a developer checkout, not at the reference release. Left untouched."
+    },
+    "MISSING_REQUIRED": {
+      "class": "gap",
+      "summary": "A required host has no OPS install, or its consumer could not be found."
+    },
+    "MISSING_REFERENCE": {
+      "class": "gap",
+      "summary": "No local reference release to compare against. Nothing was fetched."
+    },
+    "UNREADABLE": {
+      "class": "gap",
+      "summary": "A target or registry file exists but could not be read or parsed."
+    },
+    "STALE_SOURCE": {
+      "class": "gap",
+      "summary": "The cached reference is older than the ref it claims to represent."
+    },
+    "STALE_SCAN": {
+      "class": "gap",
+      "summary": "The reference or target changed while it was being compared."
+    },
+    "AMBIGUOUS_CONSUMER": {
+      "class": "gap",
+      "summary": "More than one candidate install exists and the host's own state does not say which one it loads."
+    },
+    "NOT_CHECKED": {
+      "class": "gap",
+      "summary": "A required target was left out of this run by a diagnostic host selection."
+    },
+    "MISSING_COMMAND": {
+      "class": "gap",
+      "summary": "A command needed to verify the target is not available."
+    },
+    "UNSUPPORTED_SAFE_APPLY": {
+      "class": "gap",
+      "summary": "No proven safe way to update this host automatically. The previous registration was kept."
+    },
+    "OWNERSHIP_CONFLICT": {
+      "class": "partial",
+      "summary": "Applying would overwrite or delete a file OPS does not own. Nothing was changed."
+    },
+    "APPLY_FAILED": {
+      "class": "partial",
+      "summary": "The apply step failed. The previous registration was kept."
+    },
+    "LOCKED": {
+      "class": "locked",
+      "summary": "Another OPS run holds the lock for this target root."
+    }
+  }
+}

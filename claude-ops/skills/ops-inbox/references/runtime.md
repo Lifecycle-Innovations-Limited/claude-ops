@@ -19,8 +19,15 @@ Configuration and MCP names are discovery hints, not proof of account coverage.
 
 - Email: `gog auth list` or the installed account enumerator; include every mailbox
   and known sending alias. Discover user follow-up/action labels once.
-- WhatsApp: `ops-wa-accounts --list` when installed; enumerate every agent-enabled
-  account with its configured route. Match each live read to its actual account.
+- WhatsApp: `ops-wa-accounts --list` when installed; enumerate every connected
+  WhatsApp account and every discovered account whose connection is unknown.
+  Return one coverage record per discovered account; derive the count from the
+  complete discovery list, never a fixed account count. Match each authorized
+  live read to its actual account and configured route. A connected but
+  agent-disabled account is `not_checked_gap`, not silently excluded or clean.
+  Do not read, send, archive, pair or enable that disabled account to complete a
+  report. Retain any candidate whose load-bearing cross-account context is
+  unavailable as unknown; independent fully evidenced candidates can proceed.
   Never hardcode ports or choose whichever service answers first.
 - Slack: enumerate every configured workspace with its actual scoped token/tool
   binding. A single successful MCP read proves that workspace only.
@@ -58,7 +65,14 @@ Do not create a watcher, heartbeat loop or recurring job during inbox triage.
 Reuse an already-authorized verified monitor when applicable. Status cadence is
 the host's current cadence, not a skill-specific 30-second timer; deliver actual
 results as soon as ready. A genuine approval/input wait preserves the queue and
-ends the active turn. No empty keepalives or polling to appear busy.
+ends the active turn. After sent=false, show that returned draft and end the
+presentation turn. The next draft waits for the next native user event and its
+individual decision; a timer, worker report or background completion is not
+that event. A technical sending hold permits later sequential decision
+collection when the user requests it and the native gate preserves separate
+records, never another draft in the same wait turn. Cron/background monitoring remains read-only; an
+interactive archive directive does not grant a monitor mutation authority.
+No empty keepalives or polling to appear busy.
 
 Load `details.md` for candidate context/approval and `fan-out.md` only when reader
 volume requires it. Setup, deployment and integration repair are separate tasks,

@@ -51,22 +51,17 @@ export function planBinLinks({ srcDir, binPath, binNames, force }) {
         continue;
       }
       if (st.isDirectory() || st.isFile()) {
-        if (!force) {
-          refused.push({
-            name,
-            from,
-            to,
-            reason: "target is real file/dir; pass --force",
-          });
-          continue;
-        }
-        planned.push({
-          op: "symlink",
+        // Same rule as skill and plugin links: --force is compatibility-only.
+        // A real file or directory is never deleted, even when force is set.
+        refused.push({
           name,
           from,
           to,
-          status: "planned",
-          reason: "overwrite real file/dir (--force)",
+          status: "OWNERSHIP_CONFLICT",
+          status_code: "OWNERSHIP_CONFLICT",
+          reason: force
+            ? "target is a real file/dir; --force never deletes it (OWNERSHIP_CONFLICT)"
+            : "target is a real file/dir not created by the installer (OWNERSHIP_CONFLICT)",
         });
         continue;
       }
@@ -95,12 +90,14 @@ export function applyBinLinks({ binPath, plan, onApply, dryRun }) {
       try {
         st = fs.lstatSync(r.to);
       } catch (_e) {}
-      if (st) {
-        if (st.isSymbolicLink() || st.isFile())
-          fs.rmSync(r.to, { force: true });
-        else if (st.isDirectory())
-          fs.rmSync(r.to, { recursive: true, force: true });
+      if (st && !st.isSymbolicLink()) {
+        r.status = "refused";
+        r.status_code = "OWNERSHIP_CONFLICT";
+        r.error = "target is a real file/dir; refusing to delete it";
+        results.push(r);
+        continue;
       }
+      if (st) fs.unlinkSync(r.to);
       fs.symlinkSync(r.from, r.to);
       if (typeof onApply === "function") onApply(r.to, r.from);
       r.status = "applied";

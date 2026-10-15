@@ -17,6 +17,19 @@ if (( BASH_VERSINFO[0] < 4 )); then
   exit 78  # EX_CONFIG
 fi
 
+# Monitor-only dispatch must precede sourcing helpers and all legacy effects.
+# Scan every argument so an earlier --install cannot bypass this boundary.
+for arg in "$@"; do
+  if [[ "$arg" == "--monitor-only" ]]; then
+    exec python3 -I -c '
+import os, runpy, sys
+helper = os.path.join(os.path.dirname(os.path.realpath(sys.argv[1])), "ops-daemon-monitor.py")
+sys.argv = sys.argv[1:]
+runpy.run_path(helper, run_name="__main__")
+' "$0" "$@"
+  fi
+done
+
 # ── OS detection (sourced) ────────────────────────────────────────────────
 # Resolves to the claude-ops plugin root (parent of scripts/).
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"

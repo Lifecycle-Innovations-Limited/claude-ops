@@ -36,9 +36,11 @@ SID="concurrency-test"
 # real 2s default.
 LOCK_TIMEOUT=60
 
-# run_hook <impl> <threshold> <state_dir> <out_file> [tool]
+# run_hook <impl> <threshold> <state_dir> <out_file> [tool] [agent_id]
 run_hook() {
-  printf '{"session_id":"%s","tool_name":"%s"}' "$SID" "${5:-Bash}" |
+  local agent=""
+  [ -n "${6:-}" ] && agent=",\"agent_id\":\"$6\""
+  printf '{"session_id":"%s","tool_name":"%s"%s}' "$SID" "${5:-Bash}" "$agent" |
     HOME="$TMP/home" \
       CLAUDE_PLUGIN_ROOT="$ROOT" \
       OPS_DEPLOY_FIX_STATE="$3" \
@@ -157,6 +159,40 @@ if [ ! -d "$state/task-reminder-$SID.lockd" ] && [ "$(cat "$state/task-reminder-
   pass "stale mkdir lock reclaimed, counter 6 -> 7"
 else
   fail "stale mkdir lock not reclaimed (counter $(cat "$state/task-reminder-$SID"))"
+fi
+
+# 9. Subagents share the parent's session_id but carry agent_id. Their calls
+#    must not fill the main thread's counter, never print a reminder, and a
+#    subagent Task* call must not reset the main thread's counter.
+state="$TMP/state-agent"
+out="$TMP/out-agent"
+mkdir -p "$state" "$out"
+for i in $(seq 1 31); do
+  run_hook mkdir 30 "$state" "$out/a$i" Bash agent-test-1 || true
+done
+run_hook mkdir 30 "$state" "$out/main" Bash || true
+reminders="$(cat "$out"/* | grep -c 'ops-task-reminder\]' || true)"
+main="$(cat "$state/task-reminder-$SID" 2>/dev/null || echo missing)"
+if [ "$reminders" = "0" ] && [ "$main" = "1" ]; then
+  pass "31 subagent calls + 1 main call, threshold 30 -> no reminder, main counter 1"
+else
+  fail "subagent calls leaked: $reminders reminders, main counter $main (want 0, 1)"
+fi
+echo 7 >"$state/task-reminder-$SID"
+run_hook mkdir 30 "$state" "$out/reset" TaskUpdate agent-test-1 || true
+main="$(cat "$state/task-reminder-$SID")"
+if [ "$main" = "7" ]; then
+  pass "subagent TaskUpdate leaves the main counter alone (7)"
+else
+  fail "subagent TaskUpdate changed the main counter to $main (want 7)"
+fi
+# The main thread still gets its reminder at the threshold.
+echo 29 >"$state/task-reminder-$SID"
+run_hook mkdir 30 "$state" "$out/main-thr" Bash || true
+if grep -q 'ops-task-reminder\]' "$out/main-thr"; then
+  pass "main thread still reminded at threshold 30"
+else
+  fail "main thread not reminded at threshold 30"
 fi
 
 # 8. Wiring: hooks.json must route Task* PostToolUse events to this hook,

@@ -138,6 +138,18 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-mac update    # updater check — then confirm bef
 
 After any fix, re-run the relevant probe and show before→after.
 
+## Maintenance safety helpers
+
+`ops-mac maintenance <helper>` exposes bundled source helpers. Without arguments,
+`agent-log-rotate` lists logs only. Its copy/truncate rotation is best-effort, not
+lossless: launchd writers ignore locks, so a line written between the final check
+and the truncate can be lost; prefer producer-native rotation where available. Machine labels, endpoints, user scope and process
+allowlists stay in untracked files under `~/.config/claude-ops/`. Installing a
+helper never registers, starts, restarts or kills a job. Use
+`ops-mac maintenance install <helper> --target <path> --expected-sha256 <current>`
+first as a dry-run, then add `--apply` only after a backup and peer check. Use
+`--expected-sha256 absent` only for a new target; prior versions get timestamped backups.
+
 ## Mobile mode (Rule 7)
 
 If `$SSH_CONNECTION`/`$SSH_CLIENT`/`$SSH_TTY` is set, `$OPS_MOBILE=1`, or `$COLUMNS` < 80: drop the boxes/tables, emit 3–8 plain lines, one fact each. Example:

@@ -15,11 +15,9 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
   - TaskList
-  - CronCreate
   - CronList
   - mcp__gog__gmail_search
   - mcp__gog__gmail_read_thread
-  - mcp__gog__gmail_send
   - mcp__gog__gmail_labels
   # Slack — multi-workspace inbox scan uses these MCP tools when a workspace's
   # token is bound to the Slack MCP in ~/.claude.json. Workspaces whose
@@ -45,15 +43,13 @@ allowed-tools:
   - mcp__whatsapp__list_chats
   - mcp__whatsapp__list_messages
   - mcp__whatsapp__search_contacts
-  - mcp__whatsapp__send_message
   - mcp__whatsapp__get_chat
   - mcp__whatsapp__get_message_context
   - mcp__whatsapp__archive_chat
   - mcp__whatsapp__resync_app_state
   # iMessage — official `imessage` plugin. chat_messages reads ~/Library/Messages/chat.db
-  # (allowlist-scoped); reply sends via AppleScript to Messages.app. No bridge, no daemon.
+  # (allowlist-scoped). Outbound uses the supported approved gate, not a direct reply.
   - mcp__plugin_imessage_imessage__chat_messages
-  - mcp__plugin_imessage_imessage__reply
 effort: high
 maxTurns: 60
 ---
@@ -85,12 +81,19 @@ No continuation menu, channel picker, or second "start drafting" prompt.
    sources or the rest of the inbox. Recheck its live thread before showing it.
    Every later ready candidate joins the parent's queue as evidence arrives.
 6. One draft → one explicit approval → one send. Use the installed approved
-   outbound gate; for email, WhatsApp and Slack this is only samimizer `message`.
+   outbound gate; email, WhatsApp and Slack go only through the host's approved
+   outbound gate.
    Populate its real session/thread/recipient metadata on the first call.
    Go is not approval. No self-created approval proof or alternate send route.
-7. After verified delivery, continue to the next ready item without asking
-   "next?". Archive/mark-read is separate and requires authorization. A send
-   does not prove the underlying action is complete.
+7. After sent=false, show the gate-returned full draft and end that presentation
+   turn. Only the next native user event can advance its decision and the next
+   draft. A transport hold may retain separately approved records for later
+   gate-only drain; never show another draft in the same wait turn. Different
+   threads/intents stay separate; unsupported queue states are not ready.
+8. In the interactive authorized phase, complete answered/resolved items by
+   verifying then archiving Gmail and every owned WhatsApp JID on its account.
+   No extra menu for the expressly authorized completed set; protect open tasks,
+   labels and unknown media. Mark-read is separate. Cron scans remain read-only.
 
 Readers never send, archive, mark-read, modify integrations, or ask the owner
 questions. They send evidence packets to the parent as soon as ready; an idle
@@ -101,9 +104,11 @@ worker without a report is not completion. See `references/fan-out.md`.
 - **Email:** every mailbox, including sent history, All Mail and discovered
   action/follow-up labels. Inbox, read/unread, archived, categories and drafts
   are not evidence that an ask was handled.
-- **WhatsApp:** every agent-enabled WhatsApp account, labelled separately. Prove
+- **WhatsApp:** every connected WhatsApp account, labelled separately. Connected
+  but agent-disabled accounts stay explicit not-checked gaps; do not enable or
+  access them. Derive coverage from complete discovery, not a fixed count. Prove
   phone/JID/LID identity before merging aliases; reconcile incoming **and**
-  outgoing across accounts. A generic MCP name does not prove account coverage.
+  outgoing across authorized accounts. A generic MCP name does not prove coverage.
 - **Slack:** every Slack workspace, scoped human DMs/group DMs (`im,mpim`),
   allowed `public_channel` and `private_channel` history, mentions and replies.
   Read-state is not the filter; inspect thread replies, not just channel tails.
@@ -123,17 +128,21 @@ ask, why this answer helps, and any source gap. Then the gate shows the exact
 recipient/account/thread, reply-all recipients, subject, full body and attachments.
 The gate's latest delivered full-draft proof binds approval to those bytes.
 
-After a native, proven yes to that shown draft, send without a second approval
-menu. On failure report the concrete diagnostic, keep ownership and continue
-independent safe work. Never claim "sent" from a staged draft or an idle reader.
+After a native, proven yes to that shown draft, send when the gate permits without
+a second approval menu. A typed yes followed by a refused/cancelled physical gate
+is not approval. On failure keep the intent and exact diagnostic owned. Continue
+independent read-only research, but advance another presentation only after the
+next native user event. Never claim "sent" from a preview or pending-proof record.
 
 ## Finish honestly
 
 Recheck source changes since each reader's cutoff before claiming complete.
 Account for queued, shown, approved, sent, skipped, unresolved and unknown items.
-Inbox zero means no outstanding action in the enumerated coverage, not zero
-unread messages or an empty visible inbox. A real approval wait is a wait, not
-completion; preserve the queue for the next user event. Status heartbeats follow
+Inbox zero is always the goal: all configured sources have completed dispositions,
+no unhandled obligations, and authorized resolved items are verified archived.
+Unknown coverage, pending proof or archive failure means NOT zero, regardless of
+unread count. A real approval wait is not completion; preserve the queue for the
+next user event. Status heartbeats follow
 the host's cadence, contain actual results, and stop at a final result or real wait.
 
 ## References (load only the relevant one)

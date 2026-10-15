@@ -1,7 +1,7 @@
 {
   "name": "claude-ops-installer",
   "version": "0.1.0",
-  "description": "Install, update, and verify the claude-ops plugin across Claude Code, Codex, Gemini CLI, OpenClaw, Hermes, and OpenCode from a single command.",
+  "description": "Install, update, and verify the claude-ops plugin across Claude Code, Codex, Gemini CLI, OpenClaw, Hermes, and OpenCode from a single command; check byte parity across Claude Code, Codex, Grok, Cursor and Hermes.",
   "type": "module",
   "bin": {
     "claude-ops-installer": "bin/claude-ops-installer.mjs"
@@ -12,10 +12,11 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node test/smoke.mjs",
-    "lint": "prettier --check '**/*.{js,mjs,json}' --ignore-path .gitignore",
-    "format": "prettier --write '**/*.{js,mjs,json}' --ignore-path .gitignore",
-    "type-check": "node --check bin/*.mjs src/*.mjs test/*.mjs"
+    "test": "node test/smoke.mjs && node test/parity.mjs",
+    "lint": "prettier --check '**/*.{js,mjs,json}' --ignore-path .gitignore --ignore-path .prettierignore",
+    "format": "prettier --write '**/*.{js,mjs,json}' --ignore-path .gitignore --ignore-path .prettierignore",
+    "type-check": "node --check bin/*.mjs src/*.mjs src/parity/*.mjs test/*.mjs",
+    "sync-parity": "cp ../claude-ops/lib/parity/check.mjs ../claude-ops/lib/parity/status.json src/parity/"
   },
   "engines": {
     "node": ">=18"

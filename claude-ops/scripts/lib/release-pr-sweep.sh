@@ -42,7 +42,7 @@
 SWEEP_FAIL_CONCLUSIONS="${SWEEP_FAIL_CONCLUSIONS:-failure timed_out action_required error}"
 
 # Checks that must exist and be finished before a PR may merge.
-SWEEP_REQUIRED_CHECKS_DEFAULT='["lint-and-check (ubuntu-latest)","lint-and-check (ubuntu-24.04)","pii-gate","test-suite (ubuntu-latest)","test-suite (ubuntu-24.04)","CodeQL"]'
+SWEEP_REQUIRED_CHECKS_DEFAULT='["lint-and-check (ubuntu-latest)","pii-gate","test-suite (ubuntu-latest)","CodeQL"]'
 
 # REST core calls we refuse to start a sweep below.
 SWEEP_RATE_FLOOR="${SWEEP_RATE_FLOOR:-300}"

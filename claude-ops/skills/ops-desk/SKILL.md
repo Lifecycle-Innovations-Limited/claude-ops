@@ -20,7 +20,6 @@ allowed-tools:
   - mcp__gog__gmail_search
   - mcp__gog__gmail_read_thread
   - mcp__whatsapp__list_messages
-  - mcp__whatsapp__send_message
   - mcp__whatsapp__archive_chat
   - mcp__linear__list_issues
   - mcp__linear__get_issue
@@ -161,15 +160,21 @@ return await agent(
 
 Per package, in rank order:
 
-- **`already_done` / `archive` / `info_only`** → report in one line, archive/close
-  immediately (tracker status → done). These are the free wins; do them without asking.
-- **`send_email` / `send_whatsapp` / `chase`** → PER-DRAFT APPROVAL exactly as in
-  `/ops:ops-inbox`: ONE `AskUserQuestion` per draft, single-select `[Send]` `[Edit]`
-  `[Skip]`, the `preview` carrying the FULL text plus a short "Reasoning / facts verified"
-  block (≤10 short lines — split longer drafts). After `[Send]`: send (email via `gog
-  gmail send`, WhatsApp via the bridge), then archive the thread and update the tracker.
-  Where an out-of-band send token is enforced (e.g. an outbound-comms hook), remind the
-  owner ONCE up front — not per item.
+- **`already_done` / `info_only`** → report in one line and close the item in the task
+  tracker (status → done). This is tracker-only closure: no mailbox, chat or file is
+  archived, moved or marked read. These are the free wins.
+- **`archive`** → a package from a read-only agent is a recommendation, not owner
+  authorization. Show the item and the evidence, then archive it only after explicit
+  owner authorization for that item (e.g. via `AskUserQuestion`). Without it, leave the
+  thread where it is and report the item as still open.
+- **`send_email` / `send_whatsapp` / `chase`** → exactly as in `/ops:ops-inbox` and
+  `ops-rules` Rule 6: one draft, one approval, one send, only through the host's
+  approved outbound gate. The gate shows the exact recipient and full latest text;
+  approval is the owner's native yes bound to those bytes, never a token, counter or
+  earlier approval. Re-read the live thread before sending, verify delivery on a
+  fresh read, then update the tracker. Archive only under explicit archive
+  authorization. If the gate refuses or does not support the channel, keep the item
+  owned with the exact diagnostic; never use a direct CLI, bridge or API sender.
 - **`decision`** → present the options (recommended first) via `AskUserQuestion`, record
   the outcome in the tracker, execute any follow-through it implies.
 - **`sign` / `pay`** → prepare only: surface the exact link/document/amount and what to

@@ -20,11 +20,22 @@ all unrelated source scans before the first draft is not.
    messages by ID. Read load-bearing inbound AND outbound voice/media content
    using authorized read-only downloads; no enrichment writeback. If content
    cannot be read, the candidate remains unknown, not ready.
+   **Attachments are primary evidence.** Read actual invoice/PDF/document
+   attachments before amount, due-date, entity or financial-status claims.
+   Inspect the operative attachment, including tables and referenced documents;
+   a preview, filename, sender summary or voice transcript is not the document.
+   Unreadable or missing load-bearing attachments mean unknown and KEEP.
+   Record attachment identifiers, actual read proof, amount/currency, due date,
+   verified entity and any financial status with its own current source. A sent
+   email or an invoice total is not proof of payment. Missing fields stay unknown;
+   never guess a deadline or close a financial obligation from an envelope.
+   Reading documents does not authorize payment, signing, forwarding or legal
+   judgment; the host's human/action gates remain unchanged.
 3. **Two-sentence arc.** Name who said what, what is actually pending and who
    owns the action. A last-inbound flag is only a candidate signal. Courtesy,
    FYI and an action the user owes are not automatically replies to send.
 4. **Already answered?** Check incoming and outgoing for the same request in
-   every mailbox, every agent-enabled WhatsApp account, every Slack workspace
+   every mailbox, every connected WhatsApp account, every Slack workspace
    and other configured messaging sources. Include groups, aliases and related
    people/threads. Match the specific request, not merely the person. A meeting
    or payment on another matter does not close this ask. Verify SENT messages,
@@ -47,8 +58,9 @@ An inaccessible load-bearing source prevents this draft, not unrelated drafts.
 ## Exact first-call preflight
 
 Immediately before showing a draft, the parent re-reads its live tail and checks
-for a changed ask or newer reply from any client. Then use samimizer `message`
-for email, WhatsApp and Slack, using its **live schema**, not invented fields:
+for a changed ask or newer reply from any client. Then use the host's approved
+outbound gate for email, WhatsApp and Slack, using its **live schema**, not
+invented fields:
 
 - Real current `sessionUUID` from the harness, passed as `session_id` on the first
   call too, never a random or borrowed UUID.
@@ -63,11 +75,15 @@ for email, WhatsApp and Slack, using its **live schema**, not invented fields:
 - Do not pass a yes-word. The user approves themselves; gate-call parameters
   are never a substitute for native consent.
 
-When `message` returns `sent=false`, the next visible reply must contain literally
+When the gate returns `sent=false`, the next visible reply must contain literally
 its `draft_id`, every bubble verbatim, every recipient, and the sending number
 for WhatsApp. Then wait for the user; do not append a second menu or silently retry.
 Use the gate-returned identifiers and text, never placeholders or a reconstructed
-preview. This return is not delivery.
+preview. This return is not delivery. End the presentation turn after this
+sent=false draft. Only after the next native user event may the parent process
+that draft's decision and advance to another ready draft. Independent read-only
+research may continue in the background, but does not authorize another shown
+outbound draft in the same presentation turn.
 
 For another channel use only its host-approved outbound gate. If that gate does
 not support it, retain the candidate with the exact unsupported-channel diagnostic;
@@ -100,21 +116,70 @@ approved bytes through the same gate, not another menu. If send outcome is
 uncertain, read the destination before any retry to prevent a duplicate send.
 Never repair identity/auth/security settings as an inbox shortcut.
 
-## Verify, then separately dispose
+## Collect individual approvals, then drain
+
+During a technical transport hold, advance sequentially only after that draft
+receives its own native user decision. The next presentation occurs after that
+user event; never show a second draft in the sent=false turn. Sending may remain
+held while independently approved records retain their own proofs. Each record
+keeps its own shown-id and native approval proof, exact recipient/account/thread,
+latest full bytes, current session and actual gate-returned draft identifier.
+Different threads/intents for one recipient remain separate. A record marked
+assistant-preview-only is not Telegram-delivered proof; preserve that decision
+as pending proof, not approved or sent. Never clone consent or mint records.
+
+| Actual state | Required action |
+| --- | --- |
+| Full native draft shown; typed yes, but Touch ID cancelled, timed out, or refused | No native approval. Report the physical step; the user retries the approval word and sensor. Never replay the old word or create a token. |
+| Exact record genuinely approved; unchanged bytes; technical delay | Keep its approval. Do not ask twice. Drain only individually approved records when the native gate supports it. |
+| Changed bytes invalidate the old approval, including a humanizer punctuation edit | Show the latest complete text and get native consent to that version. |
+| Another thread's record was superseded or replaced by the service | Read every affected native record; mark unsupported/unknown state and route to the gate owner. No ready-batch claim, blind restaging, approval copying or backend repair. |
+
+Check actual queue capability before promising a drain: a service holding only
+one draft per person cannot preserve a multi-thread queue. Keep separate intents
+owned while that limit is unresolved. Drain each eligible record through the
+same gate with its fresh live-tail check and verified destination outcome.
+Unshown, unproven, refused, changed, superseded and unknown records stay queued.
+A request to send the approved batch is not approval of unseen drafts.
+
+## Verify, archive, then complete
 
 Confirm the outbound exists on a fresh thread read with correct account,
 recipient and content. Email also requires no bounce, not merely a SENT label.
 A successful tool return alone is not delivery. Record actual message ID and
 source evidence; a draft, empty result or idle worker is not a send.
 
-Archiving/mark-read requires **explicit archive authorization** under host policy,
-separate from sending. A replied thread may still contain an unresolved action;
-keep it visible/tracked. Protect every todo/action/follow-up label until the task
-is actually handled; a completion-looking label alone is not outcome proof.
-FYI automation can contain payment, signature, privacy or security obligations:
-read and brief it, never sweep it blindly. Skip does not mean archive or resolved.
-Verify approved archive effects against live raw labels or the authorized client
-state; bridge archive flags alone do not prove the phone/browser's archive state.
+In the interactive authorized phase, **answered/resolved → verify → archive** is
+completion, not an optional extra. An explicit archive authorization for the
+proved completed/non-actionable set covers that set; no extra per-item menu.
+Check the latest source body, incoming/outgoing, live labels and obligations:
+SENT or last-outbound alone does not prove no action remains; a DRAFT is not sent.
+Protect every todo/action/follow-up label until the task is actually handled.
+Unresolved commitments, unknown media, inaccessible/not-checked sources and
+ambiguous FYI stay open. Read FYI before deciding it is non-actionable. Skip is
+not resolved. Capture authorized follow-up outside the inbox before archiving a
+resolved reply now waiting on the counterparty; never discard a user-owed task.
+
+Archive Gmail on the canonical thread and WhatsApp on **every verified owned JID**
+in the **correct account**, including authoritative phone/LID aliases. Verify raw
+Gmail labels and the actual authorized WhatsApp client/browser state; a bridge
+column alone does not prove phone state. **Archive failure means NOT inbox zero**:
+keep the item owned with the exact failing surface and next safe action.
+After the approved call, read back the archived flag for each phone JID and
+ every LID separately on the same verified account. Record account, exact JID,
+permitted read surface, read time and actual flag in `archive_readback`; consult
+`cli.md` for named read surfaces and their proof limits. A successful write
+followed by read=false or archived=false means failure; keep the failing item
+owned. Here read=false is failed archive verification, not the chat's read/unread
+badge. Missing, stale or unsupported readback is unknown, never a completed
+archive count. Require successful readback for all verified owned aliases before
+calling that item's archive complete; never substitute one account's flag for
+another's or a bridge flag for phone/browser state.
+**Archived threads remain in future reply-debt scans**; a fresh inbound reopens
+assessment even when unread/archive flags stay unchanged.
+**Mark-read is separate, never implicit**. **Cron/background monitors remain
+read-only**; neither an approved send nor an interactive archive directive grants
+a daemon tick permission to send, archive or mutate labels.
 
 Keep open promises, waiting-for-other and deadlines in the existing authorized
 tracker. Do not create new reminders, recurring jobs or business-system writes
