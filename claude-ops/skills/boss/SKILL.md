@@ -139,8 +139,3 @@ approved action, etc.), then confirm one line each.
 - Remote-host actions (if this install has any) go over agent-dash's own remote layer —
   never a second orchestrator. If no remote host is configured, this rule is simply moot;
   don't invent one.
-
-## Appendix: merged from the other machine
-
-- **BLOCKED-USER-GATED** — needs a human decision/approval/2FA/credential/business-or-design
-For each BLOCKED-USER-GATED item, present via **AskUserQuestion** as a real choice:

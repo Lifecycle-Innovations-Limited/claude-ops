@@ -44,7 +44,3 @@ Or run manually with `/ops:tonight`
 
 Each section that surfaces an item writes a sub-entry so morning `/ops:go` can pick
 up where this left off without re-deriving.
-
-## Appendix: merged from the other machine
-
-5. **Unresolved from today** — ledger entries with `status=awaiting_user` still open.

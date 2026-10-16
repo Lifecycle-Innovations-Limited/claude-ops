@@ -279,7 +279,3 @@ ledger write \
   --title "Triage: <issue title>" \
   --context "fix dispatched|escalated|snoozed: <reason>"
 ```
-
-## Appendix: merged from the other machine
-
-Skip issues with `in_progress` or `done`. Present `awaiting_user` issues at the

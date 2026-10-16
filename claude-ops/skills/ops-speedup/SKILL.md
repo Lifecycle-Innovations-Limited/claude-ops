@@ -80,17 +80,35 @@ All modes:
 | Memory purge                   | ✓ (`purge`)            | ✓ (drop_caches, aggressive) | ✓ (aggressive) | —       |
 | Stale build dir prune (>14d)   | ✓                      | ✓                     | ✓               | —       |
 
-## Phase 1 — Visual header
+## Phase 1 — Select the diagnostic run
 
-```!
-${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup 2>/dev/null || echo "SCAN_FAILED"
+Loading this skill must not execute diagnostic commands. Do not use executable
+Markdown preambles for the header or scan: they run before the agent can check
+ownership, previous runs, or the user's current scope.
+
+Before starting, check the existing task list and scheduler. Reuse an in-flight
+scan or its completed output; never launch another scan while that result is
+pending. Do not create a second recurring job for an existing speedup or fleet
+control. Recurring fleet checks use their authorized lightweight probes, not a
+new full scan on each tick.
+
+## Phase 2 — Run one explicit diagnostic command
+
+For an explicit full-scan request, invoke the binary once through Bash after the
+preflight checks:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup --scan
 ```
 
-## Phase 2 — Full diagnostic scan (parallel, all probes)
+Do not run the bare binary first to draw a header. Build the header from the
+returned JSON instead. Preserve stderr and the real exit status; never replace
+failed output with an empty success-shaped JSON object.
 
-```!
-${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup --scan 2>/dev/null || echo '{}'
-```
+If the tool moves the command to the background, retain its task ID and wait for
+the completion notification. A foreground timeout does not prove the command
+hung or finished. Do not start a replacement scan or duplicate scheduler while
+it is pending. Read the completed output before reporting a score or failure.
 
 The binary already runs all probes in parallel. Do NOT add additional serial probe calls from this skill — they will duplicate work that's already in the JSON output.
 
