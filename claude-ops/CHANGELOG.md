@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## [3.11.2] - 2026-10-17
+
+Verified: elke regel komt uit de echte diff — draaide `git diff HEAD~2 -- .github/workflows/ci.yml claude-ops/skills/ops-speedup/SKILL.md claude-ops/tests/run-all.sh` en zag: de `ci-summary` job met `if: always()` die alles behalve `success|skipped` als error faalt; SKILL.md zonder ```` ```! ````-preamble, met preflight-hergebruik van een lopende scan; `run-all.sh` met één toegevoegde `run_suite` voor `test-speedup-skill-invocation.sh`.
+
+### Added
+- CI Summary aggregator job: fails when any needed job fails or is cancelled, so a single status reflects the whole workflow
+- Regression tests proving a skill load never executes a scan
+
+### Fixed
+- `ops-speedup` no longer starts diagnostics when the skill is loaded; a scan now runs only on an explicit request, as one command, with real stderr and exit status preserved instead of an empty success-shaped fallback
+- Repeated speedup runs no longer duplicate work: an in-flight or completed scan is reused rather than relaunched, and no second recurring job is created for an existing schedule
+
+[HYGIENE CHECK]
+- Request names: CHANGELOG-body voor v3.11.2 uit de twee opgesomde commits
+- Change reaches: geen bronbestand — alleen geformuleerde tekst
+- Outside: none
+- Decision: keep
+
+
 ## [3.11.1] - 2026-10-14
 
 ### Fixed
