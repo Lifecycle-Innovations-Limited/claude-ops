@@ -259,11 +259,20 @@ IAM_PY
   fi
 
   # IAM Access Analyzer — 2026 best practice: an *unused-access* analyzer
-  local has_unused="" reg
+  local has_unused="" reg analyzer_ok=1
   for reg in ${AUDIT_REGIONS//,/ }; do
-    AWSR "$reg" accessanalyzer list-analyzers --query 'analyzers[].type' --output text 2>/dev/null | grep -q 'UNUSED_ACCESS' && has_unused=1
+    if aws_pages "accessanalyzer-$reg" "$RAW/analyzers-$reg.json" '.analyzers' \
+         AWSR "$reg" accessanalyzer list-analyzers --output json; then
+      jq -e '[.[]|.type]|index("UNUSED_ACCESS")' "$RAW/analyzers-$reg.json" >/dev/null && has_unused=1
+    else
+      analyzer_ok=0
+    fi
   done
-  [ -z "$has_unused" ] && finding MEDIUM IAM global "Access Analyzer" "No unused-access IAM Access Analyzer configured" "Create an UNUSED_ACCESS analyzer to surface stale roles/keys/permissions" 0
+  if [ "$analyzer_ok" = 1 ] && [ -z "$has_unused" ]; then
+    finding MEDIUM IAM global "Access Analyzer" "No unused-access IAM Access Analyzer configured" "Create an UNUSED_ACCESS analyzer to surface stale roles/keys/permissions" 0
+  elif [ "$analyzer_ok" = 0 ]; then
+    err "Access Analyzer unreadable; absence is not assumed"
+  fi
 }
 
 # ====================================================== EC2 / EBS (regional) =
@@ -287,10 +296,15 @@ audit_ec2() {
     err "EBS volumes unreadable in $reg; absence is not assumed"
   fi
 
-  # unassociated Elastic IPs (~$3.60/mo each)
-  AWSR "$reg" ec2 describe-addresses --query 'Addresses[?AssociationId==null].AllocationId' --output text 2>/dev/null | tr '\t' '\n' | while read -r eip; do
-    [ -n "$eip" ] && finding MEDIUM EC2 "$reg" "$eip" "Unassociated Elastic IP (billed hourly)" "Release the EIP if not needed" 3.60
-  done
+  # unassociated Elastic IPs (~$3.60/mo each). JSON so a denial is not an empty list.
+  if aws_pages "ec2-addresses-$reg" "$RAW/addresses-$reg.json" '.Addresses' \
+       AWSR "$reg" ec2 describe-addresses --output json; then
+    jq -r '.[]|select(.AssociationId==null)|.AllocationId // empty' "$RAW/addresses-$reg.json" | while read -r eip; do
+      [ -n "$eip" ] && finding MEDIUM EC2 "$reg" "$eip" "Unassociated Elastic IP (billed hourly)" "Release the EIP if not needed" 3.60
+    done
+  else
+    err "Elastic IP inventory unreadable in $reg; absence is not assumed"
+  fi
 
   # Admin ports include ranges and IPv6. Protocol -1 is a raw string, not a number.
   if aws_pages "ec2-sg-$reg" "$RAW/sg-$reg.json" '.SecurityGroups' \
@@ -430,8 +444,12 @@ audit_s3() {
 # ============================================ CloudWatch Logs (regional) ======
 audit_logs() {
   local reg="$1"
-  AWSR "$reg" logs describe-log-groups \
-    --query 'logGroups[?retentionInDays==null].logGroupName' --output text 2>/dev/null | tr '\t' '\n' | while read -r lg; do
+  if ! aws_pages "logs-$reg" "$RAW/logs-$reg.json" '.logGroups' \
+       AWSR "$reg" logs describe-log-groups --output json; then
+    err "log groups unreadable in $reg; absence is not assumed"
+    return
+  fi
+  jq -r '.[]|select(.retentionInDays==null)|.logGroupName // empty' "$RAW/logs-$reg.json" | while read -r lg; do
     [ -n "$lg" ] && finding LOW CloudWatch "$reg" "$lg" "Log group has no retention (stored forever)" "Set retention (e.g. 30–90d) to cap storage cost" 0
   done
 }
@@ -453,7 +471,14 @@ policy = json.load(open(policy_path))
 known = {row["id"]: row.get("deprecation") for row in policy["deprecated"] + policy["supported"]}
 for fn in json.load(open(path)):
     runtime = fn.get("Runtime")
+    name = fn.get("FunctionName") or "unknown-function"
     if not runtime or runtime not in known:
+        row = {"severity": "LOW", "service": "Lambda", "region": region, "resource": name,
+               "title": name + " runtime unassessed",
+               "issue": f"Runtime {runtime or 'missing'} is not in the pinned policy (image or custom runtime)",
+               "recommendation": "Assess the image or custom runtime separately; this is not a pass",
+               "est_monthly_usd": 0, "coverage": "unassessed"}
+        open(out, "a").write(json.dumps(row) + "\n")
         continue
     when = known[runtime]
     if when and day >= date.fromisoformat(when):
@@ -477,15 +502,30 @@ audit_security_posture() {
     else
       err "GuardDuty unreadable in $reg; not reported as disabled"
     fi
-    sh=$(AWSR "$reg" securityhub get-enabled-standards --query 'StandardsSubscriptions' --output text 2>/dev/null)
-    [ -z "$sh" ] && finding LOW SecurityHub "$reg" "account" "Security Hub standards not enabled" "Enable AWS Foundational Security Best Practices standard" 0
+    if aws_capture "securityhub-standards-$reg" "$RAW/securityhub-$reg.json" \
+         AWSR "$reg" securityhub get-enabled-standards --output json; then
+      sh=$(jq '[.StandardsSubscriptions // [] | length] | if .[0]==0 then "" else "present" end' "$RAW/securityhub-$reg.json")
+      [ -z "$sh" ] && finding LOW SecurityHub "$reg" "account" "Security Hub standards not enabled" "Enable AWS Foundational Security Best Practices standard" 0
+    else
+      err "Security Hub standards unreadable in $reg; not reported as disabled"
+    fi
   done
   # Cost Anomaly Detection monitors (global)
-  cam=$(AWS ce get-anomaly-monitors --query 'AnomalyMonitors' --output text 2>/dev/null)
-  [ -z "$cam" ] && finding MEDIUM CostAnomaly global "account" "No Cost Anomaly Detection monitors" "Create an anomaly monitor + alert subscription (backstop for spend spikes)" 0
-  # Compute Optimizer enrollment (global)
-  co=$(AWS compute-optimizer get-enrollment-status --query status --output text 2>/dev/null)
-  [ "$co" != "Active" ] && finding LOW ComputeOptimizer global "account" "Compute Optimizer not enrolled (status: ${co:-unknown})" "Opt in for rightsizing recommendations (EC2/EBS/Lambda)" 0
+  if aws_capture cost-anomaly "$RAW/cost-anomaly.json" \
+       AWS ce get-anomaly-monitors --output json; then
+    cam=$(jq '[.AnomalyMonitors // [] | length] | if .[0]==0 then "" else "present" end' "$RAW/cost-anomaly.json")
+    [ -z "$cam" ] && finding MEDIUM CostAnomaly global "account" "No Cost Anomaly Detection monitors" "Create an anomaly monitor + alert subscription (backstop for spend spikes)" 0
+  else
+    err "Cost Anomaly monitors unreadable; absence is not assumed"
+  fi
+  # Compute Optimizer enrollment (global). Missing or null status is not Active.
+  if aws_capture compute-optimizer "$RAW/compute-optimizer.json" \
+       AWS compute-optimizer get-enrollment-status --output json; then
+    co=$(jq -r '.status // "unknown"' "$RAW/compute-optimizer.json")
+    [ "$co" != "Active" ] && finding LOW ComputeOptimizer global "account" "Compute Optimizer not enrolled (status: $co)" "Opt in for rightsizing recommendations (EC2/EBS/Lambda)" 0
+  else
+    err "Compute Optimizer enrollment unreadable; not reported as inactive"
+  fi
 }
 
 # ===================================================== Cost (per-service Δ) ===

@@ -1,8 +1,16 @@
 {
   "source": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html",
-  "retrieved": "2026-10-18",
+  "retrieved": "2026-10-18T19:02:51Z",
   "note": "Pinned offline snapshot of official Lambda deprecation dates. Not an AWS account fact. Dates are AWS planning dates and can change; refresh this file from the official page rather than editing a code blacklist.",
   "policy": "A runtime is stale on an audit date when that date is on or after its deprecation date. Supported rows with a future deprecation date are not stale before that date. 'Not scheduled' is not stale.",
+  "source_rows": {
+    "nodejs20.x": {
+      "deprecation": "Apr 30, 2026",
+      "block_function_create": "Jun 1, 2026",
+      "block_function_update": "Jul 31, 2026",
+      "quote": "Deprecation date Apr 30, 2026. Block function create Jun 1, 2026. Block function update Jul 31, 2026. No Aug 31, 2026 row for nodejs20.x."
+    }
+  },
   "deprecated": [
     {"id": "provided.al2", "deprecation": "2026-07-31"},
     {"id": "nodejs20.x", "deprecation": "2026-04-30"},

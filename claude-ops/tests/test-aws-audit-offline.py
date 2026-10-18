@@ -348,6 +348,82 @@ class OfflineAudit(unittest.TestCase):
         tokens = [argv[argv.index("--starting-token") + 1] for argv in self.aws_argv() if "--starting-token" in argv]
         self.assertIn("page-2", tokens)
 
+    def test_text_output_denial_is_coverage_not_absence(self):
+        """Access Analyzer, EIP, logs, Security Hub and Compute Optimizer discard stderr today."""
+        calls = base_calls()
+        denied = [
+            (["accessanalyzer", "list-analyzers"], "ListAnalyzers"),
+            (["describe-addresses"], "DescribeAddresses"),
+            (["describe-log-groups"], "DescribeLogGroups"),
+            (["get-enabled-standards"], "GetEnabledStandards"),
+            (["compute-optimizer", "get-enrollment-status"], "GetEnrollmentStatus"),
+        ]
+        for needles, _name in denied:
+            calls = [c for c in calls if not all(part in c["contains"] for part in needles)]
+            calls.append({
+                "contains": needles,
+                "exit": 254,
+                "stdout": "",
+                "stderr": f"An error occurred (AccessDenied) when calling the {_name} operation: explicit deny\\n",
+            })
+        result = self.run_audit(calls)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        joined = " ".join(self.titles())
+        self.assertNotIn("No unused-access", joined)
+        self.assertNotIn("Security Hub standards not enabled", joined)
+        self.assertNotIn("Compute Optimizer not enrolled", joined)
+        cov = self.coverage()
+        for key in (
+            "accessanalyzer-us-east-1",
+            "ec2-addresses-us-east-1",
+            "logs-us-east-1",
+            "securityhub-standards-us-east-1",
+            "compute-optimizer",
+        ):
+            self.assertEqual(cov[key]["status"], "denied", cov.get(key))
+            self.assertIn("AccessDenied", cov[key]["stderr"])
+
+    def test_empty_json_is_not_a_resource_and_null_status_is_not_active(self):
+        """AWS CLI text prints nothing for [] and the literal None for null. JSON must not invent either."""
+        calls = base_calls()
+        calls = [c for c in calls if "describe-log-groups" not in c["contains"] and "get-enrollment-status" not in c["contains"]]
+        calls.append({"contains": ["describe-log-groups"], "stdout": '{"logGroups":[]}\n'})
+        calls.append({"contains": ["compute-optimizer", "get-enrollment-status"], "stdout": '{"status":null}\n'})
+        result = self.run_audit(calls)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        joined = " ".join(self.titles())
+        self.assertNotIn('{"logGroups":[]}', joined)
+        self.assertNotIn("None", joined)
+        self.assertNotIn("log group", joined.lower())
+        self.assertTrue(any("unknown" in t.lower() and "optimizer" in t.lower() for t in self.titles()), self.titles())
+
+    def test_image_and_unknown_runtime_are_unassessed_custom_is_known(self):
+        calls = base_calls()
+        calls = [c for c in calls if not ("lambda" in c["contains"] and "list-functions" in c["contains"])]
+        calls.append({"contains": ["lambda", "list-functions"], "stdout": json.dumps({"Functions": [
+            {"FunctionName": "img", "PackageType": "Image"},
+            {"FunctionName": "mystery", "Runtime": "made-up-runtime"},
+            {"FunctionName": "custom", "Runtime": "provided.al2023"},
+        ]}) + "\n"})
+        result = self.run_audit(calls, audit_date="2026-11-01")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        rows = json.loads((self.out / "findings.json").read_text(encoding="utf-8"))
+        by_name = {row["resource"]: row for row in rows}
+        self.assertEqual(by_name["img"].get("coverage"), "unassessed")
+        self.assertEqual(by_name["mystery"].get("coverage"), "unassessed")
+        self.assertNotIn("custom", by_name)
+
+    def test_nodejs20_deprecation_is_april_not_the_phase1_block(self):
+        policy = json.loads(POLICY.read_text(encoding="utf-8"))
+        row = next(item for item in policy["deprecated"] if item["id"] == "nodejs20.x")
+        self.assertEqual(row["deprecation"], "2026-04-30")
+        source = policy["source_rows"]["nodejs20.x"]
+        self.assertEqual(source["deprecation"], "Apr 30, 2026")
+        self.assertEqual(source["block_function_update"], "Jul 31, 2026")
+        dates = [item["deprecation"] for item in policy["deprecated"] + policy["supported"]]
+        self.assertNotIn("2026-08-31", dates)
+        self.assertIn("19:02:51Z", policy["retrieved"])
+
     def test_denied_guard_mutation_still_fails_closed(self):
         """Regression: a stub that returns denial must never be stored as ok/empty."""
         calls = base_calls()
