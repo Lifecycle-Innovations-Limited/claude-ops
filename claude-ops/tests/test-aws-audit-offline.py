@@ -69,6 +69,7 @@ QUIET = {
     "gd": {"contains": ["guardduty", "list-detectors"], "stdout": '{"DetectorIds":["d1"]}\n'},
     "sh": {"contains": ["securityhub", "describe-hub"], "stdout": '{"HubArn":"arn:aws:securityhub:us-east-1:000000000000:hub/default"}\n'},
     "standards": {"contains": ["get-enabled-standards"], "stdout": '{"StandardsSubscriptions":[{"StandardsArn":"arn:aws:securityhub:::standards/aws-foundational-security-best-practices/v/1.0.0"}]}\n'},
+    "regions": {"contains": ["describe-regions"], "stdout": '{"Regions":[{"RegionName":"us-east-1","OptInStatus":"opt-in-not-required"}]}\n'},
     "ce": {"contains": ["ce", "get-cost-and-usage"], "stdout": '{"ResultsByTime":[{"Groups":[]}]}\n'},
     "anomaly": {"contains": ["get-anomaly-monitors"], "stdout": '{"AnomalyMonitors":[{"MonitorArn":"arn:mon"}]}\n'},
     "optimizer": {"contains": ["compute-optimizer", "get-enrollment-status"], "stdout": '{"status":"Active"}\n'},
@@ -101,7 +102,7 @@ class OfflineAudit(unittest.TestCase):
     def write_fixture(self, calls):
         self.fixture.write_text(json.dumps({"calls": calls}), encoding="utf-8")
 
-    def run_audit(self, calls, audit_date="2026-10-18"):
+    def run_audit(self, calls, audit_date="2026-10-18", regions="us-east-1"):
         self.write_fixture(calls)
         env = os.environ.copy()
         env.update({
@@ -111,11 +112,14 @@ class OfflineAudit(unittest.TestCase):
             "AWS_AUDIT_CALL_LOG": str(self.log),
             "AWS_AUDIT_OFFLINE": "1",
             "AUDIT_OUTPUT_DIR": str(self.out),
-            "AUDIT_REGIONS": "us-east-1",
             "AUDIT_DATE": audit_date,
             "AUDIT_RUNTIME_POLICY": str(POLICY),
             "HOME": self.tmp.name,
         })
+        if regions is None:
+            env.pop("AUDIT_REGIONS", None)
+        else:
+            env["AUDIT_REGIONS"] = regions
         env.pop("AWS_PROFILE", None)
         env.pop("AWS_ACCESS_KEY_ID", None)
         env.pop("AWS_SECRET_ACCESS_KEY", None)
@@ -413,16 +417,163 @@ class OfflineAudit(unittest.TestCase):
         self.assertEqual(by_name["mystery"].get("coverage"), "unassessed")
         self.assertNotIn("custom", by_name)
 
+    def test_preview_runtime_is_not_a_production_pass(self):
+        """nodejs26.x and python3.15 are public preview. A supported pin must not pass them as production."""
+        calls = base_calls()
+        calls = [c for c in calls if not ("lambda" in c["contains"] and "list-functions" in c["contains"])]
+        calls.append({"contains": ["lambda", "list-functions"], "stdout": json.dumps({"Functions": [
+            {"FunctionName": "node-preview", "Runtime": "nodejs26.x"},
+            {"FunctionName": "py-preview", "Runtime": "python3.15"},
+        ]}) + "\n"})
+        result = self.run_audit(calls, audit_date="2026-11-01")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        rows = json.loads((self.out / "findings.json").read_text(encoding="utf-8"))
+        by_name = {row["resource"]: row for row in rows}
+        for name in ("node-preview", "py-preview"):
+            self.assertIn(name, by_name)
+            self.assertEqual(by_name[name].get("coverage"), "preview")
+            self.assertNotEqual(by_name[name].get("coverage"), "ok")
+
+    def test_required_collection_bad_shape_is_unassessed_not_disabled(self):
+        """Missing, null, scalar and object are not an empty list. [] is a real empty collection."""
+        shapes = {
+            "missing": ("{}", ("GuardDuty not enabled", "Security Hub not enabled", "Cost Anomaly Detection not enabled")),
+            "null": (
+                None,
+                ("GuardDuty not enabled", "Security Hub not enabled", "Cost Anomaly Detection not enabled"),
+            ),
+            "scalar": ("1", ("GuardDuty not enabled", "Security Hub not enabled", "Cost Anomaly Detection not enabled")),
+            "object": (
+                "{}",
+                ("GuardDuty not enabled", "Security Hub not enabled", "Cost Anomaly Detection not enabled"),
+            ),
+        }
+        bodies = {
+            "guardduty": {
+                "missing": "{}",
+                "null": '{"DetectorIds":null}',
+                "scalar": '{"DetectorIds":1}',
+                "object": '{"DetectorIds":{"id":"x"}}',
+                "empty": '{"DetectorIds":[]}',
+            },
+            "securityhub": {
+                "missing": "{}",
+                "null": '{"StandardsSubscriptions":null}',
+                "scalar": '{"StandardsSubscriptions":"none"}',
+                "object": '{"StandardsSubscriptions":{"Arn":"x"}}',
+                "empty": '{"StandardsSubscriptions":[]}',
+            },
+            "anomaly": {
+                "missing": "{}",
+                "null": '{"AnomalyMonitors":null}',
+                "scalar": '{"AnomalyMonitors":false}',
+                "object": '{"AnomalyMonitors":{"MonitorArn":"x"}}',
+                "empty": '{"AnomalyMonitors":[]}',
+            },
+        }
+        needles = {
+            "guardduty": ("list-detectors", "GuardDuty not enabled", "guardduty-us-east-1"),
+            "securityhub": ("get-enabled-standards", "Security Hub standards not enabled", "securityhub-standards-us-east-1"),
+            "anomaly": ("get-anomaly-monitors", "No Cost Anomaly Detection monitors", "cost-anomaly"),
+        }
+        for kind, (needle, title, key) in needles.items():
+            for shape, stdout in bodies[kind].items():
+                calls = [c for c in base_calls() if needle not in c["contains"]]
+                calls.append({"contains": [needle], "stdout": stdout + "\n"})
+                result = self.run_audit(calls)
+                titles = " ".join(self.titles())
+                if shape == "empty":
+                    self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                    self.assertTrue(any(title in t for t in self.titles()), self.titles())
+                    self.assertEqual(self.coverage()[key]["status"], "ok")
+                else:
+                    self.assertNotEqual(result.returncode, 0, f"{kind} {shape} must not exit 0")
+                    self.assertNotIn(title, titles, f"{kind} {shape} must not look disabled")
+                    self.assertIn(self.coverage()[key]["status"], ("error", "unassessed"))
+
+    def test_nested_required_fields_reject_bad_shape_and_accept_empty(self):
+        cases = [
+            ("list-analyzers", "accessanalyzer-us-east-1", '{"analyzers":null}', '{"analyzers":[]}'),
+            ("describe-addresses", "ec2-addresses-us-east-1", '{"Addresses":{"PublicIp":"1.2.3.4"}}', '{"Addresses":[]}'),
+            ("describe-log-groups", "logs-us-east-1", '{"logGroups":"nope"}', '{"logGroups":[]}'),
+            ("list-functions", "lambda-us-east-1", '{"Functions":null}', '{"Functions":[]}'),
+            ("describe-instances", "ec2-instances-us-east-1", '{"Reservations":null}', '{"Reservations":[]}'),
+            ("describe-volumes", "ec2-volumes-us-east-1", '{"Volumes":1}', '{"Volumes":[]}'),
+            ("describe-security-groups", "ec2-sg-us-east-1", '{"SecurityGroups":{}}', '{"SecurityGroups":[]}'),
+            ("describe-db-instances", "rds-instances-us-east-1", '{"DBInstances":null}', '{"DBInstances":[]}'),
+            ("describe-db-clusters", "rds-clusters-us-east-1", '{"DBClusters":null}', '{"DBClusters":[]}'),
+            ("describe-db-snapshots", "rds-snapshots-us-east-1", '{"DBSnapshots":false}', '{"DBSnapshots":[]}'),
+            ("get-cost-and-usage", "cost-current", '{"ResultsByTime":null}', '{"ResultsByTime":[{"Groups":[]}]}'),
+        ]
+        for needle, key, bad, good in cases:
+            bad_calls = [c for c in base_calls() if needle not in c["contains"]]
+            bad_calls.append({"contains": [needle], "stdout": bad + "\n"})
+            bad_result = self.run_audit(bad_calls)
+            self.assertNotEqual(bad_result.returncode, 0, needle)
+            self.assertIn(self.coverage().get(key, {}).get("status"), ("error", "unassessed"), self.coverage().get(key))
+            good_calls = [c for c in base_calls() if needle not in c["contains"]]
+            good_calls.append({"contains": [needle], "stdout": good + "\n"})
+            if needle == "get-cost-and-usage":
+                good_calls.append({"contains": [needle], "stdout": '{"ResultsByTime":[{"Groups":[]}]}' + "\n"})
+            good_result = self.run_audit(good_calls)
+            self.assertEqual(good_result.returncode, 0, good_result.stderr + good_result.stdout + needle)
+            self.assertEqual(self.coverage()[key]["status"], "ok")
+
+    def test_record_type_denial_is_visible_and_json(self):
+        calls = [c for c in base_calls() if not ("RECORD_TYPE" in json.dumps(c.get("contains", [])))]
+        calls.append({
+            "contains": ["Type=DIMENSION,Key=RECORD_TYPE"],
+            "exit": 254,
+            "stderr": "An error occurred (AccessDenied) when calling the GetCostAndUsage operation: denied\n",
+        })
+        result = self.run_audit(calls)
+        self.assertNotEqual(result.returncode, 0, result.stderr[-300:])
+        self.assertEqual(self.coverage()["cost-record-types"]["status"], "denied")
+        self.assertIn("AccessDenied", self.coverage()["cost-record-types"]["stderr"])
+        record_calls = [row for row in self.aws_argv() if "Key=RECORD_TYPE" in json.dumps(row)]
+        self.assertTrue(record_calls)
+        self.assertIn("json", record_calls[-1])
+        self.assertNotIn("text", record_calls[-1])
+
+    def test_region_discovery_denial_does_not_shrink_to_primary(self):
+        calls = [c for c in base_calls() if "describe-regions" not in c["contains"]]
+        calls.append({
+            "contains": ["describe-regions"],
+            "exit": 254,
+            "stderr": "An error occurred (AccessDenied) when calling the DescribeRegions operation: denied\n",
+        })
+        result = self.run_audit(calls, regions=None)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.coverage()["regions"]["status"], "denied")
+        self.assertFalse((self.out / "report.md").exists())
+
+    def test_identity_and_summary_denial_keep_stderr(self):
+        for needle, key in (("get-caller-identity", "identity"), ("get-account-summary", "iam-summary")):
+            calls = [c for c in base_calls() if needle not in c["contains"]]
+            calls.append({
+                "contains": [needle],
+                "exit": 254,
+                "stderr": "An error occurred (AccessDenied) when calling the operation: denied\n",
+            })
+            result = self.run_audit(calls)
+            self.assertNotEqual(result.returncode, 0, needle)
+            self.assertEqual(self.coverage()[key]["status"], "denied")
+            self.assertIn("AccessDenied", self.coverage()[key]["stderr"])
+
     def test_nodejs20_deprecation_is_april_not_the_phase1_block(self):
         policy = json.loads(POLICY.read_text(encoding="utf-8"))
         row = next(item for item in policy["deprecated"] if item["id"] == "nodejs20.x")
         self.assertEqual(row["deprecation"], "2026-04-30")
         source = policy["source_rows"]["nodejs20.x"]
         self.assertEqual(source["deprecation"], "Apr 30, 2026")
-        self.assertEqual(source["block_function_update"], "Jul 31, 2026")
-        dates = [item["deprecation"] for item in policy["deprecated"] + policy["supported"]]
-        self.assertNotIn("2026-08-31", dates)
-        self.assertIn("19:02:51Z", policy["retrieved"])
+        # Live page 2026-10-18T19:25:30Z: create Jul 29, 2027; update Aug 31, 2027.
+        # The 2026 block dates and "no Aug 31 row" quote are stale and must fail.
+        self.assertEqual(source["block_function_create"], "Jul 29, 2027")
+        self.assertEqual(source["block_function_update"], "Aug 31, 2027")
+        self.assertNotIn("Jun 1, 2026", source["quote"])
+        self.assertNotIn("Jul 31, 2026", source["quote"])
+        self.assertNotIn("No Aug 31", source["quote"])
+        self.assertIn("19:25:30Z", policy["retrieved"])
 
     def test_denied_guard_mutation_still_fails_closed(self):
         """Regression: a stub that returns denial must never be stored as ok/empty."""

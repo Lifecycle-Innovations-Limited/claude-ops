@@ -48,12 +48,19 @@ def main():
         with open(log_path, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(argv) + "\n")
     fixture = load()
+    best = None
+    best_key = (-1, -1)
     for spec in fixture.get("calls", []):
         if match(spec, argv):
-            chosen = page_of(spec, argv)
-            sys.stdout.write(chosen.get("stdout", spec.get("stdout", "")))
-            sys.stderr.write(chosen.get("stderr", spec.get("stderr", "")))
-            return int(chosen.get("exit", spec.get("exit", 0)))
+            contains = spec.get("contains") or []
+            key = (len(json.dumps(contains)), len(contains))
+            if key > best_key:
+                best, best_key = spec, key
+    if best is not None:
+        chosen = page_of(best, argv)
+        sys.stdout.write(chosen.get("stdout", best.get("stdout", "")))
+        sys.stderr.write(chosen.get("stderr", best.get("stderr", "")))
+        return int(chosen.get("exit", best.get("exit", 0)))
     sys.stderr.write("fixture: unmatched aws argv: %s\n" % " ".join(argv))
     return 1
 

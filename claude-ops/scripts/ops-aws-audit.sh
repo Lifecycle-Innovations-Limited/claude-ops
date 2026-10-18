@@ -31,8 +31,11 @@ AUDIT_REGIONS="${AUDIT_REGIONS:-}"   # empty ⇒ auto-discover ALL enabled regio
 AUDIT_OUTPUT_DIR="${AUDIT_OUTPUT_DIR:-$HOME/.aws-audit-history/audit-$(date +%Y%m%d-%H%M%S)}"
 KEY_AGE_DAYS="${AUDIT_KEY_AGE_DAYS:-90}"      # flag active access keys older than this
 COST_DAYS="${AUDIT_COST_DAYS:-7}"             # cost comparison window
-QUIET=0; [ "${1:-}" = "--quiet" ] && QUIET=1
-REPORT_ONLY=0; [ "${1:-}" = "--report-only" ] && REPORT_ONLY=1
+QUIET=0; REPORT_ONLY=0
+for arg in "$@"; do
+  [ "$arg" = "--quiet" ] && QUIET=1
+  [ "$arg" = "--report-only" ] && REPORT_ONLY=1
+done
 
 RAW="$AUDIT_OUTPUT_DIR/raw"
 FINDINGS_JSONL="$AUDIT_OUTPUT_DIR/findings.jsonl"
@@ -104,11 +107,25 @@ json.dump(data, open(path, "w"))
 COVER_PY
 }
 
+# require_list FILE JESPATH — a required collection is a JSON array.
+# Missing, null, scalar and object are unassessed. [] is valid and empty.
+require_list() {
+  local file="$1" path="$2"
+  jq -e --arg p "$path" 'getpath($p|split(".")) | type=="array"' "$file" >/dev/null 2>&1
+}
+
 # aws_capture KEY outfile -- aws-args...  Denied stays denied. Stderr is kept.
+# Optional 4th form: aws_capture KEY outfile --require JMES -- aws-args...
 aws_capture() {
   local key="$1" dest="$2"; shift 2
+  local required=""
+  if [ "${1:-}" = "--require" ]; then required="$2"; shift 2; fi
   local errf="$dest.stderr"
   if AWS_PAGER="" "$@" >"$dest" 2>"$errf"; then
+    if [ -n "$required" ] && ! require_list "$dest" "$required"; then
+      cover "$key" unassessed "required JSON array $required missing, null, or wrong type"
+      return 1
+    fi
     cover "$key" ok ""
     return 0
   fi
@@ -123,6 +140,7 @@ aws_capture() {
 }
 
 # aws_pages KEY dest JMES -- aws-args...  Every NextToken page is required.
+# The JMES result must be an array. A non-list is unassessed, never discarded.
 aws_pages() {
   local key="$1" dest="$2" query="$3"; shift 3
   local token="" page=0 piece combined="[]"
@@ -137,7 +155,11 @@ aws_pages() {
       cover "$key" "$st" "$(cat "$piece.stderr" 2>/dev/null || true)"
       return 1
     fi
-    combined=$(python3 -I -c 'import json,sys; a=json.loads(sys.argv[1] or "[]"); b=json.loads(sys.stdin.read() or "[]"); json.dump(a+(b if isinstance(b, list) else []), sys.stdout)' "$combined" <<<"$(jq -c "$query // []" "$piece")")
+    if ! jq -e --arg q "${query#.}" 'getpath($q|split(".")) | type=="array"' "$piece" >/dev/null 2>&1; then
+      cover "$key" unassessed "required JSON array $query missing, null, or wrong type"
+      return 1
+    fi
+    combined=$(jq -c --argjson a "$combined" --arg q "${query#.}" '$a + getpath($q|split("."))' "$piece")
     token=$(jq -r '.NextToken // empty' "$piece")
     [ -z "$token" ] && break
   done
@@ -178,15 +200,29 @@ if [ "$REPORT_ONLY" = 1 ]; then
   build_report || exit 1
   exit 0
 fi
-ACCOUNT=$(AWS sts get-caller-identity --query Account --output text 2>/dev/null)
-WHOAMI=$(AWS sts get-caller-identity --query Arn --output text 2>/dev/null)
-[ -z "$ACCOUNT" ] && { echo "FATAL: cannot authenticate to AWS (set AUDIT_PROFILE or AWS creds)"; exit 2; }
+ACCOUNT=$(AWS sts get-caller-identity --query Account --output text 2>"$RAW/identity.stderr" || true)
+WHOAMI=$(AWS sts get-caller-identity --query Arn --output text 2>>"$RAW/identity.stderr" || true)
+if [ -z "$ACCOUNT" ] || [ -z "$WHOAMI" ]; then
+  detail=$(cat "$RAW/identity.stderr" 2>/dev/null || true)
+  if grep -Eq 'AccessDenied|UnauthorizedOperation|not authorized|explicit deny' <<<"$detail"; then
+    cover identity denied "$detail"
+  else
+    cover identity error "${detail:-cannot authenticate}"
+  fi
+  printf '%s\n' "$detail" >>"$LOG"
+  echo "FATAL: cannot authenticate to AWS (set AUDIT_PROFILE or AWS creds)"
+  exit 2
+fi
+cover identity ok ""
 log "AWS audit — account $ACCOUNT — caller $WHOAMI"
 if [ -z "$AUDIT_REGIONS" ]; then
-  AUDIT_REGIONS=$(AWS ec2 describe-regions --all-regions \
-      --query 'Regions[?OptInStatus!=`not-opted-in`].RegionName' --output text 2>/dev/null | tr '\t' ' ')
-  [ -z "$AUDIT_REGIONS" ] && AUDIT_REGIONS="$PRIMARY_REGION"
-  AUDIT_REGIONS=$(echo "$AUDIT_REGIONS" | tr ' ' '\n' | sort | tr '\n' ',' | sed 's/,$//')
+  if ! aws_capture regions "$RAW/regions.json" --require Regions \
+       AWS ec2 describe-regions --all-regions --output json; then
+    err "region discovery failed; refusing to shrink the audit to $PRIMARY_REGION"
+    exit 1
+  fi
+  AUDIT_REGIONS=$(jq -r '.Regions[] | select(.OptInStatus!="not-opted-in") | .RegionName' "$RAW/regions.json" | sort | paste -sd, -)
+  [ -z "$AUDIT_REGIONS" ] && { cover regions unassessed "enabled region list empty"; err "region discovery returned no enabled region"; exit 1; }
   log "auto-discovered $(echo "$AUDIT_REGIONS" | tr ',' ' ' | wc -w) enabled region(s)"
 fi
 log "regions: $AUDIT_REGIONS  output: $AUDIT_OUTPUT_DIR"
@@ -194,7 +230,11 @@ log "regions: $AUDIT_REGIONS  output: $AUDIT_OUTPUT_DIR"
 # ============================================================ IAM (global) ===
 audit_iam() {
   sec "IAM / credentials"
-  AWS iam get-account-summary --query SummaryMap >"$RAW/iam-summary.json" 2>/dev/null && ok "account summary"
+  if ! aws_capture iam-summary "$RAW/iam-summary.json" AWS iam get-account-summary --output json; then
+    err "account summary unreadable"
+  else
+    ok "account summary"
+  fi
 
   # Read an existing credential report only. generate-credential-report overwrites
   # the account report (IAM User Guide) and is excluded from this read-only audit.
@@ -278,9 +318,10 @@ IAM_PY
 # ====================================================== EC2 / EBS (regional) =
 audit_ec2() {
   local reg="$1"
-  AWSR "$reg" ec2 describe-instances \
-    --query 'Reservations[].Instances[].{id:InstanceId,state:State.Name,type:InstanceType,launch:LaunchTime}' \
-    >"$RAW/ec2-instances-$reg.json" 2>/dev/null
+  if ! aws_capture "ec2-instances-$reg" "$RAW/ec2-instances-$reg.json" --require Reservations \
+       AWSR "$reg" ec2 describe-instances --output json; then
+    err "EC2 instances unreadable in $reg; absence is not assumed"
+  fi
 
   # unattached EBS volumes (billed while idle) + gp2 + unencrypted
   if aws_pages "ec2-volumes-$reg" "$RAW/ebs-volumes-$reg.json" '.Volumes' \
@@ -469,9 +510,18 @@ path, out, region, policy_path, audit = sys.argv[1:]
 day = date.fromisoformat(audit)
 policy = json.load(open(policy_path))
 known = {row["id"]: row.get("deprecation") for row in policy["deprecated"] + policy["supported"]}
+preview = set(policy.get("preview") or [])
 for fn in json.load(open(path)):
     runtime = fn.get("Runtime")
     name = fn.get("FunctionName") or "unknown-function"
+    if runtime in preview:
+        row = {"severity": "LOW", "service": "Lambda", "region": region, "resource": name,
+               "title": name + " preview runtime " + runtime,
+               "issue": f"Runtime {runtime} is a public preview and is not a production pass",
+               "recommendation": "Do not treat a preview runtime as production-supported",
+               "est_monthly_usd": 0, "coverage": "preview"}
+        open(out, "a").write(json.dumps(row) + "\n")
+        continue
     if not runtime or runtime not in known:
         row = {"severity": "LOW", "service": "Lambda", "region": region, "resource": name,
                "title": name + " runtime unassessed",
@@ -495,25 +545,25 @@ audit_security_posture() {
   sec "Security posture (GuardDuty / Security Hub / Cost Anomaly / Compute Optimizer)"
   local reg gd sh
   for reg in ${AUDIT_REGIONS//,/ }; do
-    if aws_capture "guardduty-$reg" "$RAW/guardduty-$reg.json" \
+    if aws_capture "guardduty-$reg" "$RAW/guardduty-$reg.json" --require DetectorIds \
          AWSR "$reg" guardduty list-detectors --output json; then
       gd=$(jq -r '.DetectorIds|length' "$RAW/guardduty-$reg.json")
       [ "$gd" = 0 ] && finding MEDIUM GuardDuty "$reg" "account" "GuardDuty not enabled" "Enable GuardDuty for threat detection" 0
     else
       err "GuardDuty unreadable in $reg; not reported as disabled"
     fi
-    if aws_capture "securityhub-standards-$reg" "$RAW/securityhub-$reg.json" \
+    if aws_capture "securityhub-standards-$reg" "$RAW/securityhub-$reg.json" --require StandardsSubscriptions \
          AWSR "$reg" securityhub get-enabled-standards --output json; then
-      sh=$(jq '[.StandardsSubscriptions // [] | length] | if .[0]==0 then "" else "present" end' "$RAW/securityhub-$reg.json")
+      sh=$(jq -r 'if (.StandardsSubscriptions|length)==0 then "" else "present" end' "$RAW/securityhub-$reg.json")
       [ -z "$sh" ] && finding LOW SecurityHub "$reg" "account" "Security Hub standards not enabled" "Enable AWS Foundational Security Best Practices standard" 0
     else
       err "Security Hub standards unreadable in $reg; not reported as disabled"
     fi
   done
   # Cost Anomaly Detection monitors (global)
-  if aws_capture cost-anomaly "$RAW/cost-anomaly.json" \
+  if aws_capture cost-anomaly "$RAW/cost-anomaly.json" --require AnomalyMonitors \
        AWS ce get-anomaly-monitors --output json; then
-    cam=$(jq '[.AnomalyMonitors // [] | length] | if .[0]==0 then "" else "present" end' "$RAW/cost-anomaly.json")
+    cam=$(jq -r 'if (.AnomalyMonitors|length)==0 then "" else "present" end' "$RAW/cost-anomaly.json")
     [ -z "$cam" ] && finding MEDIUM CostAnomaly global "account" "No Cost Anomaly Detection monitors" "Create an anomaly monitor + alert subscription (backstop for spend spikes)" 0
   else
     err "Cost Anomaly monitors unreadable; absence is not assumed"
@@ -539,13 +589,13 @@ audit_cost() {
   s=$(date -v-"${COST_DAYS}"d +%F 2>/dev/null || date -d "-${COST_DAYS} days" +%F)
   p=$(date -v-"$((COST_DAYS*2))"d +%F 2>/dev/null || date -d "-$((COST_DAYS*2)) days" +%F)
   local USAGE_FILTER='{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'
-  if ! aws_capture cost-current "$RAW/cost-current.json" \
+  if ! aws_capture cost-current "$RAW/cost-current.json" --require ResultsByTime \
        AWS ce get-cost-and-usage --time-period Start=$s,End=$e --granularity DAILY --metrics UnblendedCost \
          --filter "$USAGE_FILTER" --group-by Type=DIMENSION,Key=SERVICE --output json; then
     err "cost read denied; a zero baseline is not invented"
     return
   fi
-  if ! aws_capture cost-prev "$RAW/cost-prev.json" \
+  if ! aws_capture cost-prev "$RAW/cost-prev.json" --require ResultsByTime \
        AWS ce get-cost-and-usage --time-period Start=$p,End=$s --granularity DAILY --metrics UnblendedCost \
          --filter "$USAGE_FILTER" --group-by Type=DIMENSION,Key=SERVICE --output json; then
     err "prior cost window denied; delta is not computed against zero"
@@ -572,11 +622,14 @@ def write(path, sums):
 write(cur_out, totals(current))
 write(prev_out, totals(previous))
 COST_PY
-  # Optional: credit mask snapshot for the report
-  AWS ce get-cost-and-usage --time-period Start=$s,End=$e --granularity MONTHLY --metrics UnblendedCost \
-    --group-by Type=DIMENSION,Key=RECORD_TYPE \
-    --query 'ResultsByTime[0].Groups[].[Keys[0],Metrics.UnblendedCost.Amount]' --output text 2>/dev/null \
-    >"$RAW/cost-record-types.tsv" || true
+  if ! aws_capture cost-record-types "$RAW/cost-record-types.json" --require ResultsByTime \
+       AWS ce get-cost-and-usage --time-period Start=$s,End=$e --granularity MONTHLY --metrics UnblendedCost \
+         --group-by Type=DIMENSION,Key=RECORD_TYPE --output json; then
+    err "credit-mask record types unreadable; denial is coverage, not a hidden skip"
+  else
+    jq -r '.ResultsByTime[0].Groups[]? | [.Keys[0], .Metrics.UnblendedCost.Amount] | @tsv' \
+      "$RAW/cost-record-types.json" >"$RAW/cost-record-types.tsv" || true
+  fi
   if [ -s "$RAW/cost-current.tsv" ]; then
     join -t $'\t' -a1 -e 0 -o '0,1.2,2.2' "$RAW/cost-current.tsv" "$RAW/cost-prev.tsv" 2>/dev/null \
       | awk -F'\t' '{d=$2-$3; printf "%s\t%.2f\t%+.2f\n",$1,$2,d}' \
@@ -719,7 +772,7 @@ fi
 log ""
 log "${C_G}AUDIT COMPLETE${C_N}  findings=$(jq length "$FINDINGS_JSON")  report=$REPORT"
 [ "$QUIET" = 1 ] && echo "$AUDIT_OUTPUT_DIR"
-if jq -e 'to_entries|map(select(.value.status=="denied" or .value.status=="error"))|length>0' "$COVERAGE_JSON" >/dev/null 2>&1; then
+if jq -e 'to_entries|map(select(.value.status=="denied" or .value.status=="error" or .value.status=="unassessed"))|length>0' "$COVERAGE_JSON" >/dev/null 2>&1; then
   err "coverage incomplete: a denied or failed read is not a clean audit"
   exit 1
 fi

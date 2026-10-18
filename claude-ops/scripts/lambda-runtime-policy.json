@@ -1,14 +1,14 @@
 {
   "source": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html",
-  "retrieved": "2026-10-18T19:02:51Z",
+  "retrieved": "2026-10-18T19:25:30Z",
   "note": "Pinned offline snapshot of official Lambda deprecation dates. Not an AWS account fact. Dates are AWS planning dates and can change; refresh this file from the official page rather than editing a code blacklist.",
   "policy": "A runtime is stale on an audit date when that date is on or after its deprecation date. Supported rows with a future deprecation date are not stale before that date. 'Not scheduled' is not stale.",
   "source_rows": {
     "nodejs20.x": {
       "deprecation": "Apr 30, 2026",
-      "block_function_create": "Jun 1, 2026",
-      "block_function_update": "Jul 31, 2026",
-      "quote": "Deprecation date Apr 30, 2026. Block function create Jun 1, 2026. Block function update Jul 31, 2026. No Aug 31, 2026 row for nodejs20.x."
+      "block_function_create": "Jul 29, 2027",
+      "block_function_update": "Aug 31, 2027",
+      "quote": "Deprecated runtimes table, fetched 2026-10-18T19:25:30Z: Node.js 20 nodejs20.x Amazon Linux 2023. Deprecation date Apr 30, 2026. Block function create Jul 29, 2027. Block function update Aug 31, 2027."
     }
   },
   "deprecated": [
@@ -43,6 +43,7 @@
     {"id": "dotnetcore2.0", "deprecation": "2019-05-30"},
     {"id": "nodejs", "deprecation": "2016-08-30"}
   ],
+  "preview": ["nodejs26.x", "python3.15"],
   "supported": [
     {"id": "nodejs26.x", "deprecation": null},
     {"id": "nodejs24.x", "deprecation": "2028-04-30"},
