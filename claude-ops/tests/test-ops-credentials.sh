@@ -37,6 +37,12 @@ printf 'mock-doppler-value-1234567890'
 MOCK
 chmod +x "$TMP/bin/doppler"
 
+# Block host keychain/vault access: this suite must use synthetic values only.
+for tool in security dcli; do
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$TMP/bin/$tool"
+  chmod +x "$TMP/bin/$tool"
+done
+
 # Isolated preferences: first catalog row (telegram api_hash) resolves via doppler.
 printf '%s\n' '{"telegram":{"api_hash":"doppler:TELEGRAM_API_HASH"}}' > "$TMP/data/preferences.json"
 
@@ -74,3 +80,4 @@ fi
 echo ""
 echo "Results: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
+python3 "$PLUGIN_ROOT/tests/test-ops-credentials-regressions.py"
