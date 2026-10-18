@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Test-only AWS stand-in. Forwards real argv. Never contacts AWS.
+set -euo pipefail
+exec python3 "${AWS_AUDIT_FAKE_PY}" "$@"

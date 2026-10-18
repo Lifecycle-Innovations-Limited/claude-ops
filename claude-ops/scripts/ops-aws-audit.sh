@@ -32,6 +32,7 @@ AUDIT_OUTPUT_DIR="${AUDIT_OUTPUT_DIR:-$HOME/.aws-audit-history/audit-$(date +%Y%
 KEY_AGE_DAYS="${AUDIT_KEY_AGE_DAYS:-90}"      # flag active access keys older than this
 COST_DAYS="${AUDIT_COST_DAYS:-7}"             # cost comparison window
 QUIET=0; [ "${1:-}" = "--quiet" ] && QUIET=1
+REPORT_ONLY=0; [ "${1:-}" = "--report-only" ] && REPORT_ONLY=1
 
 RAW="$AUDIT_OUTPUT_DIR/raw"
 FINDINGS_JSONL="$AUDIT_OUTPUT_DIR/findings.jsonl"
@@ -79,8 +80,85 @@ age_days() {
 finding() {
   jq -nc --arg sev "$1" --arg svc "$2" --arg reg "$3" --arg res "$4" \
          --arg iss "$5" --arg rec "$6" --argjson usd "${7:-0}" \
-    '{severity:$sev,service:$svc,region:$reg,resource:$res,issue:$iss,recommendation:$rec,est_monthly_usd:$usd}' \
+    '{severity:$sev,service:$svc,region:$reg,resource:$res,title:($res+" "+$iss),issue:$iss,recommendation:$rec,est_monthly_usd:$usd}' \
     >>"$FINDINGS_JSONL"
+}
+
+COVERAGE_JSON="$AUDIT_OUTPUT_DIR/coverage.json"
+RUNTIME_POLICY="${AUDIT_RUNTIME_POLICY:-$(cd "$(dirname "$0")" && pwd)/lambda-runtime-policy.json}"
+AUDIT_DATE="${AUDIT_DATE:-$(date -u +%F)}"
+
+# cover KEY STATUS STDERR — a denial is never recorded as ok or absent.
+cover() {
+  local key="$1" status="$2" detail="${3:-}"
+  COVERAGE_JSON="$COVERAGE_JSON" python3 -I - "$key" "$status" "$detail" <<'COVER_PY'
+import json, os, sys
+path = os.environ["COVERAGE_JSON"]
+key, status, detail = sys.argv[1:]
+try:
+    data = json.load(open(path))
+except Exception:
+    data = {}
+data[key] = {"status": status, "stderr": detail[-2000:]}
+json.dump(data, open(path, "w"))
+COVER_PY
+}
+
+# aws_capture KEY outfile -- aws-args...  Denied stays denied. Stderr is kept.
+aws_capture() {
+  local key="$1" dest="$2"; shift 2
+  local errf="$dest.stderr"
+  if AWS_PAGER="" "$@" >"$dest" 2>"$errf"; then
+    cover "$key" ok ""
+    return 0
+  fi
+  local detail; detail=$(cat "$errf" 2>/dev/null || true)
+  printf '%s\n' "$detail" >>"$LOG"
+  if grep -Eq 'AccessDenied|UnauthorizedOperation|AccessDeniedException|not authorized|explicit deny' <<<"$detail"; then
+    cover "$key" denied "$detail"
+  else
+    cover "$key" error "$detail"
+  fi
+  return 1
+}
+
+# aws_pages KEY dest JMES -- aws-args...  Every NextToken page is required.
+aws_pages() {
+  local key="$1" dest="$2" query="$3"; shift 3
+  local token="" page=0 piece combined="[]"
+  : >"$dest"
+  while :; do
+    page=$((page + 1))
+    piece="$dest.p${page}"
+    local args=("$@")
+    [ -n "$token" ] && args+=(--starting-token "$token")
+    if ! aws_capture "${key}-p${page}" "$piece" "${args[@]}"; then
+      local st; st=$(COVERAGE_JSON="$COVERAGE_JSON" python3 -I -c 'import json,os,sys; print(json.load(open(os.environ["COVERAGE_JSON"])).get(sys.argv[1],{}).get("status","error"))' "${key}-p${page}")
+      cover "$key" "$st" "$(cat "$piece.stderr" 2>/dev/null || true)"
+      return 1
+    fi
+    combined=$(python3 -I -c 'import json,sys; a=json.loads(sys.argv[1] or "[]"); b=json.loads(sys.stdin.read() or "[]"); json.dump(a+(b if isinstance(b, list) else []), sys.stdout)' "$combined" <<<"$(jq -c "$query // []" "$piece")")
+    token=$(jq -r '.NextToken // empty' "$piece")
+    [ -z "$token" ] && break
+  done
+  printf '%s\n' "$combined" >"$dest"
+  cover "$key" ok ""
+}
+
+# True when the pinned official policy marks this runtime stale on AUDIT_DATE.
+runtime_stale() {
+  python3 -I - "$RUNTIME_POLICY" "$1" "$AUDIT_DATE" <<'RUNTIME_PY'
+import json, sys
+from datetime import date
+policy, runtime, audit = sys.argv[1:]
+day = date.fromisoformat(audit)
+data = json.load(open(policy))
+for row in data["deprecated"] + data["supported"]:
+    if row["id"] == runtime:
+        when = row.get("deprecation")
+        raise SystemExit(0 if when and day >= date.fromisoformat(when) else 1)
+raise SystemExit(2)
+RUNTIME_PY
 }
 
 require() {
@@ -92,6 +170,14 @@ require() {
 # ------------------------------------------------------------------ INIT ------
 require
 mkdir -p "$RAW"; : >"$FINDINGS_JSONL"; : >"$LOG"
+if [ "$REPORT_ONLY" = 1 ]; then
+  if ! jq empty "$FINDINGS_JSON" >/dev/null 2>&1; then
+    err "findings JSON invalid; refusing an empty report"
+    exit 1
+  fi
+  build_report || exit 1
+  exit 0
+fi
 ACCOUNT=$(AWS sts get-caller-identity --query Account --output text 2>/dev/null)
 WHOAMI=$(AWS sts get-caller-identity --query Arn --output text 2>/dev/null)
 [ -z "$ACCOUNT" ] && { echo "FATAL: cannot authenticate to AWS (set AUDIT_PROFILE or AWS creds)"; exit 2; }
@@ -110,33 +196,67 @@ audit_iam() {
   sec "IAM / credentials"
   AWS iam get-account-summary --query SummaryMap >"$RAW/iam-summary.json" 2>/dev/null && ok "account summary"
 
-  # credential report (authoritative for key age + root usage)
-  AWS iam generate-credential-report >/dev/null 2>&1; sleep 2
-  if AWS iam get-credential-report --query Content --output text 2>/dev/null | base64 -d >"$RAW/credential-report.csv" 2>/dev/null; then
+  # Read an existing credential report only. generate-credential-report overwrites
+  # the account report (IAM User Guide) and is excluded from this read-only audit.
+  if aws_capture iam-credential-report "$RAW/credential-report.json" \
+       AWS iam get-credential-report --output json; then
     ok "credential report"
-    # parse CSV (skip header)
-    tail -n +2 "$RAW/credential-report.csv" | while IFS=, read -r user arn ctime pw_enabled pw_last pw_changed pw_next mfa k1act k1rot k1used k1reg k1svc k2act k2rot rest; do
-      if [ "$user" = "<root_account>" ]; then
-        [ "$mfa" = "false" ] && finding CRITICAL IAM global root "Root account has no MFA" "Enable a hardware/virtual MFA device on the root user" 0
-        if [ "$k1act" = "true" ]; then
-          finding CRITICAL IAM global "root access key" "Root account has an ACTIVE access key (last used: ${k1used})" "Delete the root access key; use IAM roles/users for API access (requires root console login)" 0
-        fi
-        continue
-      fi
-      # console password without MFA
-      [ "$pw_enabled" = "true" ] && [ "$mfa" = "false" ] && \
-        finding HIGH IAM global "user/$user" "Console password enabled but no MFA" "Enforce MFA for this user" 0
-      # old active access keys
-      if [ "$k1act" = "true" ] && [ "$k1rot" != "N/A" ]; then
-        a=$(age_days "$k1rot") && [ "$a" -gt "$KEY_AGE_DAYS" ] && \
-          finding HIGH IAM global "user/$user" "Active access key is ${a}d old (>${KEY_AGE_DAYS}d)" "Rotate the access key and remove the old one" 0
-      fi
-      if [ "$k2act" = "true" ] && [ "$k2rot" != "N/A" ]; then
-        a=$(age_days "$k2rot") && [ "$a" -gt "$KEY_AGE_DAYS" ] && \
-          finding HIGH IAM global "user/$user" "Active access key #2 is ${a}d old (>${KEY_AGE_DAYS}d)" "Rotate the access key and remove the old one" 0
-      fi
-    done
-  else err "credential report unavailable"; fi
+    python3 -I - "$RAW/credential-report.json" "$RAW/credential-report.csv" <<'CSV_PY'
+import base64, json, sys
+payload = json.load(open(sys.argv[1]))
+open(sys.argv[2], "wb").write(base64.b64decode(payload.get("Content") or ""))
+CSV_PY
+    python3 -I - "$RAW/credential-report.csv" "$KEY_AGE_DAYS" "$FINDINGS_JSONL" "$AUDIT_DATE" <<'IAM_PY'
+import csv, json, sys
+from datetime import date, datetime, timezone
+path, limit, out, audit = sys.argv[1:]
+limit = int(limit)
+now = datetime.combine(date.fromisoformat(audit), datetime.min.time(), timezone.utc)
+
+def age(value):
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return (now - parsed).days
+
+def emit(sev, resource, issue, rec):
+    row = {"severity": sev, "service": "IAM", "region": "global", "resource": resource,
+           "title": f"{resource} {issue}", "issue": issue, "recommendation": rec, "est_monthly_usd": 0}
+    with open(out, "a") as handle:
+        handle.write(json.dumps(row) + "\n")
+
+with open(path, newline="") as handle:
+    for row in csv.DictReader(handle):
+        user = row.get("user") or ""
+        if user == "<root_account>":
+            if row.get("mfa_active") == "false":
+                emit("CRITICAL", "root", "Root account has no MFA", "Enable a hardware/virtual MFA device on the root user")
+            for number, active, rotated, used in (
+                ("1", row.get("access_key_1_active"), row.get("access_key_1_last_rotated"), row.get("access_key_1_last_used_date")),
+                ("2", row.get("access_key_2_active"), row.get("access_key_2_last_rotated"), row.get("access_key_2_last_used_date")),
+            ):
+                if active == "true":
+                    emit("CRITICAL", f"root access key {number}",
+                         f"Root account has an ACTIVE access key {number} (last used: {used})",
+                         "Delete the root access key; use IAM roles/users for API access (requires root console login)")
+            continue
+        if row.get("password_enabled") == "true" and row.get("mfa_active") == "false":
+            emit("HIGH", f"user/{user}", "Console password enabled but no MFA", "Enforce MFA for this user")
+        for number, active, rotated in (
+            ("1", row.get("access_key_1_active"), row.get("access_key_1_last_rotated")),
+            ("2", row.get("access_key_2_active"), row.get("access_key_2_last_rotated")),
+        ):
+            if active == "true" and rotated and rotated != "N/A":
+                days = age(rotated)
+                if days is not None and days > limit:
+                    emit("HIGH", f"user/{user}", f"Active access key #{number} is {days}d old (>{limit}d)", "Rotate the access key and remove the old one")
+IAM_PY
+  else
+    err "credential report read failed; absence is not assumed"
+  fi
 
   # IAM Access Analyzer — 2026 best practice: an *unused-access* analyzer
   local has_unused="" reg
@@ -154,17 +274,17 @@ audit_ec2() {
     >"$RAW/ec2-instances-$reg.json" 2>/dev/null
 
   # unattached EBS volumes (billed while idle) + gp2 + unencrypted
-  AWSR "$reg" ec2 describe-volumes \
-    --query 'Volumes[].{id:VolumeId,size:Size,type:VolumeType,state:State,enc:Encrypted}' \
-    >"$RAW/ebs-volumes-$reg.json" 2>/dev/null
-  if [ -s "$RAW/ebs-volumes-$reg.json" ]; then
-    jq -c '.[]' "$RAW/ebs-volumes-$reg.json" 2>/dev/null | while read -r v; do
+  if aws_pages "ec2-volumes-$reg" "$RAW/ebs-volumes-$reg.json" '.Volumes' \
+       AWSR "$reg" ec2 describe-volumes --output json; then
+    jq -c '.[]|{id:.VolumeId,size:.Size,type:.VolumeType,state:.State,enc:.Encrypted}' "$RAW/ebs-volumes-$reg.json" | while read -r v; do
       id=$(jq -r .id <<<"$v"); sz=$(jq -r .size <<<"$v"); ty=$(jq -r .type <<<"$v")
       st=$(jq -r .state <<<"$v"); enc=$(jq -r .enc <<<"$v")
       [ "$st" = "available" ] && finding MEDIUM EC2 "$reg" "$id" "Unattached EBS volume (${sz}GiB ${ty}) still billed" "Snapshot then delete if unneeded" "$(awk "BEGIN{printf \"%.2f\", $sz*0.08}")"
       [ "$ty" = "gp2" ] && finding LOW EC2 "$reg" "$id" "Volume is gp2" "Migrate to gp3 (~20% cheaper, same/ better perf)" "$(awk "BEGIN{printf \"%.2f\", $sz*0.02}")"
       [ "$enc" = "false" ] && finding HIGH EC2 "$reg" "$id" "EBS volume is unencrypted" "Recreate from encrypted snapshot; enable EBS encryption-by-default" 0
     done
+  else
+    err "EBS volumes unreadable in $reg; absence is not assumed"
   fi
 
   # unassociated Elastic IPs (~$3.60/mo each)
@@ -172,71 +292,139 @@ audit_ec2() {
     [ -n "$eip" ] && finding MEDIUM EC2 "$reg" "$eip" "Unassociated Elastic IP (billed hourly)" "Release the EIP if not needed" 3.60
   done
 
-  # security groups open to the world on admin ports
-  AWSR "$reg" ec2 describe-security-groups \
-    --query 'SecurityGroups[?IpPermissions[?(FromPort==`22`||FromPort==`3389`) && IpRanges[?CidrIp==`0.0.0.0/0`]]].GroupId' \
-    --output text 2>/dev/null | tr '\t' '\n' | while read -r sg; do
-    [ -n "$sg" ] && finding HIGH EC2 "$reg" "$sg" "Security group allows 0.0.0.0/0 to SSH/RDP" "Restrict to known CIDRs or use SSM Session Manager" 0
-  done
-  # all-traffic (-1) open to the world — arguably worse than a single admin port
-  AWSR "$reg" ec2 describe-security-groups \
-    --query 'SecurityGroups[?IpPermissions[?IpProtocol==`-1` && IpRanges[?CidrIp==`0.0.0.0/0`]]].GroupId' \
-    --output text 2>/dev/null | tr '\t' '\n' | while read -r sg; do
-    [ -n "$sg" ] && finding HIGH EC2 "$reg" "$sg" "Security group allows ALL traffic from 0.0.0.0/0" "Remove the all-traffic ingress rule; scope to required ports/CIDRs" 0
-  done
+  # Admin ports include ranges and IPv6. Protocol -1 is a raw string, not a number.
+  if aws_pages "ec2-sg-$reg" "$RAW/sg-$reg.json" '.SecurityGroups' \
+       AWSR "$reg" ec2 describe-security-groups --output json; then
+    python3 -I - "$RAW/sg-$reg.json" "$FINDINGS_JSONL" "$reg" <<'SG_PY'
+import json, sys
+path, out, region = sys.argv[1:]
+groups = json.load(open(path))
+ADMIN = {22, 3389}
+
+def world(perm):
+    v4 = any(r.get("CidrIp") == "0.0.0.0/0" for r in perm.get("IpRanges") or [])
+    v6 = any(r.get("CidrIpv6") == "::/0" for r in perm.get("Ipv6Ranges") or [])
+    return v4 or v6
+
+def covers_admin(perm):
+    if str(perm.get("IpProtocol")) == "-1":
+        return True
+    start, end = perm.get("FromPort"), perm.get("ToPort")
+    if start is None or end is None:
+        return False
+    return any(start <= port <= end for port in ADMIN)
+
+for group in groups:
+    for perm in group.get("IpPermissions") or []:
+        if world(perm) and covers_admin(perm):
+            row = {"severity": "HIGH", "service": "EC2", "region": region,
+                   "resource": group["GroupId"],
+                   "title": group["GroupId"] + " Security group allows world access to SSH/RDP or all protocols",
+                   "issue": "Security group allows world access to SSH/RDP or all protocols",
+                   "recommendation": "Restrict to known CIDRs or use SSM Session Manager",
+                   "est_monthly_usd": 0}
+            open(out, "a").write(json.dumps(row) + "\n")
+            break
+SG_PY
+  else
+    err "security groups unreadable in $reg; open groups are not assumed absent"
+  fi
 }
 
 # ============================================================ RDS (regional) =
 audit_rds() {
   local reg="$1"
-  AWSR "$reg" rds describe-db-instances \
-    --query 'DBInstances[].{id:DBInstanceIdentifier,enc:StorageEncrypted,public:PubliclyAccessible,az:MultiAZ,engine:Engine}' \
-    >"$RAW/rds-instances-$reg.json" 2>/dev/null
-  if [ -s "$RAW/rds-instances-$reg.json" ]; then
-    jq -c '.[]' "$RAW/rds-instances-$reg.json" 2>/dev/null | while read -r d; do
+  local instances_ok=0 clusters_ok=0
+  if aws_pages "rds-instances-$reg" "$RAW/rds-instances-$reg.json" '.DBInstances' \
+       AWSR "$reg" rds describe-db-instances --output json; then
+    instances_ok=1
+    jq -c '.[]|{id:.DBInstanceIdentifier,enc:.StorageEncrypted,public:.PubliclyAccessible}' "$RAW/rds-instances-$reg.json" | while read -r d; do
       id=$(jq -r .id <<<"$d")
-      [ "$(jq -r .enc <<<"$d")"    = "false" ] && finding HIGH RDS "$reg" "$id" "RDS storage not encrypted" "Re-create from encrypted snapshot" 0
-      [ "$(jq -r .public <<<"$d")" = "true"  ] && finding HIGH RDS "$reg" "$id" "RDS instance is publicly accessible" "Disable public accessibility; place in private subnet" 0
+      [ "$(jq -r .enc <<<"$d")" = "false" ] && finding HIGH RDS "$reg" "$id" "RDS storage not encrypted" "Re-create from encrypted snapshot" 0
+      [ "$(jq -r .public <<<"$d")" = "true" ] && finding HIGH RDS "$reg" "$id" "RDS instance is publicly accessible" "Disable public accessibility; place in private subnet" 0
     done
+  else
+    err "RDS instances unreadable in $reg"
   fi
-  # orphaned manual snapshots (source DB no longer exists).
-  # Build the "live" id set from BOTH instances and Aurora clusters; if we cannot
-  # determine it, skip the orphan check rather than flag everything (false positive).
-  live=$(jq -r '.[].id' "$RAW/rds-instances-$reg.json" 2>/dev/null)
-  clusters=$(AWSR "$reg" rds describe-db-clusters --query 'DBClusters[].DBClusterIdentifier' --output text 2>/dev/null | tr '\t' '\n')
-  live=$(printf '%s\n%s\n' "$live" "$clusters" | sed '/^$/d' | sort -u)
-  AWSR "$reg" rds describe-db-snapshots --snapshot-type manual \
-    --query 'DBSnapshots[].{id:DBSnapshotIdentifier,db:DBInstanceIdentifier,size:AllocatedStorage,t:SnapshotCreateTime}' \
-    >"$RAW/rds-snapshots-$reg.json" 2>/dev/null
-  if [ -s "$RAW/rds-snapshots-$reg.json" ] && [ -n "$live" ]; then
-    jq -c '.[]' "$RAW/rds-snapshots-$reg.json" 2>/dev/null | while read -r s; do
-      sid=$(jq -r .id <<<"$s"); sdb=$(jq -r .db <<<"$s"); ssz=$(jq -r .size <<<"$s")
-      if ! grep -qx "$sdb" <<<"$live"; then
-        finding MEDIUM RDS "$reg" "$sid" "Manual snapshot whose source DB '$sdb' no longer exists" "Delete if no recovery value" "$(awk "BEGIN{printf \"%.2f\", $ssz*0.095}")"
-      fi
-    done
+  if aws_pages "rds-clusters-$reg" "$RAW/rds-clusters-$reg.json" '.DBClusters' \
+       AWSR "$reg" rds describe-db-clusters --output json; then
+    clusters_ok=1
+  else
+    err "RDS clusters unreadable in $reg"
+  fi
+  # Successful empty inventories are real. A denial must not turn a live source into an orphan.
+  if aws_pages "rds-snapshots-$reg" "$RAW/rds-snapshots-$reg.json" '.DBSnapshots' \
+       AWSR "$reg" rds describe-db-snapshots --snapshot-type manual --output json; then
+    if [ "$instances_ok" = 1 ] && [ "$clusters_ok" = 1 ]; then
+      python3 -I - "$RAW/rds-instances-$reg.json" "$RAW/rds-clusters-$reg.json" "$RAW/rds-snapshots-$reg.json" "$FINDINGS_JSONL" "$reg" <<'RDS_PY'
+import json, sys
+instances, clusters, snaps, out, region = sys.argv[1:]
+live = {row.get("DBInstanceIdentifier") for row in json.load(open(instances))}
+live |= {row.get("DBClusterIdentifier") for row in json.load(open(clusters))}
+live.discard(None)
+for snap in json.load(open(snaps)):
+    if snap.get("SnapshotType") not in (None, "manual"):
+        continue
+    source = snap.get("DBInstanceIdentifier") or snap.get("DBClusterIdentifier")
+    if source and source not in live:
+        row = {"severity": "MEDIUM", "service": "RDS", "region": region, "resource": snap["DBSnapshotIdentifier"],
+               "title": snap["DBSnapshotIdentifier"] + " orphaned manual snapshot",
+               "issue": f"Manual snapshot whose source '{source}' no longer exists",
+               "recommendation": "Delete if no recovery value", "est_monthly_usd": 0}
+        open(out, "a").write(json.dumps(row) + "\n")
+RDS_PY
+    else
+      err "RDS orphan check skipped in $reg because the source inventory was not fully readable"
+    fi
   fi
 }
 
 # ========================================================= S3 (global-ish) ===
 audit_s3() {
   sec "S3"
-  # account-level Block Public Access (2026 baseline)
-  bpa=$(AWS s3control get-public-access-block --account-id "$ACCOUNT" \
-        --query 'PublicAccessBlockConfiguration.[BlockPublicAcls,IgnorePublicAcls,BlockPublicPolicy,RestrictPublicBuckets]' \
-        --output text 2>/dev/null)
-  if [ -z "$bpa" ] || [ "$(grep -o True <<<"$bpa" | wc -l)" -lt 4 ]; then
-    finding HIGH S3 global "account" "Account-level S3 Block Public Access is not fully enabled" "Enable all 4 BPA settings at the account level" 0
-  else ok "account BPA fully enabled"; fi
+  local bpa_file="$RAW/s3-public-access-block.json"
+  if aws_capture s3-public-access-block "$bpa_file" \
+       AWS s3control get-public-access-block --account-id "$ACCOUNT" --output json; then
+    local enabled
+    enabled=$(jq '[.PublicAccessBlockConfiguration.BlockPublicAcls,.PublicAccessBlockConfiguration.IgnorePublicAcls,.PublicAccessBlockConfiguration.BlockPublicPolicy,.PublicAccessBlockConfiguration.RestrictPublicBuckets]|map(select(.==true))|length' "$bpa_file")
+    if [ "$enabled" -lt 4 ]; then
+      finding HIGH S3 global "account" "Account-level S3 Block Public Access is not fully enabled" "Enable all 4 BPA settings at the account level" 0
+    else ok "account BPA fully enabled"; fi
+  else
+    err "account Block Public Access unreadable; not reported as disabled"
+    finding HIGH S3 global "account" "Account-level S3 Block Public Access read denied" "Retry with s3:GetAccountPublicAccessBlock; do not treat denial as disabled" 0
+  fi
 
-  AWS s3api list-buckets --query 'Buckets[].Name' --output text 2>/dev/null | tr '\t' '\n' | while read -r b; do
+  if ! aws_capture s3-buckets "$RAW/s3-buckets.json" AWS s3api list-buckets --output json; then
+    err "bucket list denied; bucket checks are not complete"
+    return
+  fi
+  jq -r '.Buckets[].Name' "$RAW/s3-buckets.json" | while read -r b; do
     [ -z "$b" ] && continue
-    AWS s3api get-bucket-encryption --bucket "$b" >/dev/null 2>&1 || \
-      finding MEDIUM S3 global "$b" "Bucket has no default encryption" "Enable SSE-S3 or SSE-KMS default encryption" 0
-    AWS s3api get-bucket-lifecycle-configuration --bucket "$b" >/dev/null 2>&1 || \
-      finding LOW S3 global "$b" "Bucket has no lifecycle policy" "Add lifecycle rules to expire/transition old objects" 0
+    local enc="$RAW/s3-enc-$b.json" life="$RAW/s3-life-$b.json" policy="$RAW/s3-policy-$b.json"
+    if ! aws_capture "s3-bucket-encryption:$b" "$enc" AWS s3api get-bucket-encryption --bucket "$b" --output json; then
+      if grep -q 'ServerSideEncryptionConfigurationNotFoundError\|does not exist' "$enc.stderr" 2>/dev/null; then
+        finding MEDIUM S3 global "$b" "Bucket has no default encryption" "Enable SSE-S3 or SSE-KMS default encryption" 0
+      else
+        finding HIGH S3 global "$b" "Bucket encryption read denied" "Retry get-bucket-encryption; denial is not missing encryption" 0
+      fi
+    fi
+    if ! aws_capture "s3-bucket-policy:$b" "$policy" AWS s3api get-bucket-policy --bucket "$b" --output json; then
+      if grep -q 'NoSuchBucketPolicy' "$policy.stderr" 2>/dev/null; then
+        : # a missing policy is not a finding and is not a denial
+      else
+        finding HIGH S3 global "$b" "Bucket policy read denied" "Retry get-bucket-policy; denial is not a missing policy" 0
+      fi
+    fi
+    if ! aws_capture "s3-bucket-lifecycle:$b" "$life" AWS s3api get-bucket-lifecycle-configuration --bucket "$b" --output json; then
+      if grep -q 'NoSuchLifecycleConfiguration' "$life.stderr" 2>/dev/null; then
+        finding LOW S3 global "$b" "Bucket has no lifecycle policy" "Add lifecycle rules to expire/transition old objects" 0
+      else
+        finding HIGH S3 global "$b" "Bucket lifecycle read denied" "Retry get-bucket-lifecycle-configuration; denial is not a missing policy" 0
+      fi
+    fi
   done
-  ok "bucket checks complete"
+  ok "bucket checks complete only for readable buckets"
 }
 
 # ============================================ CloudWatch Logs (regional) ======
@@ -251,12 +439,30 @@ audit_logs() {
 # =================================================== Lambda runtimes (reg) ====
 audit_lambda() {
   local reg="$1"
-  AWSR "$reg" lambda list-functions \
-    --query 'Functions[].{n:FunctionName,r:Runtime}' >"$RAW/lambda-$reg.json" 2>/dev/null
-  jq -r '.[]|select(.r!=null)|select(.r|test("python3\\.[0-9]$|python3\\.1[01]$|python2|nodejs1[0-6]|nodejs[0-9]\\.|ruby2|go1\\.x|dotnetcore"))|.n+" "+.r' \
-     "$RAW/lambda-$reg.json" 2>/dev/null | while read -r fn rt; do
-    finding MEDIUM Lambda "$reg" "$fn" "Deprecated/old runtime: $rt" "Upgrade to a supported runtime (e.g. python3.13/nodejs22)" 0
-  done
+  if ! aws_pages "lambda-$reg" "$RAW/lambda-$reg.json" '.Functions' \
+       AWSR "$reg" lambda list-functions --output json; then
+    err "Lambda list unreadable in $reg"
+    return
+  fi
+  python3 -I - "$RAW/lambda-$reg.json" "$FINDINGS_JSONL" "$reg" "$RUNTIME_POLICY" "$AUDIT_DATE" <<'LAMBDA_PY'
+import json, sys
+from datetime import date
+path, out, region, policy_path, audit = sys.argv[1:]
+day = date.fromisoformat(audit)
+policy = json.load(open(policy_path))
+known = {row["id"]: row.get("deprecation") for row in policy["deprecated"] + policy["supported"]}
+for fn in json.load(open(path)):
+    runtime = fn.get("Runtime")
+    if not runtime or runtime not in known:
+        continue
+    when = known[runtime]
+    if when and day >= date.fromisoformat(when):
+        row = {"severity": "MEDIUM", "service": "Lambda", "region": region, "resource": fn["FunctionName"],
+               "title": fn["FunctionName"] + " stale runtime " + runtime,
+               "issue": f"Runtime {runtime} deprecated on {when} (audit date {audit})",
+               "recommendation": "Upgrade to a supported runtime", "est_monthly_usd": 0}
+        open(out, "a").write(json.dumps(row) + "\n")
+LAMBDA_PY
 }
 
 # ============================================ Security service enrollment =====
@@ -264,8 +470,13 @@ audit_security_posture() {
   sec "Security posture (GuardDuty / Security Hub / Cost Anomaly / Compute Optimizer)"
   local reg gd sh
   for reg in ${AUDIT_REGIONS//,/ }; do
-    gd=$(AWSR "$reg" guardduty list-detectors --query 'DetectorIds' --output text 2>/dev/null)
-    [ -z "$gd" ] && finding MEDIUM GuardDuty "$reg" "account" "GuardDuty not enabled" "Enable GuardDuty for threat detection" 0
+    if aws_capture "guardduty-$reg" "$RAW/guardduty-$reg.json" \
+         AWSR "$reg" guardduty list-detectors --output json; then
+      gd=$(jq -r '.DetectorIds|length' "$RAW/guardduty-$reg.json")
+      [ "$gd" = 0 ] && finding MEDIUM GuardDuty "$reg" "account" "GuardDuty not enabled" "Enable GuardDuty for threat detection" 0
+    else
+      err "GuardDuty unreadable in $reg; not reported as disabled"
+    fi
     sh=$(AWSR "$reg" securityhub get-enabled-standards --query 'StandardsSubscriptions' --output text 2>/dev/null)
     [ -z "$sh" ] && finding LOW SecurityHub "$reg" "account" "Security Hub standards not enabled" "Enable AWS Foundational Security Best Practices standard" 0
   done
@@ -288,17 +499,39 @@ audit_cost() {
   s=$(date -v-"${COST_DAYS}"d +%F 2>/dev/null || date -d "-${COST_DAYS} days" +%F)
   p=$(date -v-"$((COST_DAYS*2))"d +%F 2>/dev/null || date -d "-$((COST_DAYS*2)) days" +%F)
   local USAGE_FILTER='{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'
-  # DAILY granularity + Usage filter (credit-masked nets are useless for spikes)
-  AWS ce get-cost-and-usage --time-period Start=$s,End=$e --granularity DAILY --metrics UnblendedCost \
-    --filter "$USAGE_FILTER" \
-    --group-by Type=DIMENSION,Key=SERVICE \
-    --query 'ResultsByTime[].Groups[].[Keys[0],Metrics.UnblendedCost.Amount]' --output text 2>/dev/null \
-    | awk -F'\t' '{a[$1]+=$2} END{for(k in a) printf "%s\t%.2f\n",k,a[k]}' | sort >"$RAW/cost-current.tsv"
-  AWS ce get-cost-and-usage --time-period Start=$p,End=$s --granularity DAILY --metrics UnblendedCost \
-    --filter "$USAGE_FILTER" \
-    --group-by Type=DIMENSION,Key=SERVICE \
-    --query 'ResultsByTime[].Groups[].[Keys[0],Metrics.UnblendedCost.Amount]' --output text 2>/dev/null \
-    | awk -F'\t' '{a[$1]+=$2} END{for(k in a) printf "%s\t%.2f\n",k,a[k]}' | sort >"$RAW/cost-prev.tsv"
+  if ! aws_capture cost-current "$RAW/cost-current.json" \
+       AWS ce get-cost-and-usage --time-period Start=$s,End=$e --granularity DAILY --metrics UnblendedCost \
+         --filter "$USAGE_FILTER" --group-by Type=DIMENSION,Key=SERVICE --output json; then
+    err "cost read denied; a zero baseline is not invented"
+    return
+  fi
+  if ! aws_capture cost-prev "$RAW/cost-prev.json" \
+       AWS ce get-cost-and-usage --time-period Start=$p,End=$s --granularity DAILY --metrics UnblendedCost \
+         --filter "$USAGE_FILTER" --group-by Type=DIMENSION,Key=SERVICE --output json; then
+    err "prior cost window denied; delta is not computed against zero"
+    return
+  fi
+  python3 -I - "$RAW/cost-current.json" "$RAW/cost-prev.json" "$RAW/cost-current.tsv" "$RAW/cost-prev.tsv" <<'COST_PY'
+import json, sys
+current, previous, cur_out, prev_out = sys.argv[1:]
+
+def totals(path):
+    data = json.load(open(path))
+    sums = {}
+    for window in data.get("ResultsByTime") or []:
+        for group in window.get("Groups") or []:
+            key = group["Keys"][0]
+            sums[key] = sums.get(key, 0) + float(group["Metrics"]["UnblendedCost"]["Amount"])
+    return sums
+
+def write(path, sums):
+    with open(path, "w") as handle:
+        for key in sorted(sums):
+            handle.write(f"{key}\t{sums[key]:.2f}\n")
+
+write(cur_out, totals(current))
+write(prev_out, totals(previous))
+COST_PY
   # Optional: credit mask snapshot for the report
   AWS ce get-cost-and-usage --time-period Start=$s,End=$e --granularity MONTHLY --metrics UnblendedCost \
     --group-by Type=DIMENSION,Key=RECORD_TYPE \
@@ -327,7 +560,10 @@ audit_cost() {
 
 # =============================================================== REPORT =======
 build_report() {
-  jq -s '.' "$FINDINGS_JSONL" >"$FINDINGS_JSON" 2>/dev/null || echo '[]' >"$FINDINGS_JSON"
+  if ! jq -s '.' "$FINDINGS_JSONL" >"$FINDINGS_JSON"; then
+    err "findings.jsonl is not valid JSON; refusing an empty report"
+    return 1
+  fi
   local total crit high med low
   total=$(jq 'length' "$FINDINGS_JSON")
   crit=$(jq '[.[]|select(.severity=="CRITICAL")]|length' "$FINDINGS_JSON")
@@ -434,10 +670,17 @@ for reg in ${AUDIT_REGIONS//,/ }; do
 done
 audit_security_posture
 audit_cost
-build_report
+if ! build_report; then
+  err "report aborted: findings JSON invalid"
+  exit 1
+fi
 [ "$QUIET" = 1 ] || render_pixel_report
 
 log ""
 log "${C_G}AUDIT COMPLETE${C_N}  findings=$(jq length "$FINDINGS_JSON")  report=$REPORT"
 [ "$QUIET" = 1 ] && echo "$AUDIT_OUTPUT_DIR"
+if jq -e 'to_entries|map(select(.value.status=="denied" or .value.status=="error"))|length>0' "$COVERAGE_JSON" >/dev/null 2>&1; then
+  err "coverage incomplete: a denied or failed read is not a clean audit"
+  exit 1
+fi
 exit 0
