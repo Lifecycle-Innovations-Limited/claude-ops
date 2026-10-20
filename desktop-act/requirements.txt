@@ -6,7 +6,7 @@ fastmcp-slim==3.4.5
 httpx==0.28.1
 httpx-sse==0.4.3
 # mcp 2.x exists on PyPI but claude-agent-sdk and fastmcp require mcp<2.0.
-mcp==1.29.0
+mcp==1.30.0
 pillow==12.3.0
 pydantic==2.13.4
 pydantic-settings==2.14.2
