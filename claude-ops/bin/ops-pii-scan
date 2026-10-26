@@ -68,6 +68,18 @@ drop_documented_uuids() {
                           { print }' <(printf '%s\n' "$allow") -
 }
 
+# Cursor appends agent links to the PR body after the author submits it
+# (cursor.com/agents/bc-<uuid> and background-agent?bcId=bc-<uuid>). That id
+# names the agent run. It is not text the author wrote, and it is not a
+# person. Drop only a uuid-literal whose matched term is the id inside that
+# link. A different UUID on the same line still blocks.
+drop_cursor_agent_uuids() {
+  awk -F'\t' -v OFS='\t' '
+    $2 == "uuid-literal" && $0 ~ /cursor\.com/ && index($0, "bc-" $3) { next }
+    { print }
+  '
+}
+
 # Downgrade named rules from BLOCK to WARN.
 #
 # This exists for ONE surface: issue and PR comments. A scan of this repo's
@@ -245,7 +257,7 @@ fi
 # incremented in the last stage of a pipe lives in a subshell and is gone by
 # the time the exit code is decided — a gate that prints BLOCKED and then
 # exits 0 is the precise failure this whole file exists to prevent.
-pii_scan < "$collected" | drop_documented_uuids | apply_downgrade > "$findings"
+pii_scan < "$collected" | drop_documented_uuids | drop_cursor_agent_uuids | apply_downgrade > "$findings"
 report < "$findings"
 BLOCKS=$(awk -F'\t' '$1 == "BLOCK"' "$findings" | grep -c . || true)
 WARNS=$(awk -F'\t' '$1 == "WARN"' "$findings" | grep -c . || true)

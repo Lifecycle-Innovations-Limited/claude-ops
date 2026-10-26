@@ -172,6 +172,28 @@ printf 'contact user@example.com or your.address@example.org, cc noreply@anthrop
 assert_allowed "documented email placeholders are accepted" \
   --origin "PR body" --text-file "$WORK/clean.txt"
 
+# --- 5b. The Cursor PR footer session id is not an authored identifier --------
+# ManagePullRequest appends cursor.com/agents/bc-<uuid> after the body. The
+# metadata gate scans that whole body. The id is composed here so this file
+# never contains a UUID literal for the file scanner to refuse.
+AGENT_ID="$(printf '%s-%s-%s-%s-%s' 'a1b2c3d4' 'e5f6' '4789' '8abc' 'def012345678')"
+{
+  printf 'Headless runs disable the telegram plugin.\n'
+  printf 'https://cursor.com/agents/bc-%s?cursor_ref=pr_footer\n' "$AGENT_ID"
+  printf 'https://cursor.com/background-agent?bcId=bc-%s\n' "$AGENT_ID"
+} > "$WORK/footer.txt"
+assert_allowed "a Cursor agent-link session id in PR text is accepted" \
+  --origin "PR title/body" --text-file "$WORK/footer.txt"
+printf 'session %s is private\n' "$AGENT_ID" > "$WORK/bare-uuid.txt"
+assert_blocked "a bare UUID in PR text still blocks" "uuid-literal" \
+  --origin "PR title/body" --text-file "$WORK/bare-uuid.txt"
+{
+  printf 'reach me at %s%s\n' 'a.person' '@gmail.com'
+  printf 'https://cursor.com/agents/bc-%s\n' "$AGENT_ID"
+} > "$WORK/footer-mail.txt"
+assert_blocked "a mailbox still blocks beside a Cursor agent link" "personal-email" \
+  --origin "PR title/body" --text-file "$WORK/footer-mail.txt"
+
 # --- 6. Control: a clean message must pass -------------------------------------
 # Without this, a gate that refuses everything would satisfy every case above.
 printf 'fix: audit every catalog row, not just the first\n' > "$WORK/good.txt"
