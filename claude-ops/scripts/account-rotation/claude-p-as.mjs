@@ -375,7 +375,11 @@ async function main(argv) {
         }
         userArgs.push(a);
       }
-      const finalArgs = ['-p', '--max-budget-usd', String(budget), ...userArgs];
+      // 2026-10-26: never start the telegram channel plugin (getUpdates poller) in headless runs.
+      const noTg = userArgs.includes('--settings')
+        ? []
+        : ['--settings', '{"enabledPlugins":{"telegram@claude-plugins-official":false}}'];
+      const finalArgs = [...noTg, '-p', '--max-budget-usd', String(budget), ...userArgs];
 
       // Spawn claude. Stream output through; collect for cost parsing.
       const stdoutChunks = [];

@@ -105,29 +105,35 @@ CLOUD INFRASTRUCTURE IS OUT OF SCOPE. Your remit is local MCP servers and the se
 # shipped, which also keeps it correct when the plugin moves between versioned
 # install directories.
 GUARD_HOOK="$SCRIPT_DIR/../hooks/mcp-fixer-infra-guard.py"
-GUARD_ARGS=()
+# Headless runs must not start the telegram channel plugin. A second --settings
+# would replace this file (the CLI keeps one additional settings document), so
+# the disable lives in the same document as the infra-guard hook.
+NO_TG_SETTINGS='{"enabledPlugins":{"telegram@claude-plugins-official":false}}'
+GUARD_ARGS=(--settings "$NO_TG_SETTINGS")
 if [ -f "$GUARD_HOOK" ]; then
   GUARD_SETTINGS="$STATE_DIR/fixer-guard-settings.json"
   python3 - "$GUARD_HOOK" > "$GUARD_SETTINGS" <<'PY'
 import json, sys
 hook = sys.argv[1]
-json.dump({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
-    {"type": "command", "command": f'/usr/bin/env python3 "{hook}"', "timeout": 8}
-]}]}}, sys.stdout)
+json.dump({
+    "enabledPlugins": {"telegram@claude-plugins-official": False},
+    "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": f'/usr/bin/env python3 "{hook}"', "timeout": 8}
+    ]}]},
+}, sys.stdout)
 PY
   if [ -s "$GUARD_SETTINGS" ]; then
     GUARD_ARGS=(--settings "$GUARD_SETTINGS")
   fi
 fi
-if [ ${#GUARD_ARGS[@]} -eq 0 ]; then
+if [ "${GUARD_ARGS[1]}" = "$NO_TG_SETTINGS" ]; then
   # Never fail open silently: an unguarded fixer is exactly how the incident above happened.
   log "WARNING: infra guard unavailable ($GUARD_HOOK) — running unguarded"
   notify "MCP fixer running unguarded" "infra guard missing — destructive cloud commands are not blocked"
 fi
 
-"$CLAUDE_BIN" -p "$PROMPT" \
+"$CLAUDE_BIN" "${GUARD_ARGS[@]}" -p "$PROMPT" \
   --dangerously-skip-permissions \
-  "${GUARD_ARGS[@]}" \
   --disallowedTools \
     "Bash(aws ec2 stop-instances:*)" \
     "Bash(aws ec2 terminate-instances:*)" \

@@ -122,7 +122,9 @@ def _dispatch_subagent(task: dict) -> str | None:
 
     tag = f"pocket-{task['recording_id'][:12]}"
     cmd = [
-        "claude", "--bg",
+        "claude",
+        "--settings", '{"enabledPlugins":{"telegram@claude-plugins-official":false}}',
+        "--bg",
         "--system", system_prompt,
         "--print", prompt_file,
         "--output-format", "text",

@@ -263,6 +263,7 @@ def _triage_once(task: dict) -> dict:
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     cmd = [
         claude_bin,
+        "--settings", '{"enabledPlugins":{"telegram@claude-plugins-official":false}}',
         "--dangerously-skip-permissions",
         *(["--model", MODEL] if MODEL else []),
         "-p",

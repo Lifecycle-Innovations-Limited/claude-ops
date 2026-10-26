@@ -234,7 +234,7 @@ sweep_run_agent() {
   if command -v claude_invoke >/dev/null 2>&1; then
     printf '%s' "$prompt" | claude_invoke --no-session-persistence -p >"$out" 2>/dev/null || true
   elif command -v claude >/dev/null 2>&1; then
-    printf '%s' "$prompt" | sweep_bounded "$SWEEP_AGENT_TIMEOUT" claude -p >"$out" 2>/dev/null || true
+    printf '%s' "$prompt" | sweep_bounded "$SWEEP_AGENT_TIMEOUT" claude --settings '{"enabledPlugins":{"telegram@claude-plugins-official":false}}' -p >"$out" 2>/dev/null || true
   else
     : >"$out"
   fi
