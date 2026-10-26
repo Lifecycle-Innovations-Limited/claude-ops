@@ -53,7 +53,8 @@ rc=0
 # claude exit, so the metrics + failure-notify error-handling below still runs.
 # Under pipefail the pipeline status is claude's (rightmost non-zero) exit code.
 printf '%s' "$RENDERED_PROMPT" | \
-  claude --print ${EMAIL_COS_ORCH_MODEL:+--model "$EMAIL_COS_ORCH_MODEL"} --dangerously-skip-permissions \
+  claude --settings '{"enabledPlugins":{"telegram@claude-plugins-official":false}}' \
+    --print ${EMAIL_COS_ORCH_MODEL:+--model "$EMAIL_COS_ORCH_MODEL"} --dangerously-skip-permissions \
     --strict-mcp-config --mcp-config "$_ORCH_MCP" >> "$SD/orch.out" 2>&1 || rc=$?
 secs=$(( $(date +%s) - start ))
 echo "{\"ts\":\"$ts\",\"tier\":\"orch\",\"exit\":$rc,\"secs\":$secs}" >> "$SD/metrics.jsonl"

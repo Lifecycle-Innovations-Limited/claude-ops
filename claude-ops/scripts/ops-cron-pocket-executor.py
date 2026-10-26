@@ -403,6 +403,7 @@ def spawn_worker(task: dict) -> dict | None:
     display_name = f"pocket: {(task.get('title') or task_id)[:60]}"
     cmd = [
         CLAUDE_BIN,
+        "--settings", '{"enabledPlugins":{"telegram@claude-plugins-official":false}}',
         "--dangerously-skip-permissions",
         "--bg",
         "--name",

@@ -47,6 +47,9 @@ from __future__ import annotations
 import hashlib, json, os, pathlib, re, shutil, subprocess, sys, time
 import urllib.parse, urllib.request
 
+# 2026-10-26: headless claude -p must not start the telegram getUpdates poller.
+_NO_TG_SETTINGS = '{"enabledPlugins":{"telegram@claude-plugins-official":false}}'
+
 STATE = pathlib.Path(os.environ.get("POCKET_STATE_DIR", "/var/lib/pocket-pipeline"))
 REVIEW = STATE / "review.jsonl"
 DRAFTS = STATE / "drafts.jsonl"
@@ -252,8 +255,10 @@ def _redraft_email(er, orig_body, instruction):
         f"CURRENT DRAFT:\n{orig_body}\n\nOWNER INSTRUCTION:\n{instruction}\n\nJSON:"
     )
     try:
-        r = subprocess.run([cb, "-p", prompt, *(["--model", model] if model else []), *_CLAUDE_FLAGS],
-                           capture_output=True, text=True, timeout=120, env=os.environ)
+        r = subprocess.run(
+            [cb, "--settings", _NO_TG_SETTINGS, "-p", prompt, *(["--model", model] if model else []), *_CLAUDE_FLAGS],
+            capture_output=True, text=True, timeout=120, env=os.environ,
+        )
         out = (r.stdout or "").strip()
     except Exception as e:
         log(f"redraft: invocation failed: {e}")
@@ -558,8 +563,10 @@ def _validate_action(ent):
         "If context is empty or unclear, default to proceed. JSON:"
     )
     try:
-        r = subprocess.run([cb, "-p", prompt, *(["--model", model] if model else []), *_CLAUDE_FLAGS],
-                           capture_output=True, text=True, timeout=90, env=os.environ)
+        r = subprocess.run(
+            [cb, "--settings", _NO_TG_SETTINGS, "-p", prompt, *(["--model", model] if model else []), *_CLAUDE_FLAGS],
+            capture_output=True, text=True, timeout=90, env=os.environ,
+        )
         out = (r.stdout or "").strip()
     except Exception as e:
         log(f"validate: invocation error {e} — proceeding")
@@ -718,8 +725,10 @@ def _llm_map(codemap, message):
         f"PENDING ITEMS:\n{catalog}\n\nMESSAGE:\n{message}\n\nJSON:"
     )
     try:
-        r = subprocess.run([cb, "-p", prompt, *(["--model", model] if model else []), *_CLAUDE_FLAGS],
-                           capture_output=True, text=True, timeout=90, env=os.environ)
+        r = subprocess.run(
+            [cb, "--settings", _NO_TG_SETTINGS, "-p", prompt, *(["--model", model] if model else []), *_CLAUDE_FLAGS],
+            capture_output=True, text=True, timeout=90, env=os.environ,
+        )
         out = (r.stdout or "").strip()
     except Exception as e:
         log(f"llm: invocation failed: {e}")

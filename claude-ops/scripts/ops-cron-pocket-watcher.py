@@ -616,7 +616,7 @@ class GigaClient:
             f"If any tool errors, print: GIGA_FLUSH_ERR <one-line reason>\n"
             f"No other output. No prose. No markdown."
         )
-        cmd = [claude_bin, "--dangerously-skip-permissions",
+        cmd = [claude_bin, "--settings", '{"enabledPlugins":{"telegram@claude-plugins-official":false}}', "--dangerously-skip-permissions",
                *(["--model", parser_model] if parser_model else []), "-p", prompt]
         try:
             proc = subprocess.run(cmd, env=env, capture_output=True,

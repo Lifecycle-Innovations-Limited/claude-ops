@@ -4,10 +4,11 @@
 # Tests:
 #   T1: CLAUDE_OPS_USE_CREDIT_POOL unset  -> calls `claude` directly, preserving args
 #   T2: CLAUDE_OPS_USE_CREDIT_POOL=0      -> calls `claude` directly, preserving args
-#   T3: CLAUDE_OPS_USE_CREDIT_POOL=1      -> calls `node .../claude-p-as.mjs --` with unchanged args
+#   T3: CLAUDE_OPS_USE_CREDIT_POOL=1      -> calls `node .../claude-p-as.mjs --` with the telegram disable prepended
 #   T4: CLAUDE_OPS_USE_CREDIT_POOL=1 but wrapper missing -> falls back to `claude`, exits non-zero
 #       (warning printed to stderr, direct claude called)
 #   T5: direct invocation strips API-key env so the OAuth credential wins
+NO_TG='{"enabledPlugins":{"telegram@claude-plugins-official":false}}'
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -89,10 +90,11 @@ run_invoke() {
 # ---------------------------------------------------------------------------
 echo "T1: gate unset -> direct claude"
 result=$(run_invoke -- -p --model custom-model --no-session-persistence)
-if [[ "$result" == "claude -p --model custom-model --no-session-persistence" ]]; then
+expected="claude --settings $NO_TG -p --model custom-model --no-session-persistence"
+if [[ "$result" == "$expected" ]]; then
   ok "called claude directly without rewriting model args"
 else
-  err "expected 'claude -p --model custom-model --no-session-persistence', got: '$result'"
+  err "expected '$expected', got: '$result'"
 fi
 
 # ---------------------------------------------------------------------------
@@ -100,10 +102,11 @@ fi
 # ---------------------------------------------------------------------------
 echo "T2: gate=0 -> direct claude"
 result=$(run_invoke CLAUDE_OPS_USE_CREDIT_POOL=0 -- -p --model custom-model)
-if [[ "$result" == "claude -p --model custom-model" ]]; then
+expected="claude --settings $NO_TG -p --model custom-model"
+if [[ "$result" == "$expected" ]]; then
   ok "called claude directly with CREDIT_POOL=0"
 else
-  err "expected 'claude -p --model custom-model', got: '$result'"
+  err "expected '$expected', got: '$result'"
 fi
 
 # ---------------------------------------------------------------------------
@@ -112,9 +115,9 @@ fi
 echo "T3: gate=1 -> node ...claude-p-as.mjs -- <args>"
 result=$(run_invoke CLAUDE_OPS_USE_CREDIT_POOL=1 -- -p --model custom-model --no-session-persistence)
 wrapper_path="$PLUGIN_ROOT/scripts/account-rotation/claude-p-as.mjs"
-expected="node $wrapper_path -- -p --model custom-model --no-session-persistence"
+expected="node $wrapper_path -- --settings $NO_TG -p --model custom-model --no-session-persistence"
 if [[ "$result" == "$expected" ]]; then
-  ok "routed through claude-p-as.mjs with unchanged args after --"
+  ok "routed through claude-p-as.mjs with telegram plugin disabled"
 else
   err "expected: '$expected'"
   err "     got: '$result'"
@@ -145,10 +148,11 @@ stderr_out=$(
 )
 
 fallback_result=$(cat "$capture_missing")
-if [[ "$fallback_result" == "claude -p --model custom-model" ]]; then
+expected_fallback="claude --settings $NO_TG -p --model custom-model"
+if [[ "$fallback_result" == "$expected_fallback" ]]; then
   ok "fell back to direct claude when wrapper missing"
 else
-  err "fallback: expected 'claude -p --model custom-model', got: '$fallback_result'"
+  err "fallback: expected '$expected_fallback', got: '$fallback_result'"
 fi
 if echo "$stderr_out" | grep -q "WARNING"; then
   ok "emitted WARNING to stderr"

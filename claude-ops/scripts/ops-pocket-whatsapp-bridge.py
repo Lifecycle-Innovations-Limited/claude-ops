@@ -180,7 +180,7 @@ Schema:
 
     claude_bin = os.environ.get("POCKET_CLAUDE_BIN", str(HOME / ".local/bin/claude"))
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    cmd = [claude_bin, "--dangerously-skip-permissions",
+    cmd = [claude_bin, "--settings", '{"enabledPlugins":{"telegram@claude-plugins-official":false}}', "--dangerously-skip-permissions",
            *(["--model", parser_model] if parser_model else []), "-p", prompt]
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=90)

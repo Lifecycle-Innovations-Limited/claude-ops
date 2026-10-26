@@ -42,6 +42,11 @@ _claude_invoke_find_root() {
   return 1
 }
 
+# 2026-10-26: headless runs must never start the telegram channel plugin; it polls
+# getUpdates with the claudecode bot token (from ~/.claude/channels/telegram/.env)
+# and knocks hermes-primary claudecode out with telegram_polling_conflict.
+CLAUDE_INVOKE_NO_TG_SETTINGS='{"enabledPlugins":{"telegram@claude-plugins-official":false}}'
+
 _claude_invoke_exec() {
   env -u ANTHROPIC_API_KEY -u CLAUDE_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN "$@"
 }
@@ -55,11 +60,11 @@ claude_invoke() {
       # Wrapper not found — log a warning and fall back to direct claude so
       # daemon jobs are never silently dropped due to misconfiguration.
       printf '[claude-invoke] WARNING: claude-p-as.mjs not found (root=%s) — falling back to direct claude\n' "${repo_root:-unresolved}" >&2
-      _claude_invoke_exec claude "$@"
+      _claude_invoke_exec claude --settings "$CLAUDE_INVOKE_NO_TG_SETTINGS" "$@"
       return $?
     fi
-    _claude_invoke_exec node "$wrapper" -- "$@"
+    _claude_invoke_exec node "$wrapper" -- --settings "$CLAUDE_INVOKE_NO_TG_SETTINGS" "$@"
   else
-    _claude_invoke_exec claude "$@"
+    _claude_invoke_exec claude --settings "$CLAUDE_INVOKE_NO_TG_SETTINGS" "$@"
   fi
 }
