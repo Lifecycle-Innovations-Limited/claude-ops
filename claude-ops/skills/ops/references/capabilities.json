@@ -131,6 +131,10 @@
       "summary": "This skill should be used when the user asks to \"merge PRs\", \"salvage branches\", or \"/ops:ops-merge\". Autonomous salvage + PR merge pipeline. FIRST scans every repo in every org for orphan worktrees, feature branches without PRs, uncommitted/staged/stashed work, and unpushed commits — dispatches subagents to finish/PR all loose local work. THEN scans all open PRs, dispatches fixers for CI/conflicts/reviews, and merges. Use --main to also sync dev↔main branches. Use --no-salvage to skip Phase 0 (PR-only mode). Use --salvage-only to stop after Phase 0."
     },
     {
+      "name": "ops-mix",
+      "summary": "This skill should be used when the user asks to create, resume or judge a DJ mix, use Mixforge, or run /ops:ops-mix. Guides briefing, planning, rendering and assessment of the full mix and every transition, reusing OPS A&R."
+    },
+    {
       "name": "ops-monitor",
       "summary": "This skill should be used when the user asks to \"datadog\", \"APM alerts\", or \"/ops:ops-monitor\". Unified APM and monitoring surface. Polls Datadog, New Relic, and OpenTelemetry backends for active alerts, error traces, and entity health. Use --watch for live polling every 60 seconds. Use --setup to configure monitoring credentials."
     },

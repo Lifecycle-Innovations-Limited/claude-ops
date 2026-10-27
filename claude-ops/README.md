@@ -2,6 +2,10 @@
 
 > **v3.6.1** — 66 skills · 21 agents · Claude + Grok + Hermes · ops-rules · empty `.mcp.json`
 
+## Mixforge
+
+Use `/ops:ops-mix` to create or resume a mix, run the existing Mixforge engine and assess the full mix plus every transition. It reuses `/ops:ops-ar` for producer feedback. OPS contains no engine copy: configure `MIXFORGE_EXECUTABLE`, or `MIXFORGE_SOURCE` with `MIXFORGE_PYTHON`, outside the plugin. Local checks need no model; external audio assessment requires explicit approval and a runtime-selected audio model. A musical opinion never clears delivery or rights requirements. See [the mix skill](skills/ops-mix/SKILL.md).
+
 ## What's new in v3.6.1
 
 - **v3.6.1** — Slim `ops-inbox` SKILL.md, real NL skill triggers, Hermes `plugin.yaml` + installer pin locked to `plugin.json`. Grok still loads the Claude plugin. [harness-ports.md](docs/harness-ports.md).
