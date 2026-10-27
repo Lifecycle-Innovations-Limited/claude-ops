@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [3.12.0] - 2026-10-27
+
+### Changed
+Add /ops:ops-mix and evidence-only A&R mix-evidence mode using the configured Mixforge engine.
+
+
 ## [3.11.2] - 2026-10-17
 
 ### Added
