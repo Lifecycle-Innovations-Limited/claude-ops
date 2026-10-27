@@ -10,6 +10,8 @@ allowed-tools:
   - Glob
   - Agent
   - Skill
+  - TeamCreate
+  - SendMessage
   - ToolSearch
   - AskUserQuestion
 ---
@@ -59,3 +61,14 @@ Invoke `ops:ops-ar mix-evidence <judge-report.json> <mixbrief.json>` for its exp
 Use its A&R producer on this evidence with an explicit mix-specific task: assess whole-mix pacing/style and timestamped transition findings, give concrete producer moves, and distinguish observed audio evidence from model opinion. A signing recommendation or per-track hit score does not prove DJ mix quality. Do not rerun paid analysis or hidden upload fallbacks without the invocation's approval. If only metadata was assessed, say so; do not claim to have listened.
 
 Return a mix verdict (`revise`, `review`, or `candidate`), strengths, timestamped issues, producer moves and reference/style comparison. Include complete/full-mix and per-transition coverage plus open requirements. `candidate` means suitable for human listening review, never final release approval. Automatic rerendering, overwrite, distribution and rights clearance are outside this command's judge step.
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, a mix review with several independent reviewers (full mix plus per-transition checks) may run as an Agent Team. Reviewers stay read-only; the main session alone renders and publishes.
+
+```
+TeamCreate("mix-review")
+Agent(team_name="mix-review", name="mix-reviewer-[slug]", ...)
+```
+
+If the flag is NOT set, use standard fire-and-forget subagents, one per review task.
