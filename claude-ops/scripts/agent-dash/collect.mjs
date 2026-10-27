@@ -1,14 +1,17 @@
 #!/usr/bin/env node
-// collect.mjs — gather the unified agent fleet (local Mac + FRA EC2) as one JSON
-// array. The same host-probe.mjs runs locally and (piped over ssh) on FRA, so
-// derivation lives in exactly one place. Remote is cached 30s; every probe has a
-// hard timeout so a wedged host degrades to empty rather than hanging the dash.
+// collect.mjs — gather the unified agent fleet (local Mac + configured remote hosts)
+// as one JSON array. Remote hosts are operator configuration, never public defaults.
+// The same host-probe.mjs runs locally and over ssh, so derivation stays in one place.
+// Remote is cached 30s; every probe has a hard timeout so a wedged host degrades to
+// an explicit unknown state rather than hanging the dash.
 //
 // Usage:
 //   node collect.mjs            # pretty-ish JSON of the merged fleet
 //   import { collect } from './collect.mjs'   # programmatic
 //
-// Cache: ~/.claude/state/agent-dash-remote-cache.json (FRA result + timestamp)
+// Configuration (operator-owned, not committed):
+//   AGENT_DASH_REMOTE_HOSTS=my-remote-host
+//   preferences.json: { "agent_dash": { "remote_hosts": ["my-remote-host"] } }
 
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -23,13 +26,25 @@ const STATE_DIR = join(HOME, '.claude', 'state');
 const REMOTE_CACHE = join(STATE_DIR, 'agent-dash-remote-cache.json');
 const REMOTE_TTL_MS = 30 * 1000;
 
-// Remote ssh targets to scan, tried in order. Set AGENT_DASH_FRA_HOSTS
-// (comma-separated ssh host aliases) to point at your own remote box(es);
-// empty by default so the dashboard is local-only out of the box.
-const FRA_HOSTS = (process.env.AGENT_DASH_FRA_HOSTS || '')
+function preferenceHosts() {
+  const dataDir = process.env.CLAUDE_PLUGIN_DATA_DIR || process.env.OPS_DATA_DIR || join(HOME, '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+  try {
+    const prefs = JSON.parse(readFileSync(join(dataDir, 'preferences.json'), 'utf8'));
+    const hosts = prefs?.agent_dash?.remote_hosts;
+    return Array.isArray(hosts) ? hosts.filter((h) => typeof h === 'string' && h.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Remote ssh targets to scan, tried in order. Preferences are the durable source;
+// env is an explicit per-run override for operators and tests. Empty means local-only.
+const REMOTE_HOSTS = (process.env.AGENT_DASH_REMOTE_HOSTS || '')
   .split(',')
   .map((s) => s.trim())
-  .filter(Boolean);
+  .filter(Boolean)
+  .concat(preferenceHosts())
+  .filter((host, index, all) => all.indexOf(host) === index);
 
 function readCache() {
   try {
@@ -55,6 +70,34 @@ function nowTs() {
   return Date.now();
 }
 
+function readOnlyCommand(command, args = [], timeout = 5000) {
+  try {
+    const out = execFileSync(command, args, { encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.trim();
+  } catch {
+    return '';
+  }
+}
+
+function collectBandJam() {
+  const band = readOnlyCommand('band', ['preflight'], 7000);
+  const peers = readOnlyCommand('band', ['peers'], 7000);
+  const status = readOnlyCommand('band', ['status'], 7000);
+  const activity = readOnlyCommand('band', ['activity'], 7000);
+  const work = readOnlyCommand('band', ['work'], 7000);
+  const available = Boolean(band || peers || status || activity || work);
+  return {
+    available,
+    source: available ? 'band-cli' : 'unavailable',
+    preflight: band || null,
+    peers: peers || null,
+    status: status || null,
+    activity: activity || null,
+    work: work || null,
+    readOnly: true,
+  };
+}
+
 // --- local -----------------------------------------------------------------
 
 export function collectLocal() {
@@ -72,13 +115,13 @@ export function collectLocal() {
   }
 }
 
-// --- remote (FRA) ----------------------------------------------------------
+// --- configured remote hosts ------------------------------------------------
 
 function probeRemoteHost(sshHost, probeSrc) {
-  // Ship the probe over stdin, run it with the remote node, label records 'fra'.
-  // One round-trip, hard timeout, read-only on the remote box.
+  // Ship the probe over stdin, run it remotely, and label records with the
+  // configured ssh alias. One round-trip, hard timeout, read-only on the host.
   const remoteCmd =
-    'cat > /tmp/agent-dash-probe.mjs && AGENT_DASH_HOST=fra ' +
+    `cat > /tmp/agent-dash-probe.mjs && AGENT_DASH_HOST=${JSON.stringify(sshHost)} ` +
     'node /tmp/agent-dash-probe.mjs; rm -f /tmp/agent-dash-probe.mjs';
   const out = execFileSync(
     'ssh',
@@ -93,63 +136,54 @@ function probeRemoteHost(sshHost, probeSrc) {
 export function collectRemote({ force = false } = {}) {
   // No remote configured is not the same as a remote that failed to answer.
   // Report it as its own state so the dashboard never prints a confident 0.
-  if (FRA_HOSTS.length === 0) {
-    return { agents: [], stale: false, source: 'not-configured', cached: false, known: true };
+  if (REMOTE_HOSTS.length === 0) {
+    return { agents: [], stale: false, source: 'not-configured', cached: false, known: true, hosts: {} };
   }
 
   const cache = readCache();
   if (!force && cache && nowTs() - cache.ts < REMOTE_TTL_MS) {
-    return { agents: cache.agents, stale: false, source: cache.meta?.source || 'cache', cached: true, known: true };
+    return { agents: cache.agents, stale: false, source: cache.meta?.source || 'cache', cached: true, known: true, hosts: cache.meta?.hosts || {} };
   }
 
   let probeSrc;
   try {
     probeSrc = readFileSync(PROBE, 'utf8');
   } catch {
-    return { agents: cache?.agents || [], stale: true, source: 'no-probe', cached: !!cache, known: !!cache };
+    return { agents: cache?.agents || [], stale: true, source: 'no-probe', cached: !!cache, known: !!cache, hosts: cache?.meta?.hosts || {} };
   }
 
-  for (const h of FRA_HOSTS) {
+  const hostStates = {};
+  for (const host of REMOTE_HOSTS) {
     try {
-      const agents = probeRemoteHost(h.trim(), probeSrc);
-      writeCache(agents, { source: h.trim() });
-      return { agents, stale: false, source: h.trim(), cached: false, known: true };
+      const agents = probeRemoteHost(host, probeSrc);
+      hostStates[host] = { count: agents.length, known: true, stale: false, source: host, cached: false };
+      writeCache(agents, { source: host, hosts: hostStates });
+      return { agents, stale: false, source: host, cached: false, known: true, hosts: hostStates };
     } catch {
-      /* try next host */
+      hostStates[host] = { count: null, known: false, stale: true, source: 'unreachable', cached: false };
     }
   }
 
-  // all FRA hosts failed — serve last-known cache, flagged stale
   if (cache) {
-    return { agents: cache.agents, stale: true, source: cache.meta?.source || 'cache', cached: true, known: true };
+    return { agents: cache.agents, stale: true, source: cache.meta?.source || 'cache', cached: true, known: true, hosts: cache.meta?.hosts || hostStates };
   }
-  // Configured, tried, no answer, and nothing cached: the agent count is UNKNOWN,
-  // not zero. `known: false` tells consumers they may not report a number here.
-  return { agents: [], stale: true, source: 'unreachable', cached: false, known: false };
+  return { agents: [], stale: true, source: 'unreachable', cached: false, known: false, hosts: hostStates };
 }
 
 // --- unified ---------------------------------------------------------------
 
 export function collect({ force = false, localOnly = false } = {}) {
   const local = collectLocal();
-  let remote = { agents: [], stale: false, source: 'skipped', cached: false, known: true };
+  let remote = { agents: [], stale: false, source: 'skipped', cached: false, known: true, hosts: {} };
   if (!localOnly) remote = collectRemote({ force });
+  const hosts = { mac: { count: local.length, known: true, stale: false, source: 'local', cached: false }, ...remote.hosts };
   return {
     ts: nowTs(),
-    hosts: {
-      mac: { count: local.length },
-      // `count` is null — never 0 — when the remote could not be reached and no
-      // cache exists. Zero would read as "no agents there", which is a claim the
-      // probe cannot support. Consumers must render null as unknown.
-      fra: {
-        count: remote.known === false ? null : remote.agents.length,
-        known: remote.known !== false,
-        stale: remote.stale,
-        source: remote.source,
-        cached: remote.cached,
-      },
-    },
+    hosts,
     agents: [...local, ...remote.agents],
+    collaboration: {
+      band: collectBandJam(),
+    },
   };
 }
 

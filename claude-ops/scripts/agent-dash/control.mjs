@@ -1,7 +1,7 @@
 // control.mjs — fleet control actions for agent-dash: attach, steer, revive,
 // kill, archive. Resolves an agent by id from a fresh snapshot, then dispatches
-// the right command for its type + host. Remote actions are prefixed with
-// `ssh -t <fra>`. Read-only on remote except these explicit control calls.
+// the right command for its type + host. Remote actions use the operator's
+// configured SSH host. Read-only on remote except these explicit control calls.
 
 import { spawnSync, execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -12,24 +12,33 @@ import { fileURLToPath } from 'node:url';
 const HOME = homedir();
 const ARCHIVE_LOG = join(HOME, '.claude', 'state', 'agent-archive.jsonl');
 const REMOTE_CACHE = join(HOME, '.claude', 'state', 'agent-dash-remote-cache.json');
-// Remote ssh targets; set AGENT_DASH_FRA_HOSTS (comma-separated host aliases).
-// Empty by default → local-only.
-const FRA_HOSTS = (process.env.AGENT_DASH_FRA_HOSTS || '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+function configuredRemoteHosts() {
+  const envHosts = (process.env.AGENT_DASH_REMOTE_HOSTS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (envHosts.length) return envHosts;
+  const dataDir = process.env.CLAUDE_PLUGIN_DATA_DIR || process.env.OPS_DATA_DIR || join(HOME, '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+  try {
+    const prefs = JSON.parse(readFileSync(join(dataDir, 'preferences.json'), 'utf8'));
+    return Array.isArray(prefs?.agent_dash?.remote_hosts)
+      ? prefs.agent_dash.remote_hosts.filter((h) => typeof h === 'string' && h.trim())
+      : [];
+  } catch {
+    return [];
+  }
+}
 
-function fraSshHost() {
+function remoteSshHost() {
   try {
     const host = JSON.parse(readFileSync(REMOTE_CACHE, 'utf8'))?.meta?.source?.trim();
     if (host) return host;
   } catch {
-    /* use default */
+    /* use configured hosts */
   }
-  if (FRA_HOSTS.length === 0) {
-    throw new Error('no FRA ssh host configured (set AGENT_DASH_FRA_HOSTS)');
-  }
-  return FRA_HOSTS[0];
+  const hosts = configuredRemoteHosts();
+  if (hosts.length === 0) throw new Error('no configured remote ssh host');
+  return hosts[0];
 }
 function resolveOpsBg() {
   if (process.env.OPS_BG_BIN) return process.env.OPS_BG_BIN;
@@ -94,11 +103,11 @@ function runCapture(cmd, args, opts = {}) {
   }
 }
 
-// Build the [cmd, args] for a remote action: ssh [-t] <fra> "<shell>"
+// Build the [cmd, args] for a remote action: ssh [-t] <configured-host> "<shell>"
 function remote(shell, tty = false) {
   const flags = ['-o', 'ConnectTimeout=8', '-o', 'BatchMode=yes'];
   if (tty) flags.unshift('-t');
-  return ['ssh', [...flags, fraSshHost(), shell]];
+  return ['ssh', [...flags, remoteSshHost(), shell]];
 }
 
 // --- ATTACH ----------------------------------------------------------------
@@ -106,7 +115,7 @@ function remote(shell, tty = false) {
 // agy → resume conversation; procs → no attach surface.
 export function attach(a) {
   if (a.type === 'claude') {
-    if (a.host === 'fra') {
+    if (a.host !== 'mac') {
       const [c, args] = remote(`CLAUDE_NO_TMUX=1 claude attach ${a.id}`, true);
       return runForeground(c, args);
     }
@@ -114,7 +123,7 @@ export function attach(a) {
   }
   if (a.type === 'agy') {
     const sub = `agy --conversation ${a.sessionId}`;
-    if (a.host === 'fra') {
+    if (a.host !== 'mac') {
       const [c, args] = remote(sub, true);
       return runForeground(c, args);
     }
@@ -132,9 +141,9 @@ export function attach(a) {
 export function steer(a, message) {
   if (!message || !message.trim()) return { ok: false, msg: 'empty message' };
   if (a.type === 'claude') {
-    if (a.host === 'fra') {
+    if (a.host !== 'mac') {
       const r = runCapture(...remote(`ops-bg send ${a.id} ${shq(message)}`));
-      return { ok: r.ok, msg: r.ok ? `steered ${a.id} on fra` : r.err };
+      return { ok: r.ok, msg: r.ok ? `steered ${a.id} on remote host` : r.err };
     }
     const r = runCapture(OPS_BG, ['send', a.id, message]);
     return { ok: r.ok, msg: r.ok ? `steered ${a.id}` : r.err || r.out };
@@ -150,7 +159,7 @@ export function steer(a, message) {
 // `claude -r <sessionId>` if attach fails. agy → resume by conversation UUID.
 export function revive(a) {
   if (a.type === 'claude') {
-    if (a.host === 'fra') {
+    if (a.host !== 'mac') {
       const [c, args] = remote(
         `CLAUDE_NO_TMUX=1 claude attach ${a.id} || CLAUDE_NO_TMUX=1 claude -r ${a.sessionId}`,
         true,
@@ -162,7 +171,7 @@ export function revive(a) {
     return code;
   }
   if (a.type === 'agy') {
-    if (a.host === 'fra') {
+    if (a.host !== 'mac') {
       const [c, args] = remote(`agy --conversation ${a.sessionId}`, true);
       return runForeground(c, args);
     }
@@ -175,18 +184,18 @@ export function revive(a) {
 // --- KILL ------------------------------------------------------------------
 export function kill(a) {
   if (a.type === 'claude') {
-    if (a.host === 'fra') {
+    if (a.host !== 'mac') {
       const r = runCapture(...remote(`CLAUDE_NO_TMUX=1 claude stop ${a.id}`));
-      return { ok: r.ok, msg: r.ok ? `stopped ${a.id} on fra` : r.err };
+      return { ok: r.ok, msg: r.ok ? `stopped ${a.id} on remote host` : r.err };
     }
     const r = runCapture(claudeBin(), ['stop', a.id]);
     return { ok: r.ok, msg: r.ok ? `stopped ${a.id}` : r.err || r.out };
   }
   // procs / agy: kill by pid
   if (a.pid) {
-    if (a.host === 'fra') {
+    if (a.host !== 'mac') {
       const r = runCapture(...remote(`kill ${a.pid}`));
-      return { ok: r.ok, msg: r.ok ? `killed pid ${a.pid} on fra` : r.err };
+      return { ok: r.ok, msg: r.ok ? `killed pid ${a.pid} on remote host` : r.err };
     }
     try {
       process.kill(a.pid);
@@ -203,10 +212,10 @@ export function kill(a) {
 export function archive(a) {
   let res;
   if (a.type === 'claude') {
-    if (a.host === 'fra') {
+    if (a.host !== 'mac') {
       res = (() => {
         const r = runCapture(...remote(`CLAUDE_NO_TMUX=1 claude rm ${a.id}`));
-        return { ok: r.ok, msg: r.ok ? `rm ${a.id} on fra` : r.err };
+        return { ok: r.ok, msg: r.ok ? `removed ${a.id} on remote host` : r.err };
       })();
     } else {
       const r = runCapture(claudeBin(), ['rm', a.id]);
