@@ -30,7 +30,9 @@ fi
 # exact relationship. Kept as one shared helper so regression checks exercise
 # the exact classifier used by the live probe.
 classify_process_state_samples() {
-  awk '
+  # The fixture CLI keeps its macOS default; live probes pass their platform's
+  # blocked state explicitly (Darwin U, Linux/WSL D).
+  awk -v blocked_state="${4:-U}" '
     FNR == 1 { sample++ }
     {
       pid=$1; state=$2
@@ -40,7 +42,7 @@ classify_process_state_samples() {
         latest_ppid[pid]=$3
         latest_comm[pid]=$4
       }
-      if (state ~ /^U/) blocked[pid]++
+      if (substr(state, 1, 1) == blocked_state) blocked[pid]++
     }
     END {
       if (sample != 3) {
@@ -333,6 +335,7 @@ probe_cpu_hogs() {
 probe_runtime() {
   local out="$1"
   local hogs_file="$out.long_hogs"
+  local states_tmpdir="${TMPDIR:-/tmp}"
   : > "$hogs_file"
   {
     local cpu_user="" cpu_sys="" cpu_idle="" load="" process_counts="0 0 0 0" tcp_counts="0 0"
@@ -346,9 +349,9 @@ probe_runtime() {
       # A single ps snapshot routinely catches short filesystem waits as U.
       # Report a PID as stuck only when it remains in U across three samples.
       local states1 states2 states3
-      states1=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
-      states2=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
-      states3=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
+      states1=$(mktemp "${states_tmpdir%/}/ops-speedup-states.XXXXXX")
+      states2=$(mktemp "${states_tmpdir%/}/ops-speedup-states.XXXXXX")
+      states3=$(mktemp "${states_tmpdir%/}/ops-speedup-states.XXXXXX")
       ps -Ao pid=,stat=,ppid=,comm= 2>/dev/null >"$states1"; sleep 1
       ps -Ao pid=,stat=,ppid=,comm= 2>/dev/null >"$states2"; sleep 1
       ps -Ao pid=,stat=,ppid=,comm= 2>/dev/null >"$states3"
@@ -399,13 +402,13 @@ probe_runtime() {
       # remains in D across three samples, reusing the shared classifier so
       # regression checks exercise the same code path on both platforms.
       local states1 states2 states3
-      states1=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
-      states2=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
-      states3=$(mktemp "${TMPDIR%/}/ops-speedup-states.XXXXXX")
+      states1=$(mktemp "${states_tmpdir%/}/ops-speedup-states.XXXXXX")
+      states2=$(mktemp "${states_tmpdir%/}/ops-speedup-states.XXXXXX")
+      states3=$(mktemp "${states_tmpdir%/}/ops-speedup-states.XXXXXX")
       ps -Ao pid=,stat=,ppid=,comm= 2>/dev/null >"$states1"; sleep 1
       ps -Ao pid=,stat=,ppid=,comm= 2>/dev/null >"$states2"; sleep 1
       ps -Ao pid=,stat=,ppid=,comm= 2>/dev/null >"$states3"
-      process_counts=$(classify_process_state_samples "$states1" "$states2" "$states3")
+      process_counts=$(classify_process_state_samples "$states1" "$states2" "$states3" D)
       rm -f "$states1" "$states2" "$states3"
       if command -v ss >/dev/null 2>&1; then
         tcp_counts=$(ss -tan 2>/dev/null | awk '$1=="CLOSE-WAIT"{cw++} $1=="TIME-WAIT"{tw++} END{printf "%d %d",cw+0,tw+0}')
