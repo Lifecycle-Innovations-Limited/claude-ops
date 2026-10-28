@@ -26,28 +26,7 @@ const STATE_DIR = join(HOME, '.claude', 'state');
 const REMOTE_CACHE = join(STATE_DIR, 'agent-dash-remote-cache.json');
 const REMOTE_TTL_MS = 30 * 1000;
 
-function preferenceHosts() {
-  const dataDir =
-    process.env.CLAUDE_PLUGIN_DATA_DIR ||
-    process.env.OPS_DATA_DIR ||
-    join(HOME, '.claude', 'plugins', 'data', 'ops-ops-marketplace');
-  try {
-    const prefs = JSON.parse(readFileSync(join(dataDir, 'preferences.json'), 'utf8'));
-    const hosts = prefs?.agent_dash?.remote_hosts;
-    return Array.isArray(hosts) ? hosts.filter((h) => typeof h === 'string' && h.trim()) : [];
-  } catch {
-    return [];
-  }
-}
-
-// Remote ssh targets to scan, tried in order. Preferences are the durable source;
-// env is an explicit per-run override for operators and tests. Empty means local-only.
-const REMOTE_HOSTS = (process.env.AGENT_DASH_REMOTE_HOSTS || '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean)
-  .concat(preferenceHosts())
-  .filter((host, index, all) => all.indexOf(host) === index);
+import { configuredRemoteHosts, shellQuote } from './remote-hosts.mjs';
 
 function readCache() {
   try {
@@ -82,16 +61,29 @@ function readOnlyCommand(command, args = [], timeout = 5000) {
   }
 }
 
+// Band/Jam probes are read-only but slow to answer when the daemon is wedged.
+// Five sequential 7s calls would block the caller for up to 35s, so each probe is
+// capped at 1.5s and the whole layer is cached for a short window. Subcommand paths
+// (attach/steer/kill) and local-only collection never pay this cost at all.
+const BAND_TTL_MS = 30 * 1000;
+const BAND_PROBE_TIMEOUT_MS = 1500;
+let bandCache = { ts: 0, value: null };
+
 function collectBandJam() {
-  const band = readOnlyCommand('band', ['preflight'], 7000);
-  const peers = readOnlyCommand('band', ['peers'], 7000);
-  const status = readOnlyCommand('band', ['status'], 7000);
-  const activity = readOnlyCommand('band', ['activity'], 7000);
-  const work = readOnlyCommand('band', ['work'], 7000);
+  const fresh = bandCache.value && nowTs() - bandCache.ts < BAND_TTL_MS;
+  if (fresh) return bandCache.value;
+
+  const band = readOnlyCommand('band', ['preflight'], BAND_PROBE_TIMEOUT_MS);
+  const peers = readOnlyCommand('band', ['peers'], BAND_PROBE_TIMEOUT_MS);
+  const status = readOnlyCommand('band', ['status'], BAND_PROBE_TIMEOUT_MS);
+  const activity = readOnlyCommand('band', ['activity'], BAND_PROBE_TIMEOUT_MS);
+  const work = readOnlyCommand('band', ['work'], BAND_PROBE_TIMEOUT_MS);
   const available = Boolean(band || peers || status || activity || work);
-  return {
+  const value = {
     available,
     source: available ? 'band-cli' : 'unavailable',
+    cached: true,
+    ts: nowTs(),
     preflight: band || null,
     peers: peers || null,
     status: status || null,
@@ -99,6 +91,8 @@ function collectBandJam() {
     work: work || null,
     readOnly: true,
   };
+  bandCache = { ts: nowTs(), value };
+  return value;
 }
 
 // --- local -----------------------------------------------------------------
@@ -124,7 +118,7 @@ function probeRemoteHost(sshHost, probeSrc) {
   // Ship the probe over stdin, run it remotely, and label records with the
   // configured ssh alias. One round-trip, hard timeout, read-only on the host.
   const remoteCmd =
-    `cat > /tmp/agent-dash-probe.mjs && AGENT_DASH_HOST=${JSON.stringify(sshHost)} ` +
+    `cat > /tmp/agent-dash-probe.mjs && AGENT_DASH_HOST=${shellQuote(sshHost)} ` +
     'node /tmp/agent-dash-probe.mjs; rm -f /tmp/agent-dash-probe.mjs';
   const out = execFileSync(
     'ssh',
@@ -136,14 +130,32 @@ function probeRemoteHost(sshHost, probeSrc) {
   return arr;
 }
 
+// A host served from cache is not live, and a host we could not reach is not live either.
+// The per-host states are stored without those flags, so they are applied here rather
+// than being reported as live by the renderer.
+function withCacheFlags(hosts, { cached = false, stale = false } = {}) {
+  const out = {};
+  for (const [host, info] of Object.entries(hosts || {})) {
+    out[host] = { ...info, cached: cached || Boolean(info.cached), stale: stale || Boolean(info.stale) };
+  }
+  return out;
+}
+
 export function collectRemote({ force = false } = {}) {
+  const REMOTE_HOSTS = configuredRemoteHosts();
   // No remote configured is not the same as a remote that failed to answer.
   // Report it as its own state so the dashboard never prints a confident 0.
   if (REMOTE_HOSTS.length === 0) {
     return { agents: [], stale: false, source: 'not-configured', cached: false, known: true, hosts: {} };
   }
 
-  const cache = readCache();
+  const storedCache = readCache();
+  // A snapshot from another configuration cannot supply agents for this fleet.
+  const cache =
+    storedCache &&
+    JSON.stringify(Object.keys(storedCache.meta?.hosts || {}).sort()) === JSON.stringify([...REMOTE_HOSTS].sort())
+      ? storedCache
+      : null;
   if (!force && cache && nowTs() - cache.ts < REMOTE_TTL_MS) {
     return {
       agents: cache.agents,
@@ -151,7 +163,7 @@ export function collectRemote({ force = false } = {}) {
       source: cache.meta?.source || 'cache',
       cached: true,
       known: true,
-      hosts: cache.meta?.hosts || {},
+      hosts: withCacheFlags(cache.meta?.hosts, { cached: true }),
     };
   }
 
@@ -165,20 +177,35 @@ export function collectRemote({ force = false } = {}) {
       source: 'no-probe',
       cached: !!cache,
       known: !!cache,
-      hosts: cache?.meta?.hosts || {},
+      hosts: withCacheFlags(cache?.meta?.hosts, { cached: true, stale: true }),
     };
   }
 
   const hostStates = {};
+  const allAgents = [];
+  let anyLive = false;
   for (const host of REMOTE_HOSTS) {
     try {
       const agents = probeRemoteHost(host, probeSrc);
       hostStates[host] = { count: agents.length, known: true, stale: false, source: host, cached: false };
-      writeCache(agents, { source: host, hosts: hostStates });
-      return { agents, stale: false, source: host, cached: false, known: true, hosts: hostStates };
+      allAgents.push(...agents);
+      anyLive = true;
     } catch {
       hostStates[host] = { count: null, known: false, stale: true, source: 'unreachable', cached: false };
     }
+  }
+
+  // Every configured host is probed, so a host that answers never hides the ones behind it.
+  if (anyLive) {
+    writeCache(allAgents, { source: REMOTE_HOSTS.join(','), hosts: hostStates });
+    return {
+      agents: allAgents,
+      stale: false,
+      source: REMOTE_HOSTS.join(','),
+      cached: false,
+      known: true,
+      hosts: hostStates,
+    };
   }
 
   if (cache) {
@@ -188,7 +215,7 @@ export function collectRemote({ force = false } = {}) {
       source: cache.meta?.source || 'cache',
       cached: true,
       known: true,
-      hosts: cache.meta?.hosts || hostStates,
+      hosts: withCacheFlags(cache.meta?.hosts || hostStates, { cached: true, stale: true }),
     };
   }
   return { agents: [], stale: true, source: 'unreachable', cached: false, known: false, hosts: hostStates };
@@ -196,7 +223,7 @@ export function collectRemote({ force = false } = {}) {
 
 // --- unified ---------------------------------------------------------------
 
-export function collect({ force = false, localOnly = false } = {}) {
+export function collect({ force = false, localOnly = false, skipCollaboration = false } = {}) {
   const local = collectLocal();
   let remote = { agents: [], stale: false, source: 'skipped', cached: false, known: true, hosts: {} };
   if (!localOnly) remote = collectRemote({ force });
@@ -209,7 +236,10 @@ export function collect({ force = false, localOnly = false } = {}) {
     hosts,
     agents: [...local, ...remote.agents],
     collaboration: {
-      band: collectBandJam(),
+      band:
+        localOnly || skipCollaboration
+          ? { available: false, source: 'skipped', cached: true, readOnly: true }
+          : collectBandJam(),
     },
   };
 }
