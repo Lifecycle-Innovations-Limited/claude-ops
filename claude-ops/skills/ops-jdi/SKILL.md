@@ -1,7 +1,7 @@
 ---
 name: ops-jdi
 description: "OPS on-demand: This skill should be used when the user asks to \"just do it\", \"install jdi\", \"keep going until delivered\", or…"
-argument-hint: '[status|install|update|uninstall|test]'
+argument-hint: '[status|install|update|uninstall|rollback BACKUP|test]'
 allowed-tools:
   - Bash
   - Read
@@ -33,15 +33,19 @@ Full contract, state machine and known limitations: `plugin/README.md`.
 | Arg | Action |
 | --- | --- |
 | `status` (default) | `claude plugin list` entry for `just-do-it@local-just-do-it` |
-| `install` / `update` | `bash ${CLAUDE_PLUGIN_ROOT}/skills/ops-jdi/install.sh install` (rsync into a local marketplace, then `claude plugin install`) |
-| `uninstall` | `bash ${CLAUDE_PLUGIN_ROOT}/skills/ops-jdi/install.sh uninstall` (full rollback) |
+| `install` | `bash ${CLAUDE_PLUGIN_ROOT}/skills/ops-jdi/install.sh install` (copy owned files into a local marketplace, register it, then install the plugin at user scope; refuses an existing installation) |
+| `update` | `bash ${CLAUDE_PLUGIN_ROOT}/skills/ops-jdi/install.sh update` (requires an owned, registered user installation; back up source, copy managed files, then update via the CLI; preserve unknown files and runtime) |
+| `uninstall` | `bash ${CLAUDE_PLUGIN_ROOT}/skills/ops-jdi/install.sh uninstall` (remove plugin and marketplace registrations; retain source, backups and runtime) |
+| `rollback BACKUP` | `bash ${CLAUDE_PLUGIN_ROOT}/skills/ops-jdi/install.sh rollback "BACKUP"` (restore managed source from a matching printed backup and update the installed plugin; refuse source conflicts and preserve current runtime) |
 | `test` | `cd ${CLAUDE_PLUGIN_ROOT}/skills/ops-jdi/plugin && python3 -I -m unittest discover -s . -p 'test*.py'` |
+
+Uninstall is not a full rollback: retained files and runtime remain. Rollback restores the previous managed source of an existing installation, not a complete historical filesystem or runtime snapshot. A first-install backup has no previous source tree and cannot be used with `rollback`.
 
 `maintain` and `audit` are slash commands of the installed plugin (`/just-do-it maintain`, `/just-do-it audit`); tell the user to run them in their own session.
 
 ## Rules
 
-1. Ask before `install`/`update`/`uninstall`: they change the user's installed plugins. Updates apply at the next session start or `/reload-plugins`.
+1. Ask before `install`/`update`/`uninstall`/`rollback`: they change the user's installed plugins. Updates apply at the next session start or `/reload-plugins`.
 2. Never run `plugin/smoke.py`: it is a paid live test. Only with an explicit budget the user names.
 3. Never edit `plugin/` and the installed copy in parallel; update the repo copy, then run `install.sh update`.
 4. Never weaken an acceptance gate or touch security policy to get green.
