@@ -31,7 +31,7 @@ def main():
             f'Use only the scratch directory {tmp}. Use only Bash, no other tools. Never include a revision field in any stdin JSON: every tool call bumps the revision, so it is always stale. '
             f'Step 1: run `python3 -I {bridge} status --session {sid}` and read the generation. '
             f'Step 2: run `python3 -I {bridge} contract --session {sid}` with stdin '
-            '{"generation":<generation>,"issue":"JDI-1",'
+            '{"generation":<generation>,"issue":"TEAM-1",'
             '"outcomes":[{"id":"smoke","owner":"session","dod":"print JDI_SECOND_PASS and deliver it"}]}. '
             'Then reply with exactly: JDI_FIRST_PASS and do nothing else this turn (a deliberately premature stop). '
             'Step 3, only after the native Stop hook continues you: run one harmless Bash command `echo JDI_SECOND_PASS`. '

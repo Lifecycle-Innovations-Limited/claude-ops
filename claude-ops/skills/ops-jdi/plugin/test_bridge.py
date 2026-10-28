@@ -20,7 +20,7 @@ class BridgeTests(unittest.TestCase):
         return b.event(self.s, dict(hook_event_name='UserPromptSubmit', prompt=text))
 
     def contract(self):
-        b.control(self.s, 'contract', dict(generation=self.s['generation'], issue='JDI-1',
+        b.control(self.s, 'contract', dict(generation=self.s['generation'], issue='TEAM-1',
             outcomes=[dict(id='result', dod='Required actual result', owner='session')]))
 
     def tool(self, name='Bash', response=None, tid='tool-1', inp=None, failure=False):
@@ -97,7 +97,7 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn('accepted', self.s['phase'])
 
     def test_delivery_must_reference_every_due_outcome(self):
-        b.control(self.s, 'contract', dict(generation=self.s['generation'], issue='JDI-1',
+        b.control(self.s, 'contract', dict(generation=self.s['generation'], issue='TEAM-1',
             outcomes=[dict(id='a', dod='A', owner='session'), dict(id='b', dod='B', owner='session')]))
         self.tool()
         for target in ('a', 'b'):
@@ -191,7 +191,7 @@ class BridgeTests(unittest.TestCase):
             path = root / 's.json'
             old = json.loads(path.read_text())
             del old['deliveries']
-            old['outcomes']['x'] = dict(dod='d', owner='o', issue='PERS-1', generation=0, dependencies=[], evidence=[], wait=None)
+            old['outcomes']['x'] = dict(dod='d', owner='o', issue='TEAM-1', generation=0, dependencies=[], evidence=[], wait=None)
             path.write_text(json.dumps(old))
             with b.store('s', root) as state:
                 self.assertEqual(state['deliveries'], {})

@@ -1,4 +1,4 @@
-"""JDI-1 free evidence that a Stop costs no model call.
+"""TEAM-1 free evidence that a Stop costs no model call.
 
 This proves the Stop hook is a local script: it imports no network, model or process-spawning module, and it
 runs in milliseconds. It is NOT a billed measurement; nothing here talks to a provider or reads an invoice.

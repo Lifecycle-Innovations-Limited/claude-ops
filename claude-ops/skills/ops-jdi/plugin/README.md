@@ -1,6 +1,6 @@
 # Just Do It
 
-Local hybrid plugin for JDI-1. Native command hooks maintain an atomic session cache and gate explicit unfinished work. The module displays that same cache, provides pause/resume and an on-demand semantic audit. It does not intercept `classic.Stop`, inject a large prompt, start timers, or run recursive Claude subprocesses.
+Local hybrid plugin for TEAM-1. Native command hooks maintain an atomic session cache and gate explicit unfinished work. The module displays that same cache, provides pause/resume and an on-demand semantic audit. It does not intercept `classic.Stop`, inject a large prompt, start timers, or run recursive Claude subprocesses.
 
 ## Cost model: no model calls except an explicit audit
 
@@ -75,7 +75,7 @@ python3 -I <modroot>/hooks/bridge.py evidence --session <session-id>
 python3 -I <modroot>/hooks/bridge.py deliver --session <session-id>
 ```
 
-Contract stdin: `{"generation":1,"issue":"JDI-1","outcomes":[{"id":"result","owner":"session","dod":"Actual required result","dependencies":[]}]}`. Contracts preserve other open outcomes; a changed user prompt invalidates old evidence and marks old items needsReconciliation, never silently removes old work. Deterministic continuation ignores these suspended items until an explicit contract redeclares an outcome or TaskUpdate reactivates a task. There is no automatic scope retirement operation: reconcile with the user before abandoning outcomes.
+Contract stdin: `{"generation":1,"issue":"TEAM-1","outcomes":[{"id":"result","owner":"session","dod":"Actual required result","dependencies":[]}]}`. Contracts preserve other open outcomes; a changed user prompt invalidates old evidence and marks old items needsReconciliation, never silently removes old work. Deterministic continuation ignores these suspended items until an explicit contract redeclares an outcome or TaskUpdate reactivates a task. There is no automatic scope retirement operation: reconcile with the user before abandoning outcomes.
 
 Evidence stdin, action `evidence`: `{"generation":1,"collection":"outcomes","id":"result","receipt":"actual-tool-use-id","pointer":{"type":"transcript","tool":"Bash","tool_use_id":"actual-tool-use-id","outputHash":"recorded receipt outputHash"},"inspection":"What the actual output establishes"}`. This references exactly the recorded successful tool output. Alternatively `pointer: {"type":"file","path":"absolute existing owned file","sha256":"actual SHA256"}`: this requires a successful current-generation Read receipt for that exact path and hash. Changed files become pending again. Collections: outcomes/tasks/incidents. Cache stores hashes, output byte count and Read path/hash only. Never put secrets in pointers. Metadata receipts remain rejected. A successful Bash hello is only an index to hello, not proof of an arbitrary outcome. Dependency checks are transitive; missing prerequisites and cycles remain pending. Hashes prove byte identity only.
 
@@ -91,7 +91,7 @@ Maintenance prescription for the owning agent: inspect actual failure and source
 
 Run `python3 -I <modroot>/repair_fixture.py` offline. It reproduces a JSON parse failure in a new temporary fixture, backs up original bytes, repairs and validates, repeats idempotently, rejects a concurrent-edit rollback, then restores and verifies the original hash. This proves the local fixture cycle only.
 
-## Maintain: self-maintenance of the Claude Code setup (JDI-1)
+## Maintain: self-maintenance of the Claude Code setup (TEAM-1)
 
 `/just-do-it maintain` calls bridge action `diagnose-config`. It makes no model call and inspects **only named files**, no HOME sweep:
 

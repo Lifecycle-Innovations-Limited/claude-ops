@@ -1,4 +1,4 @@
-"""JDI-1 regressions: real bridge events, no model or network."""
+"""TEAM-1 regressions: real bridge events, no model or network."""
 import importlib.util
 import hashlib
 import json
@@ -27,7 +27,7 @@ class Repairs(unittest.TestCase):
                             tool_use_id=key+str(len(self.s['seen'])), tool_input=dict(taskId=key, status=status, addBlockedBy=list(deps)), tool_response={}))
 
     def contract(self):
-        self.control('contract', issue='JDI-1', outcomes=[dict(id='result', dod='Written result', owner='session')])
+        self.control('contract', issue='TEAM-1', outcomes=[dict(id='result', dod='Written result', owner='session')])
 
     def stop(self, message='Incomplete: need evidence', **extra):
         return b.event(self.s, dict(hook_event_name='Stop', last_assistant_message=message, **extra))
@@ -53,7 +53,7 @@ class Repairs(unittest.TestCase):
         self.assertIsNone(self.s['tasks']['a']['wait'])
 
     def test_outcome_wait_transitive_release_and_independent(self):
-        self.control('contract', issue='JDI-1', outcomes=[dict(id=k, dod=k, owner='session', dependencies=d) for k,d in [('a',[]),('b',['a']),('c',['b'])]])
+        self.control('contract', issue='TEAM-1', outcomes=[dict(id=k, dod=k, owner='session', dependencies=d) for k,d in [('a',[]),('b',['a']),('c',['b'])]])
         self.control('wait', collection='outcomes', id='a', kind='prerequisite', pointer='condition:1')
         self.assertEqual(self.stop(), {})
         self.task('independent')
@@ -62,7 +62,7 @@ class Repairs(unittest.TestCase):
         self.assertIn('outcome a', self.stop()['reason'])
 
     def test_colon_ids_still_honor_waits(self):
-        self.control('contract', issue='JDI-1', outcomes=[dict(id='release:prod', dod='ship', owner='session')])
+        self.control('contract', issue='TEAM-1', outcomes=[dict(id='release:prod', dod='ship', owner='session')])
         self.control('wait', collection='outcomes', id='release:prod', kind='approval', pointer='request:2')
         self.assertEqual(self.stop(), {})
         self.task('deploy:eu')
@@ -139,7 +139,7 @@ class Repairs(unittest.TestCase):
                     self.control('evidence', id='result', receipt='r', pointer=dict(type='file', path=path, sha256=sha), inspection='wrong')
 
     def test_transitive_evidence_dependencies_stay_pending(self):
-        self.control('contract', issue='JDI-1', outcomes=[dict(id=k, dod=k, owner='session', dependencies=d) for k,d in [('a',[]),('b',['a']),('c',['b'])]])
+        self.control('contract', issue='TEAM-1', outcomes=[dict(id=k, dod=k, owner='session', dependencies=d) for k,d in [('a',[]),('b',['a']),('c',['b'])]])
         pointer = self.receipt()
         for key in ('b','c'):
             self.control('evidence', id=key, receipt='r', pointer=pointer, inspection='index only')

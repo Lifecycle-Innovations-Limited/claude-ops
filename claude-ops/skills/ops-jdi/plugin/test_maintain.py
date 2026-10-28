@@ -1,4 +1,4 @@
-"""JDI-1 maintain: diagnose-config, apply-fix and rollback-fix. Temp fixtures only, never the real HOME or runtime."""
+"""TEAM-1 maintain: diagnose-config, apply-fix and rollback-fix. Temp fixtures only, never the real HOME or runtime."""
 import builtins
 import hashlib
 import importlib.util
@@ -450,7 +450,7 @@ class ApplyFixTests(unittest.TestCase):
             path = root / 's.json'
             old = json.loads(path.read_text())
             del old['fixes']
-            old['outcomes']['x'] = dict(dod='d', owner='o', issue='PERS-1', generation=0, dependencies=[], evidence=[], wait=None)
+            old['outcomes']['x'] = dict(dod='d', owner='o', issue='TEAM-1', generation=0, dependencies=[], evidence=[], wait=None)
             path.write_text(json.dumps(old))
             with b.store('s', root) as state:
                 self.assertEqual(state['fixes'], [])
