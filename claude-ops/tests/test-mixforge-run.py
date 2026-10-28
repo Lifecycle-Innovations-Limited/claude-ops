@@ -51,6 +51,11 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn('MIXFORGE_SOURCE', result.stderr)
 
+    def test_bundled_engine_is_default_and_has_judge(self):
+        result = self.run_adapter({}, 'judge', '--help')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--approve-audio-upload', result.stdout)
+
     def test_runtime_model_configuration_is_not_rewritten(self):
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / 'engine'

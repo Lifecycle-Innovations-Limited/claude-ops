@@ -30,7 +30,7 @@ Configuration is outside the plugin, through the current process environment:
 
 - `MIXFORGE_EXECUTABLE`: the existing executable path/name. This takes precedence.
 - Otherwise `MIXFORGE_SOURCE`: the directory containing `mixforge/__main__.py`, with optional `MIXFORGE_PYTHON` selecting its existing interpreter.
-- Otherwise the adapter resolves `mixforge` on PATH.
+- Otherwise the engine bundled with this skill (`skills/ops-mix/engine`) runs, with `MIXFORGE_PYTHON` selecting an interpreter that has numpy (and ffmpeg on PATH). This is the default and the single engine.
 
 An explicit invalid setting fails; no provider, interpreter or installation fallback. Model configuration and credentials stay in the existing scoped runtime environment. Do not print or request secrets in chat, pin model IDs, or weaken existing routing.
 
