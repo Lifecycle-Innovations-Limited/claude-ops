@@ -38,7 +38,9 @@ LOCK_TIMEOUT=60
 
 # run_hook <impl> <threshold> <state_dir> <out_file> [tool] [agent_id]
 run_hook() {
-  local agent=""
+  local agent="" rc=0 diagnostic
+  diagnostic="$TMP/diagnostics/$(basename "$(dirname "$4")")-$(basename "$4")-${5:-Bash}-${BASHPID}"
+  mkdir -p "$TMP/diagnostics"
   [ -n "${6:-}" ] && agent=",\"agent_id\":\"$6\""
   printf '{"session_id":"%s","tool_name":"%s"%s}' "$SID" "${5:-Bash}" "$agent" |
     HOME="$TMP/home" \
@@ -48,7 +50,9 @@ run_hook() {
       CLAUDE_PLUGIN_OPTION_TASK_REMINDER_THRESHOLD="$2" \
       OPS_TASK_REMINDER_LOCK_IMPL="$1" \
       OPS_TASK_REMINDER_LOCK_TIMEOUT="$LOCK_TIMEOUT" \
-      bash "$SCRIPT" >"$4" 2>/dev/null
+      bash "$SCRIPT" >"$4" 2>"$diagnostic.stderr" || rc=$?
+  printf '%s\n' "$rc" >"$diagnostic.exit"
+  return "$rc"
 }
 
 impls="mkdir"
@@ -224,6 +228,18 @@ if printf '%s' "$entry" | jq -e '.hooks[0].async == true and .hooks[0].timeout >
 else
   fail "wiring: hook must be async with timeout > 2 (got $(printf '%s' "$entry" | jq -c '.hooks[0] | {async, timeout}'))"
 fi
+
+for result in "$TMP/diagnostics/"*.exit; do
+  [ -f "$result" ] || continue
+  rc="$(cat "$result")"
+  if [ "$rc" != 0 ]; then
+    fail "worker $(basename "${result%.exit}") exited $rc"
+  fi
+  if [ "$rc" != 0 ] || [ -s "${result%.exit}.stderr" ]; then
+    printf '  worker diagnostics: %s (exit %s)\n' "$(basename "${result%.exit}")" "$rc"
+    cat "${result%.exit}.stderr"
+  fi
+done
 
 echo "test-task-reminder-concurrency.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

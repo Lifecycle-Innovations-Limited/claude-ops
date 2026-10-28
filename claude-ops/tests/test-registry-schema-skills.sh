@@ -31,6 +31,16 @@ extract_jq() {
   grep -m1 -o "jq -r '[^']*'" "$1" | sed "s/^jq -r '//; s/'$//"
 }
 
+JOBTMP="$(mktemp -d "${TMPDIR:-/tmp}/registry-schema-test.XXXXXX")"
+trap 'rm -rf "$JOBTMP"' EXIT
+
+query_registry() {
+  # Finish jq before limiting presentation. A downstream head must not turn a
+  # valid large registry into SIGPIPE under pipefail; genuine jq errors still fail.
+  jq -r "$1" "$2" > "$JOBTMP/query.out" 2> "$JOBTMP/query.err" || return "$?"
+  head -50 "$JOBTMP/query.out"
+}
+
 check_skill() {
   local skill="$1" file="$PLUGIN_ROOT/skills/$1/SKILL.md"
   local filter; filter="$(extract_jq "$file")"
@@ -47,7 +57,7 @@ check_skill() {
     ok "$skill: no example-schema fields"
   fi
 
-  local out; out="$(jq -r "$filter" "$REGISTRY" 2>&1 | head -50)" || { bad "$skill: jq filter errors: $out"; return; }
+  local out; out="$(query_registry "$filter" "$REGISTRY")" || { bad "$skill: jq filter errors (see query diagnostics)"; return; }
   local n; n="$(printf '%s\n' "$out" | grep -c . || true)"
   [ "$n" -gt 0 ] || { bad "$skill: jq filter returns no rows"; return; }
   if printf '%s\n' "$out" | grep -qE '^null\||\|null\||\|null$|^null$'; then
@@ -57,6 +67,28 @@ check_skill() {
     ok "$skill: $n rows, no null fields"
   fi
 }
+
+# Exercise the same query boundary with enough output to fill a pipe buffer.
+jq -n '{projects: [range(10000) | {name: ("synthetic-" + tostring), path: ("/synthetic/" + tostring), remote_url: "https://example.invalid/repo", has_roadmap: true, status: "active", phase: "1", branch: "main"}]}' > "$JOBTMP/large.json"
+printf '%s\n' '{"projects":42}' > "$JOBTMP/invalid-schema.json"
+for skill in ops-orchestrate ops-next; do
+  filter="$(extract_jq "$PLUGIN_ROOT/skills/$skill/SKILL.md")"
+  if out="$(query_registry "$filter" "$JOBTMP/large.json")" && [[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" == 50 ]]; then
+    ok "$skill: large synthetic registry succeeds with 50 displayed rows"
+  else
+    bad "$skill: large synthetic registry query failed"
+  fi
+  if query_registry "$filter" "$JOBTMP/invalid-schema.json" > /dev/null; then
+    bad "$skill: invalid schema was accepted"
+  else
+    ok "$skill: invalid schema retains nonzero jq status"
+  fi
+done
+if query_registry '.projects[ invalid' "$JOBTMP/large.json" > /dev/null; then
+  bad "invalid query was accepted"
+else
+  ok "invalid query retains nonzero jq status"
+fi
 
 echo "test-registry-schema-skills"
 check_skill ops-orchestrate

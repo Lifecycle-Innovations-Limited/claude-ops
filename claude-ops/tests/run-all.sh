@@ -17,7 +17,9 @@ run_suite() {
   echo "Suite: $name"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-  if bash "$script"; then
+  local runner=bash
+  if [[ "$script" == *.mjs ]]; then runner=node; fi
+  if "$runner" "$script"; then
     echo "[ PASS ] $name"
     total_pass=$((total_pass+1))
   else
@@ -36,12 +38,15 @@ echo ""
 run_suite "$TESTS_DIR/test-skills-lint.sh"
 run_suite "$TESTS_DIR/test-agents-lint.sh"
 run_suite "$TESTS_DIR/test-compact-discovery.sh"
+run_suite "$TESTS_DIR/test-mixforge-run.sh"
 run_suite "$TESTS_DIR/test-bin-scripts.sh"
+run_suite "$TESTS_DIR/test-agent-dash-fleet.mjs"
 run_suite "$TESTS_DIR/test-ops-credentials.sh"
 run_suite "$TESTS_DIR/test-gog-account.sh"
 run_suite "$TESTS_DIR/test-ops-ci.sh"
 run_suite "$TESTS_DIR/test-ops-speedup.sh"
 run_suite "$TESTS_DIR/test-ops-mac-maintenance.sh"
+run_suite "$TESTS_DIR/test-speedup-skill-invocation.sh"
 run_suite "$TESTS_DIR/test-ops-update-stale-clone.sh"
 run_suite "$TESTS_DIR/test-ops-update-downgrade-guard.sh"
 run_suite "$TESTS_DIR/test-skill-update-gate.sh"

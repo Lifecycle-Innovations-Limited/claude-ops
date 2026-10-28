@@ -19,7 +19,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn('commit --no-verify', text)
         self.assertNotIn('worktree remove --force', text)
         self.assertNotIn('branch -D', text)
-        self.assertIn('Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>', text)
+        self.assertIn('Co-Authored-By: Claude Code <noreply@anthropic.com>', text)
+        self.assertNotIn('Co-Authored-By: Claude Opus 5.5', text)
 
     def test_required_skipped_ci_is_rejected(self):
         # Exercise the production jq acceptance predicate, not a duplicate policy.
