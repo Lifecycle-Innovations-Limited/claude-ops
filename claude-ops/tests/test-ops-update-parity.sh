@@ -78,7 +78,11 @@ rc=$?
 [[ $rc -eq 1 ]] && grep -q "grok  *DRIFT" <<<"$out" && ! grep -q "claude  *MATCH" <<<"$out" &&
   pass "--check --host limits the selection and returns the check's exit code (1 = drift)" ||
   fail "--check --host (rc=$rc: $(head -c 400 <<<"$out"))"
-out="$(env -i HOME="$b/home" PATH="/usr/bin:/bin" bash "$BIN" --check 2>&1)"
+# System directories can contain node on Linux. Expose only the command used
+# before the node probe, and invoke bash by its resolved absolute path.
+mkdir -p "$b/no-node"
+ln -s "$(command -v dirname)" "$b/no-node/dirname"
+out="$(env -i HOME="$b/home" PATH="$b/no-node" "$(command -v bash)" "$BIN" --check 2>&1)"
 rc=$?
 [[ $rc -eq 5 ]] && grep -q "environment problem" <<<"$out" && pass "--check without node is an environment error (exit 5)" ||
   fail "--check without node (rc=$rc)"
