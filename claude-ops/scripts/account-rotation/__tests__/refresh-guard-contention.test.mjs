@@ -31,9 +31,19 @@ function runWorker(lockDir, key = 'shared-test-key', wallClock = null) {
         : [
             '--input-type=module',
             '-e',
-            `Date.now = () => ${JSON.stringify(wallClock)}; process.argv = ['node', ${JSON.stringify(worker)}, ${JSON.stringify(key)}, ${JSON.stringify(String(now))}]; await import(${JSON.stringify(new URL('./refresh-pacing-worker.mjs', import.meta.url).href)});`,
+            `const [key, pace, wall] = process.argv.slice(1);
+             const clock = Number(wall);
+             if (!/^[a-zA-Z0-9_.-]+$/.test(key) || !Number.isFinite(clock) || !Number.isFinite(Number(pace))) {
+               throw new Error('invalid clock fixture arguments');
+             }
+             Date.now = () => clock;
+             process.argv = ['node', 'fixture-worker', key, pace];
+             await import('./refresh-pacing-worker.mjs');`,
+            key,
+            String(now),
+            String(wallClock),
           ];
-    const child = spawn(process.execPath, args, { env: envFor(lockDir) });
+    const child = spawn(process.execPath, args, { env: envFor(lockDir), cwd: new URL('.', import.meta.url) });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => (stdout += chunk));
