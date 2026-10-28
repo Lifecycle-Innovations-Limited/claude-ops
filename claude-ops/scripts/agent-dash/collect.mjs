@@ -27,7 +27,10 @@ const REMOTE_CACHE = join(STATE_DIR, 'agent-dash-remote-cache.json');
 const REMOTE_TTL_MS = 30 * 1000;
 
 function preferenceHosts() {
-  const dataDir = process.env.CLAUDE_PLUGIN_DATA_DIR || process.env.OPS_DATA_DIR || join(HOME, '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+  const dataDir =
+    process.env.CLAUDE_PLUGIN_DATA_DIR ||
+    process.env.OPS_DATA_DIR ||
+    join(HOME, '.claude', 'plugins', 'data', 'ops-ops-marketplace');
   try {
     const prefs = JSON.parse(readFileSync(join(dataDir, 'preferences.json'), 'utf8'));
     const hosts = prefs?.agent_dash?.remote_hosts;
@@ -142,14 +145,28 @@ export function collectRemote({ force = false } = {}) {
 
   const cache = readCache();
   if (!force && cache && nowTs() - cache.ts < REMOTE_TTL_MS) {
-    return { agents: cache.agents, stale: false, source: cache.meta?.source || 'cache', cached: true, known: true, hosts: cache.meta?.hosts || {} };
+    return {
+      agents: cache.agents,
+      stale: false,
+      source: cache.meta?.source || 'cache',
+      cached: true,
+      known: true,
+      hosts: cache.meta?.hosts || {},
+    };
   }
 
   let probeSrc;
   try {
     probeSrc = readFileSync(PROBE, 'utf8');
   } catch {
-    return { agents: cache?.agents || [], stale: true, source: 'no-probe', cached: !!cache, known: !!cache, hosts: cache?.meta?.hosts || {} };
+    return {
+      agents: cache?.agents || [],
+      stale: true,
+      source: 'no-probe',
+      cached: !!cache,
+      known: !!cache,
+      hosts: cache?.meta?.hosts || {},
+    };
   }
 
   const hostStates = {};
@@ -165,7 +182,14 @@ export function collectRemote({ force = false } = {}) {
   }
 
   if (cache) {
-    return { agents: cache.agents, stale: true, source: cache.meta?.source || 'cache', cached: true, known: true, hosts: cache.meta?.hosts || hostStates };
+    return {
+      agents: cache.agents,
+      stale: true,
+      source: cache.meta?.source || 'cache',
+      cached: true,
+      known: true,
+      hosts: cache.meta?.hosts || hostStates,
+    };
   }
   return { agents: [], stale: true, source: 'unreachable', cached: false, known: false, hosts: hostStates };
 }
@@ -176,7 +200,10 @@ export function collect({ force = false, localOnly = false } = {}) {
   const local = collectLocal();
   let remote = { agents: [], stale: false, source: 'skipped', cached: false, known: true, hosts: {} };
   if (!localOnly) remote = collectRemote({ force });
-  const hosts = { mac: { count: local.length, known: true, stale: false, source: 'local', cached: false }, ...remote.hosts };
+  const hosts = {
+    mac: { count: local.length, known: true, stale: false, source: 'local', cached: false },
+    ...remote.hosts,
+  };
   return {
     ts: nowTs(),
     hosts,

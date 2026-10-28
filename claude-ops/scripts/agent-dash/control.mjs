@@ -18,7 +18,10 @@ function configuredRemoteHosts() {
     .map((s) => s.trim())
     .filter(Boolean);
   if (envHosts.length) return envHosts;
-  const dataDir = process.env.CLAUDE_PLUGIN_DATA_DIR || process.env.OPS_DATA_DIR || join(HOME, '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+  const dataDir =
+    process.env.CLAUDE_PLUGIN_DATA_DIR ||
+    process.env.OPS_DATA_DIR ||
+    join(HOME, '.claude', 'plugins', 'data', 'ops-ops-marketplace');
   try {
     const prefs = JSON.parse(readFileSync(join(dataDir, 'preferences.json'), 'utf8'));
     return Array.isArray(prefs?.agent_dash?.remote_hosts)
