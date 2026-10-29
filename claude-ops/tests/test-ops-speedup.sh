@@ -121,6 +121,65 @@ no_stuck=$(bash "$BIN" --classify-process-states \
   "$tmpdir/states-none-1" "$tmpdir/states-none-2" "$tmpdir/states-none-3")
 assert_eq "one-frame U states never become stuck" "2 1 0 0" "$no_stuck"
 
+# Exercise both runtime branches with synthetic commands only. Extract the
+# shipped functions so these regressions never launch a machine-wide scan.
+python3 -I - "$BIN" "$tmpdir" <<'PY'
+import os, pathlib, re, subprocess, sys
+src = pathlib.Path(sys.argv[1]).read_text()
+root = pathlib.Path(sys.argv[2])
+functions = '\n'.join(re.search(r'^' + name + r'\(\) \{.*?^\}', src, re.M | re.S).group(0)
+                      for name in ('classify_process_state_samples', 'probe_runtime'))
+for platform, blocked, foreign in [('Darwin', 'U', 'D'), ('Linux', 'D', 'U')]:
+    for scenario, expected in [('persistent', 1), ('transient', 0), ('foreign', 0)]:
+        for temp_mode in ('unset', 'empty', 'custom'):
+            tag = f'{platform}-{scenario}-{temp_mode}'
+            output = root / (tag + '.out')
+            count = root / (tag + '.count')
+            harness = root / (tag + '.sh')
+            harness.write_text('set -uo pipefail\n' + functions + r'''
+uname() { printf '%s\n' "$TEST_PLATFORM"; }
+sleep() { :; }
+top() { printf 'CPU usage: 1%% user, 2%% sys, 97%% idle\n'; }
+sysctl() { printf '0 0 0\n'; }
+netstat() { :; }
+ss() { :; }
+ps() {
+  case "$*" in
+    '-Ao pid=,stat=,ppid=,comm=')
+      local n=0
+      [[ ! -f "$TEST_COUNT" ]] || read -r n < "$TEST_COUNT"
+      n=$((n + 1)); printf '%s\n' "$n" > "$TEST_COUNT"
+      local state="$TEST_BLOCKED"
+      [[ "$TEST_SCENARIO" != foreign ]] || state="$TEST_FOREIGN"
+      [[ "$TEST_SCENARIO:$n" != transient:2 ]] || state=S
+      printf '101 %s 1 worker\n202 R 1 worker\n' "$state" ;;
+    '-Ao pid=,etime=,time=,pcpu=,rss=,comm=') : ;;
+    *) return 99 ;;
+  esac
+}
+IS_MACOS=false; IS_LINUX=false; IS_WSL=false
+[[ "$TEST_PLATFORM" != Darwin ]] || IS_MACOS=true
+[[ "$TEST_PLATFORM" != Linux ]] || IS_LINUX=true
+PROTECTED_RE='protected-worker'
+probe_runtime "$TEST_OUTPUT"
+''')
+            env = dict(os.environ, TEST_PLATFORM=platform, TEST_BLOCKED=blocked,
+                       TEST_FOREIGN=foreign, TEST_SCENARIO=scenario,
+                       TEST_COUNT=str(count), TEST_OUTPUT=str(output))
+            env.pop('TMPDIR', None)
+            if temp_mode != 'unset':
+                env['TMPDIR'] = '' if temp_mode == 'empty' else str(root) + '/'
+            result = subprocess.run(['bash', str(harness)], env=env, capture_output=True, text=True)
+            assert result.returncode == 0, (tag, result.stderr)
+            assert 'unbound variable' not in result.stderr, (tag, result.stderr)
+            values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+            assert values['stuck'] == str(expected), (tag, values)
+            assert values['processes'] == '2', (tag, values)
+            assert count.read_text().strip() == '3', tag
+            assert not list(root.glob('ops-speedup-states.*')), tag
+            print('  PASS: synthetic runtime ' + tag)
+PY
+
 # On macOS, also drive the normal --json probe with a ps shim. This proves the
 # public runtime.stuck result uses all three PID/state observations rather than
 # only proving the helper in isolation.
