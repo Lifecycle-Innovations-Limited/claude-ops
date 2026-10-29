@@ -48,12 +48,20 @@ _claude_invoke_find_root() {
 CLAUDE_INVOKE_NO_TG_SETTINGS='{"enabledPlugins":{"telegram@claude-plugins-official":false}}'
 _CLAUDE_INVOKE_SETTINGS_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/headless-settings.py"
 
-_claude_invoke_exec() {
-  env -u ANTHROPIC_API_KEY -u CLAUDE_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN "$@"
-}
+_claude_invoke_exec() (
+  local child rc=0
+  env -u ANTHROPIC_API_KEY -u CLAUDE_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN "$@" <&0 &
+  child=$!
+  trap 'kill -TERM "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; exit 143' TERM
+  trap 'kill -INT "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; exit 130' INT
+  wait "$child" || rc=$?
+  exit "$rc"
+)
 
 claude_invoke() {
-  local settings="$CLAUDE_INVOKE_NO_TG_SETTINGS"
+  local settings="$CLAUDE_INVOKE_NO_TG_SETTINGS" settings_file=""
+  local CLAUDE_SETTINGS_OWNER_PID="${BASHPID:-$$}"
+  export CLAUDE_SETTINGS_OWNER_PID
   local documents=() args=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -66,9 +74,17 @@ claude_invoke() {
     esac
   done
   if [ "${#documents[@]}" -gt 0 ]; then
-    settings="$(python3 -I "$_CLAUDE_INVOKE_SETTINGS_HELPER" "${documents[@]}")" || return $?
+    settings="$(printf '%s\0' "${documents[@]}" | python3 -I "$_CLAUDE_INVOKE_SETTINGS_HELPER")" || return $?
+    settings_file="$settings"
   fi
-  set -- "${args[@]}"
+  # Function subshell owns cleanup without replacing a caller's traps.
+  _claude_invoke_run "$settings" "$settings_file" "${args[@]}"
+}
+
+_claude_invoke_run() (
+  local settings="$1" settings_file="$2"
+  shift 2
+  [ -z "$settings_file" ] || trap 'rm -f -- "$settings_file"' EXIT
   if [ "${CLAUDE_OPS_USE_CREDIT_POOL:-0}" = "1" ]; then
     local repo_root
     repo_root="$(_claude_invoke_find_root)" || repo_root=""
@@ -84,4 +100,4 @@ claude_invoke() {
   else
     _claude_invoke_exec claude --settings "$settings" "$@"
   fi
-}
+)

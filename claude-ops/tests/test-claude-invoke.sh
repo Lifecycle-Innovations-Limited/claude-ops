@@ -33,6 +33,7 @@ if [[ "${CAPTURE_ENV:-0}" = "1" ]]; then
   echo "env api=${ANTHROPIC_API_KEY-unset} claude_api=${CLAUDE_API_KEY-unset} oauth=${CLAUDE_CODE_OAUTH_TOKEN-unset}" >> "$CAPTURE_FILE"
 fi
 echo "claude $*" >> "$CAPTURE_FILE"
+if [[ "$1" == --settings && -f "$2" ]]; then cat "$2" >> "$CAPTURE_FILE"; fi
 exit 0
 SH
   chmod +x "$tmpdir/claude"
@@ -41,6 +42,7 @@ SH
   cat > "$tmpdir/node" <<'SH'
 #!/usr/bin/env bash
 echo "node $*" >> "$CAPTURE_FILE"
+if [[ "$3" == --settings && -f "$4" ]]; then cat "$4" >> "$CAPTURE_FILE"; fi
 exit 0
 SH
   chmod +x "$tmpdir/node"
@@ -195,7 +197,7 @@ done
 node --input-type=module - "$PLUGIN_ROOT" "$settings_file" <<'JS'
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
-import { readFileSync } from 'node:fs';
+import { readFileSync, unlinkSync, statSync } from 'node:fs';
 const [root, file] = process.argv.slice(2);
 const { headlessArgs } = await import(pathToFileURL(`${root}/scripts/account-rotation/claude-p-as.mjs`));
 const original = readFileSync(file, 'utf8');
@@ -203,7 +205,10 @@ const input = JSON.parse(original);
 for (const flags of [['--settings', original], ['--settings', file], [`--settings=${original}`], [`--settings=${file}`]]) {
   const args = headlessArgs(['-p', ...flags, '--model', 'custom-model']);
   assert.equal(args.filter(a => a === '--settings' || a.startsWith('--settings=')).length, 1);
-  assert.deepEqual(JSON.parse(args[1]), {...input, enabledPlugins: {...input.enabledPlugins, 'telegram@claude-plugins-official': false}});
+  assert.deepEqual(JSON.parse(readFileSync(args[1], 'utf8')), {...input, enabledPlugins: {...input.enabledPlugins, 'telegram@claude-plugins-official': false}});
+  assert.equal(statSync(args[1]).mode & 0o777, 0o600);
+  assert.equal(args.join(' ').includes('AUTH_MODE'), false);
+  unlinkSync(args[1]);
   assert.deepEqual(args.slice(2), ['-p', '--model', 'custom-model']);
 }
 assert.equal(readFileSync(file, 'utf8'), original, 'caller file remains unchanged');
@@ -213,6 +218,17 @@ assert.deepEqual(headlessArgs(['--', '--settings', 'literal']).slice(2), ['--', 
 console.log('Account wrapper settings composition: PASS (inline/file/equals, invalid, separator, file unchanged)');
 JS
 
+python3 -I "$PLUGIN_ROOT/tests/test-settings-transaction.py"
+python3 -I "$PLUGIN_ROOT/tests/test-settings-transaction-crash.py"
+node "$PLUGIN_ROOT/tests/test-router-crash-owner.mjs"
+node "$PLUGIN_ROOT/tests/test-settings-os-lock.mjs"
+node "$PLUGIN_ROOT/tests/test-settings-crash-recovery.mjs"
+node "$PLUGIN_ROOT/tests/test-job-settings-concurrency.mjs"
+node "$PLUGIN_ROOT/tests/test-settings-signal-group.mjs"
+node "$PLUGIN_ROOT/tests/test-job-settings-security.mjs"
+python3 -I "$PLUGIN_ROOT/tests/test-pocket-settings-context.py"
+node "$PLUGIN_ROOT/tests/test-job-settings-lifecycle.mjs"
+node "$PLUGIN_ROOT/tests/test-headless-settings-privacy.mjs"
 node "$PLUGIN_ROOT/tests/test-headless-router-settings.mjs"
 
 # ---------------------------------------------------------------------------

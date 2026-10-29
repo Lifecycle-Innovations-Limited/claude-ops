@@ -1,46 +1,72 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, statSync, unlinkSync } from 'node:fs';
-import { applyDirectOauthSettings } from '../session-router.mjs';
+import { cpSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
+const work = mkdtempSync(join(tmpdir(), 'router-settings-test-'));
+const source = fileURLToPath(new URL('../', import.meta.url));
+cpSync(source, join(work, 'rotation'), { recursive: true });
+cpSync(fileURLToPath(new URL('../../lib/', import.meta.url)), join(work, 'lib'), { recursive: true });
+const { spawnWithAccount } = await import(pathToFileURL(join(work, 'rotation/session-router.mjs')));
+after(() => rmSync(work, { recursive: true, force: true }));
 const TG = '{"enabledPlugins":{"telegram@claude-plugins-official":false}}';
 const CRED_KEYS = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_BASE', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
-
-// Exactly one settings option; returns its parsed document and path, then removes the file.
-function settingsOf(out) {
-  const hits = out.filter((a) => a === '--settings' || a.startsWith('--settings='));
-  assert.equal(hits.length, 1, 'exactly one --settings');
-  const i = out.findIndex((a) => a === '--settings' || a.startsWith('--settings='));
-  const path = out[i] === '--settings' ? out[i + 1] : out[i].slice('--settings='.length);
-  const doc = JSON.parse(readFileSync(path, 'utf8'));
-  assert.equal(statSync(path).mode & 0o777, 0o600);
-  unlinkSync(path);
-  return doc;
+const fake = join(work, 'capture.mjs');
+writeFileSync(
+  fake,
+  `#!/usr/bin/env node\nimport fs from 'node:fs';const args=process.argv.slice(2),path=args[args.indexOf('--settings')+1];fs.writeFileSync(process.env.CAPTURE,JSON.stringify({args,doc:JSON.parse(fs.readFileSync(path,'utf8')),mode:fs.statSync(path).mode&511}));\n`,
+  { mode: 0o700 },
+);
+async function run(args) {
+  const capture = join(work, 'capture.json');
+  const { proc } = spawnWithAccount(
+    args,
+    { accounts: [] },
+    {},
+    {
+      env: {
+        PATH: process.env.PATH,
+        HOME: work,
+        CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-oauth',
+        CLAUDE_REAL_BIN: fake,
+        CAPTURE: capture,
+      },
+      stdio: 'ignore',
+    },
+  );
+  await new Promise((resolve, reject) => {
+    proc.once('error', reject);
+    proc.once('close', (code) => (code === 0 ? resolve() : reject(new Error('synthetic child failed'))));
+  });
+  const out = JSON.parse(readFileSync(capture, 'utf8'));
+  assert.equal(out.args.filter((a) => a === '--settings').length, 1);
+  assert.equal(out.mode, 0o600);
+  for (const key of CRED_KEYS) assert.equal(out.doc.env[key], '');
+  return out;
 }
-
-test('no caller --settings: adds the credential overlay', () => {
-  const doc = settingsOf(applyDirectOauthSettings(['-p', 'hi']));
-  for (const k of CRED_KEYS) assert.equal(doc.env[k], '');
+test('no caller --settings: adds the credential overlay in isolated fixture', async () => {
+  await run(['-p', 'hi']);
 });
-
-test('caller inline --settings: keeps telegram disable and adds credential overrides', () => {
-  const out = applyDirectOauthSettings(['--settings', TG, '-p', 'hi']);
-  assert.deepEqual(out.slice(2), ['-p', 'hi']);
-  const doc = settingsOf(out);
-  assert.equal(doc.enabledPlugins['telegram@claude-plugins-official'], false);
-  for (const k of CRED_KEYS) assert.equal(doc.env[k], '');
+test('caller inline --settings: keeps telegram disable and credential overrides', async () => {
+  const out = await run(['--settings', TG, '-p', 'hi']);
+  assert.deepEqual(out.args.slice(2), ['-p', 'hi']);
+  assert.equal(out.doc.enabledPlugins['telegram@claude-plugins-official'], false);
 });
-
-test('--settings=VALUE form is merged too', () => {
-  const out = applyDirectOauthSettings([`--settings=${TG}`, '-p']);
-  const doc = settingsOf(out);
-  assert.equal(doc.enabledPlugins['telegram@claude-plugins-official'], false);
-  assert.equal(doc.env.ANTHROPIC_API_KEY, '');
+test('--settings=VALUE form is merged too', async () => {
+  const out = await run([`--settings=${TG}`, '-p']);
+  assert.equal(out.doc.enabledPlugins['telegram@claude-plugins-official'], false);
 });
-
-test('unreadable caller --settings fails closed with a typed, redacted error', () => {
+test('unreadable caller --settings fails closed with typed redacted error', () => {
   assert.throws(
-    () => applyDirectOauthSettings(['--settings', '/nonexistent/x.json', '-p']),
-    (e) => e.code === 'DIRECT_OAUTH_SETTINGS_COMPOSITION_FAILED' && !e.message.includes('/nonexistent'),
+    () =>
+      spawnWithAccount(
+        ['--settings', join(work, 'missing.json')],
+        { accounts: [] },
+        {},
+        { env: { CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-oauth' } },
+      ),
+    (e) => e.code === 'DIRECT_OAUTH_SETTINGS_COMPOSITION_FAILED' && !e.message.includes(work),
   );
 });
