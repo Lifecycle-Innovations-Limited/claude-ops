@@ -537,7 +537,7 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 with b.store('s', root):
                     pass
-            os.chmod(root, 0o750)
+            os.chmod(root, 0o710)  # group-execute only: still unsafe for a state dir
             with self.assertRaises(ValueError):
                 b.private_dir(root)
 

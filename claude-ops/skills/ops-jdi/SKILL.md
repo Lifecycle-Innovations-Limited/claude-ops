@@ -1,6 +1,6 @@
 ---
 name: ops-jdi
-description: "OPS on-demand: This skill should be used when the user asks to \"just do it\", \"install jdi\", \"keep going until delivered\", or…"
+description: "OPS on-demand: This skill should be used when the user asks to \"just do it\", \"install jdi\", \"keep going…"
 argument-hint: '[status|install|update|uninstall|rollback BACKUP|test]'
 allowed-tools:
   - Bash
