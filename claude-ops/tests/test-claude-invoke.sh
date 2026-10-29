@@ -171,6 +171,50 @@ else
   err "expected API-key env to be stripped, got: '$result'"
 fi
 
+# Settings regression: the CLI consumes only the last additional document.
+settings='{"env":{"AUTH_MODE":"oauth"},"hooks":{"PreToolUse":[{"matcher":"Bash"}]},"enabledPlugins":{"other@test":true,"telegram@claude-plugins-official":true}}'
+settings_file="$tmpdir_missing/caller settings.json"
+printf '%s' "$settings" > "$settings_file"
+for gate in 0 1; do
+  for form in inline file equals; do
+    case "$form" in
+      inline) args=(--settings "$settings");;
+      file) args=(--settings "$settings_file");;
+      equals) args=("--settings=$settings");;
+    esac
+    result=$(run_invoke CLAUDE_OPS_USE_CREDIT_POOL="$gate" -- -p "${args[@]}" --model custom-model)
+    if [[ "$result" == *'"AUTH_MODE":"oauth"'* && "$result" == *'"PreToolUse"'* && "$result" == *'"other@test":true'* && "$result" == *'"telegram@claude-plugins-official":false'* && "$result" != *'"telegram@claude-plugins-official":true'* ]]; then
+      ok "settings $form gate=$gate preserves OAuth, infra hook and other plugins"
+    else
+      err "settings $form gate=$gate lost composition: $result"
+    fi
+  done
+done
+
+# Exercise the account wrapper's pure argument builder, never its auth/ledger CLI.
+node --input-type=module - "$PLUGIN_ROOT" "$settings_file" <<'JS'
+import assert from 'node:assert/strict';
+import { pathToFileURL } from 'node:url';
+import { readFileSync } from 'node:fs';
+const [root, file] = process.argv.slice(2);
+const { headlessArgs } = await import(pathToFileURL(`${root}/scripts/account-rotation/claude-p-as.mjs`));
+const original = readFileSync(file, 'utf8');
+const input = JSON.parse(original);
+for (const flags of [['--settings', original], ['--settings', file], [`--settings=${original}`], [`--settings=${file}`]]) {
+  const args = headlessArgs(['-p', ...flags, '--model', 'custom-model']);
+  assert.equal(args.filter(a => a === '--settings' || a.startsWith('--settings=')).length, 1);
+  assert.deepEqual(JSON.parse(args[1]), {...input, enabledPlugins: {...input.enabledPlugins, 'telegram@claude-plugins-official': false}});
+  assert.deepEqual(args.slice(2), ['-p', '--model', 'custom-model']);
+}
+assert.equal(readFileSync(file, 'utf8'), original, 'caller file remains unchanged');
+assert.throws(() => headlessArgs(['--settings']), /requires a value/);
+assert.throws(() => headlessArgs(['--settings', '{invalid}']), /settings/);
+assert.deepEqual(headlessArgs(['--', '--settings', 'literal']).slice(2), ['--', '--settings', 'literal']);
+console.log('Account wrapper settings composition: PASS (inline/file/equals, invalid, separator, file unchanged)');
+JS
+
+node "$PLUGIN_ROOT/tests/test-headless-router-settings.mjs"
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

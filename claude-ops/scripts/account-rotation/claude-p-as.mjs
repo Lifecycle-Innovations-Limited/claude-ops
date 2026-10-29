@@ -38,6 +38,30 @@ import { homedir } from 'os';
 import { readLedger, writeLedger, findAccount, upsertAccount } from './ledger.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+function headlessArgs(args) {
+  const rest = [];
+  const documents = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--') { rest.push(...args.slice(i)); break; }
+    if (args[i] === '--settings') {
+      if (args[i + 1] == null) throw new Error('--settings requires a value');
+      documents.push(args[++i]);
+    } else if (args[i].startsWith('--settings=')) {
+      documents.push(args[i].slice('--settings='.length));
+    } else {
+      rest.push(args[i]);
+    }
+  }
+  let settings = '{"enabledPlugins":{"telegram@claude-plugins-official":false}}';
+  if (documents.length) {
+    const composed = spawnSync('python3', ['-I', join(__dirname, '../lib/headless-settings.py'), ...documents], { encoding: 'utf8' });
+    if (composed.error) throw composed.error;
+    if (composed.status !== 0) throw new Error(composed.stderr.trim() || 'settings composition failed');
+    settings = composed.stdout.trim();
+  }
+  return ['--settings', settings, ...rest];
+}
+
 const DEFAULT_LEDGER = join(homedir(), '.claude', 'credits-ledger.json');
 const DEFAULT_CONFIG = join(__dirname, 'config.json');
 const DEFAULT_LOCK = join(homedir(), '.claude', 'keychain.lock');
@@ -376,10 +400,7 @@ async function main(argv) {
         userArgs.push(a);
       }
       // 2026-10-26: never start the telegram channel plugin (getUpdates poller) in headless runs.
-      const noTg = userArgs.includes('--settings')
-        ? []
-        : ['--settings', '{"enabledPlugins":{"telegram@claude-plugins-official":false}}'];
-      const finalArgs = [...noTg, '-p', '--max-budget-usd', String(budget), ...userArgs];
+      const finalArgs = headlessArgs(['-p', '--max-budget-usd', String(budget), ...userArgs]);
 
       // Spawn claude. Stream output through; collect for cost parsing.
       const stdoutChunks = [];
@@ -443,6 +464,7 @@ if (invokedAsCli) {
 }
 
 export {
+  headlessArgs,
   parseArgs,
   pickAccount,
   assertNotExtraUsage,
