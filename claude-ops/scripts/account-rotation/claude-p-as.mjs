@@ -57,8 +57,9 @@ function headlessArgs(args) {
   }
   let settings = '{"enabledPlugins":{"telegram@claude-plugins-official":false}}';
   if (documents.length) {
-    const composed = spawnSync('python3', ['-I', join(__dirname, '../lib/headless-settings.py'), ...documents], {
+    const composed = spawnSync('python3', ['-I', join(__dirname, '../lib/headless-settings.py')], {
       encoding: 'utf8',
+      input: documents.join('\0'),
     });
     if (composed.error) throw composed.error;
     if (composed.status !== 0) throw new Error(composed.stderr.trim() || 'settings composition failed');
@@ -406,48 +407,56 @@ async function main(argv) {
       }
       // 2026-10-26: never start the telegram channel plugin (getUpdates poller) in headless runs.
       const finalArgs = headlessArgs(['-p', '--max-budget-usd', String(budget), ...userArgs]);
-
-      // Spawn claude. Stream output through; collect for cost parsing.
-      const stdoutChunks = [];
-      const stderrChunks = [];
-      const child = spawn('claude', finalArgs, { stdio: ['inherit', 'pipe', 'pipe'] });
-      child.stdout.on('data', (b) => {
-        stdoutChunks.push(b);
-        process.stdout.write(b);
-      });
-      child.stderr.on('data', (b) => {
-        stderrChunks.push(b);
-        process.stderr.write(b);
-      });
-
-      const exitCode = await new Promise((resolve) => {
-        child.on('close', (code, signal) => {
-          if (signal) {
-            const n = constants.signals[signal];
-            resolve(n == null ? 128 : 128 + n);
-          } else {
-            resolve(code ?? 1);
-          }
+      const composedSettings = finalArgs[1].startsWith('{') ? null : finalArgs[1];
+      try {
+        // Spawn claude. Stream output through; collect for cost parsing.
+        const stdoutChunks = [];
+        const stderrChunks = [];
+        const child = spawn('claude', finalArgs, { stdio: ['inherit', 'pipe', 'pipe'] });
+        child.stdout.on('data', (b) => {
+          stdoutChunks.push(b);
+          process.stdout.write(b);
         });
-        child.on('error', (e) => {
-          process.stderr.write(`[claude-p-as] spawn failed: ${e.message}\n`);
-          resolve(127);
+        child.stderr.on('data', (b) => {
+          stderrChunks.push(b);
+          process.stderr.write(b);
         });
-      });
 
-      // P1a fix: scan both streams; refuse (exit 2) if parse fails — never silently floor at $0.01.
-      const out = Buffer.concat(stdoutChunks).toString('utf8');
-      const err = Buffer.concat(stderrChunks).toString('utf8');
-      const cost = parseUsageCost(out, err);
-      if (cost == null) {
-        process.stderr.write(
-          '[claude-p-as] cost parse failed; refusing to decrement; check claude CLI output format\n',
-        );
-        return 2;
+        const exitCode = await new Promise((resolve) => {
+          child.on('close', (code, signal) => {
+            if (signal) {
+              const n = constants.signals[signal];
+              resolve(n == null ? 128 : 128 + n);
+            } else {
+              resolve(code ?? 1);
+            }
+          });
+          child.on('error', (e) => {
+            process.stderr.write(`[claude-p-as] spawn failed: ${e.message}\n`);
+            resolve(127);
+          });
+        });
+
+        // P1a fix: scan both streams; refuse (exit 2) if parse fails — never silently floor at $0.01.
+        const out = Buffer.concat(stdoutChunks).toString('utf8');
+        const err = Buffer.concat(stderrChunks).toString('utf8');
+        const cost = parseUsageCost(out, err);
+        if (cost == null) {
+          process.stderr.write(
+            '[claude-p-as] cost parse failed; refusing to decrement; check claude CLI output format\n',
+          );
+          return 2;
+        }
+        decrementLedger(opts.ledger, account.email, cost);
+
+        return exitCode;
+      } finally {
+        if (composedSettings) {
+          try {
+            unlinkSync(composedSettings);
+          } catch {}
+        }
       }
-      decrementLedger(opts.ledger, account.email, cost);
-
-      return exitCode;
     } finally {
       await restoreOnce();
     }

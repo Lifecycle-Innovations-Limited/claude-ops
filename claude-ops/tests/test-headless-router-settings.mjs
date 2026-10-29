@@ -185,7 +185,7 @@ try {
     'CLAUDE_CODE_OAUTH_TOKEN',
   ])
     delete env[key];
-  const overrides = join(rotation, '.settings-overrides');
+  const overrides = join(temp, '.claude', 'foreground-settings');
   rmSync(overrides, { recursive: true, force: true });
   for (const mode of ['malformed', 'read', 'write']) {
     const flags =

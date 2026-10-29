@@ -542,10 +542,25 @@ def _bg_session_done(
     return agents_map.get(full_key, "?") in ("completed", "stopped", "done")
 
 
+def _reconcile_job_settings() -> None:
+    helper = Path(__file__).resolve().parent / "account-rotation/job-settings.mjs"
+    env = os.environ.copy()
+    if WORKER_USER and WORKER_CLAUDE_CONFIG_DIR:
+        env["CLAUDE_CONFIG_DIR"] = WORKER_CLAUDE_CONFIG_DIR
+    cmd = ["node", str(helper)]
+    if WORKER_USER and WORKER_USER != (os.environ.get("USER") or ""):
+        cmd = ["sudo", "-n", "-H", "-u", WORKER_USER, "--preserve-env=PATH,CLAUDE_CONFIG_DIR", "--", *cmd]
+    try:
+        subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # Keep uncertain ownership for the next existing executor tick.
+
+
 def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
     """Check each in-flight worker. If exited, write done.json receipt
     and remove from registry. If past deadline, SIGTERM. Returns
     (completed_count, killed_count)."""
+    _reconcile_job_settings()
     # Invalidate cached agents map at start of each reap pass.
     reap_workers.__dict__.pop("_agents_map", None)
     completed = 0

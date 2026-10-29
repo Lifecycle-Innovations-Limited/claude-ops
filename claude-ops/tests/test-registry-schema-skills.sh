@@ -47,7 +47,7 @@ check_skill() {
     ok "$skill: no example-schema fields"
   fi
 
-  local out; out="$(jq -r "$filter" "$REGISTRY" 2>&1 | head -50)" || { bad "$skill: jq filter errors: $out"; return; }
+  local out; out="$(jq -r "$filter" "$REGISTRY" 2>&1 | sed -n '1,50p')" || { bad "$skill: jq filter errors: $out"; return; }
   local n; n="$(printf '%s\n' "$out" | grep -c . || true)"
   [ "$n" -gt 0 ] || { bad "$skill: jq filter returns no rows"; return; }
   if printf '%s\n' "$out" | grep -qE '^null\||\|null\||\|null$|^null$'; then
