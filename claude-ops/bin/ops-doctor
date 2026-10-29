@@ -492,6 +492,11 @@ if [ -f "$HOME/.claude.json" ] && command -v jq >/dev/null 2>&1 && jq empty "$HO
   done <<< "$STDIO_SERVERS"
 fi
 
+# Task-reminder lock needs flock(1) or python3 (macOS has no flock).
+if ! command -v flock >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+  WARNINGS+=("task_reminder_no_lock: neither flock nor python3 found — ops-task-reminder counts nothing. Install python3 (or flock)")
+fi
+
 # 3. Watchdog health file — check it exists and is not stale (>60 min = watchdog not running)
 WATCHDOG_HEALTH_FILE="$HOME/.claude/state/mcp-watchdog/.health"
 if [ -f "$WATCHDOG_HEALTH_FILE" ]; then

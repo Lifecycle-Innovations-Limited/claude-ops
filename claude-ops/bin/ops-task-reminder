@@ -6,12 +6,19 @@
 #
 # The hook runs async (hooks.json), so several invocations for one session can
 # overlap. The read-increment-write of the counter is therefore done under a
-# per-session exclusive lock: flock(1) when the box has it, otherwise an atomic
-# mkdir lock (macOS ships no flock). If the lock cannot be taken within ~2s the
-# hook exits 0 with no output — a missed count is cheaper than a stuck hook.
+# per-session exclusive lock: flock(1) when the box has it, otherwise
+# scripts/lib/task-reminder-lock.py (python3, fcntl.flock on the same .flock
+# file; macOS ships no flock). If the lock cannot be taken within ~2s the hook
+# exits 0 with no output — a missed count is cheaper than a stuck hook. If
+# neither flock nor python3 exists it says so on stderr and counts nothing.
 #
-# Test knobs: OPS_TASK_REMINDER_LOCK_IMPL=auto|flock|mkdir forces the lock
-# strategy; OPS_TASK_REMINDER_LOCK_TIMEOUT overrides the 2s wait.
+# Rollout: pre-3.12.1 hooks used a .lockd mkdir lock that does not honour this
+# kernel lock. Never run old and new hooks against one state dir at once; let
+# in-flight hooks finish before updating.
+#
+# Test knobs: OPS_TASK_REMINDER_LOCK_IMPL=auto|flock|portable (mkdir is an
+# alias of portable) forces the lock strategy; OPS_TASK_REMINDER_LOCK_TIMEOUT
+# overrides the 2s wait; OPS_TASK_REMINDER_PYTHON overrides the python3 name.
 set -e
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 . "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh" 2>/dev/null || {
@@ -36,39 +43,34 @@ state_file="$STATE_DIR/task-reminder-${sid}${aid:+-agent-$aid}"
 
 # ── per-session lock ───────────────────────────────────────────────────────
 LOCK_TIMEOUT_S="${OPS_TASK_REMINDER_LOCK_TIMEOUT:-2}"
-LOCK_STALE_MIN=1 # a mkdir lock older than this belongs to a killed hook
 lock_impl="${OPS_TASK_REMINDER_LOCK_IMPL:-auto}"
+case "$lock_impl" in mkdir) lock_impl="portable" ;; esac # pre-3.12.1 name
 if [ "$lock_impl" = "auto" ]; then
-  if command -v flock >/dev/null 2>&1; then lock_impl="flock"; else lock_impl="mkdir"; fi
+  if command -v flock >/dev/null 2>&1; then lock_impl="flock"; else lock_impl="portable"; fi
 fi
 
-lock_dir=""
-release_lock() {
-  if [ -n "$lock_dir" ]; then rmdir "$lock_dir" 2>/dev/null || true; fi
-}
-
 acquire_lock() {
-  if [ "$lock_impl" = "flock" ]; then
-    exec 9>"${state_file}.flock" || return 1
-    flock -w "$LOCK_TIMEOUT_S" 9 || return 1
-    return 0
-  fi
-  # Wall-clock deadline, not a try count: under load every sleep/fork is slow.
-  local d="${state_file}.lockd" tries=0 deadline=$((SECONDS + LOCK_TIMEOUT_S))
-  while ! mkdir "$d" 2>/dev/null; do
-    [ "$SECONDS" -ge "$deadline" ] && return 1
-    # Reclaim a lock left behind by a hook that was killed mid-update.
-    if [ $((tries % 10)) -eq 0 ] &&
-      [ -n "$(find "$d" -maxdepth 0 -mmin +"$LOCK_STALE_MIN" 2>/dev/null)" ]; then
-      rmdir "$d" 2>/dev/null || true
-    fi
-    tries=$((tries + 1))
-    sleep 0.05
-  done
-  lock_dir="$d"
-  trap release_lock EXIT
+  exec 9>"${state_file}.flock" || return 1
+  flock -w "$LOCK_TIMEOUT_S" 9 || return 1
   return 0
 }
+
+if [ "$lock_impl" = "portable" ]; then
+  # No flock(1) (macOS): python3 takes a real fcntl.flock() on the same
+  # .flock file and runs the whole counter transaction while holding it.
+  py="${OPS_TASK_REMINDER_PYTHON:-python3}"
+  helper="$PLUGIN_ROOT/scripts/lib/task-reminder-lock.py"
+  if ! command -v "$py" >/dev/null 2>&1 || [ ! -f "$helper" ]; then
+    echo "ops-task-reminder: python3 (or $helper) not found and flock(1) is not installed; task reminder counting is OFF. Install python3 or flock." >&2
+    exit 0
+  fi
+  is_agent=0
+  [ -n "$aid" ] && is_agent=1
+  # Fail-open: a broken interpreter (CLT stub, too-old python) must not make the hook fail.
+  "$py" -I "$helper" "$state_file" "$THRESHOLD" "$LOCK_TIMEOUT_S" "$tool" "$is_agent" ||
+    echo "ops-task-reminder: lock helper failed (exit $?); counting skipped" >&2
+  exit 0
+fi
 
 acquire_lock || exit 0
 
