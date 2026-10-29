@@ -66,6 +66,12 @@ Each imprint object may carry: `display_name`, `lane`, `sound_description`, `ten
 
 ## Modes
 
+### Mix evidence — `/ops:ops-ar mix-evidence <judge-report.json> <mixbrief.json>`
+
+This explicit mode reuses A&R judgment on an existing Mixforge evidence packet. It takes precedence over single-track, batch and inbox modes below. Read both named inputs; never substitute `latest` or scan an inbox. Load the runtime taste profile and applicable imprint data using the rules above, then spawn `ar-producer` with the explicit field `mode: mix-evidence`, exact report/brief paths and the full permitted taste context. No new audio analysis, uploads, paid calls, downloads, transcription, stems, external search or pro-API fallback in this mode. Do not include the audio-tool discovery instruction: this mode uses Read only.
+
+The producer opens actual report files and distinguishes local measurements from audio-model opinion and unknowns. Use the agent's mix-evidence verdict/strengths/weaknesses/producer-plan/reference/coverage/next format; the record-signing card and hit score do not apply in this mode. Confirm report/source hash binding and complete whole-mix/per-transition coverage; stale or missing evidence cannot pass. Imprint context may inform style comparison but never supplies signing eligibility for a mix. Return the full evidence-based card, preserving all open requirements.
+
 ### 1. Single track — `/ops:ops-ar <file|url|latest>`
 
 Spawn the **ar-producer** agent (Opus) with the track:

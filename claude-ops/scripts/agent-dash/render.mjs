@@ -112,26 +112,27 @@ export function renderDashboard(snapshot, { width = 100, selectedIdx = 0, status
   const agents = sortAgents(snapshot.agents);
   const total = agents.length;
   const needs = agents.filter((a) => a.status === 'needs-user').length;
-  const fra = snapshot.hosts?.fra || {};
-  const fraUnknown = fra.known === false || fra.count === null || fra.count === undefined;
-  const fraTag = fraUnknown
-    ? `${C.red}unreachable${C.reset}`
-    : fra.source === 'not-configured'
-      ? `${C.gray}not configured${C.reset}`
-      : fra.stale
-        ? `${C.red}stale${C.reset}`
-        : fra.cached
-          ? `${C.gray}cached${C.reset}`
-          : `${C.green}live${C.reset}`;
-  // "?" not "0": an unreachable host has an unknown agent count, and printing a
-  // number there is indistinguishable from a genuinely idle host.
-  const fraCount = fraUnknown ? '?' : fra.count;
+  const hostLabel = (host, info = {}) => {
+    const unknown = info.known === false || info.count === null || info.count === undefined;
+    const tag = unknown
+      ? `${C.red}unreachable${C.reset}`
+      : info.source === 'not-configured'
+        ? `${C.gray}not configured${C.reset}`
+        : info.stale
+          ? `${C.red}stale${C.reset}`
+          : info.cached
+            ? `${C.gray}cached${C.reset}`
+            : `${C.green}live${C.reset}`;
+    return `${host} ${unknown ? '?' : info.count} (${tag})`;
+  };
+  const hostSummary = Object.entries(snapshot.hosts || {})
+    .map(([host, info]) => hostLabel(host, info))
+    .join(`  ${C.dim}·${C.reset} `);
 
   // header
   lines.push(
     `${C.bold}${C.cyan}AGENT-DASH${C.reset}  ${C.bold}${total}${C.reset} agents` +
-      `  ${C.dim}·${C.reset} mac ${snapshot.hosts?.mac?.count ?? 0}` +
-      `  ${C.dim}·${C.reset} fra ${fraCount} (${fraTag})` +
+      (hostSummary ? `  ${C.dim}·${C.reset} ${hostSummary}` : '') +
       (needs ? `  ${C.brightYellow}${C.bold}◆ ${needs} need you${C.reset}` : '') +
       `  ${C.gray}${new Date(snapshot.ts).toLocaleTimeString()}${C.reset}`,
   );
@@ -142,7 +143,7 @@ export function renderDashboard(snapshot, { width = 100, selectedIdx = 0, status
   agents.forEach((a, i) => {
     (byHost[a.host] ||= []).push({ a, i });
   });
-  const hostOrder = ['mac', 'fra', ...Object.keys(byHost).filter((h) => h !== 'mac' && h !== 'fra')];
+  const hostOrder = ['mac', ...Object.keys(byHost).filter((h) => h !== 'mac')];
 
   let flat = 0;
   const indexMap = []; // flat selectable index -> agent

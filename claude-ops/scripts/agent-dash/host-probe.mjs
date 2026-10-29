@@ -2,8 +2,8 @@
 // host-probe.mjs — single-host fleet probe for agent-dash.
 //
 // Emits one JSON array of agent records for THIS host. Runs identically on the
-// local Mac and (piped over ssh) on the FRA EC2 box, so derivation logic lives
-// in exactly one place. No external deps — fs + child_process only.
+// local Mac and (piped over ssh) on configured remote hosts, so derivation
+// logic lives in exactly one place. No external deps — fs + child_process only.
 //
 // Env:
 //   AGENT_DASH_HOST   host label baked into every record (default: "local")

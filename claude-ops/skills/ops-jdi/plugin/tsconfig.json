@@ -1,0 +1,5 @@
+{
+  "extends": "./.claude-plugin/types/tsconfig.json",
+  "compilerOptions": { "types": ["claude-code", "claude-code-tools"] },
+  "include": ["hooks", "types", "*.test.tsx"]
+}

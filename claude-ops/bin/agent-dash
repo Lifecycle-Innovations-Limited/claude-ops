@@ -13,7 +13,7 @@
 //   agent-dash kill    <id> [--yes]
 //   agent-dash archive <id> [--yes]
 //
-// <id> = 8-char short id, full sessionId, pid, or name (prefix-matched).
+// <id> = short id, full sessionId, pid, or name (prefix-matched); use host:id if ambiguous.
 
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,8 +37,16 @@ function termWidth() {
 const SUBCMDS = ['attach', 'steer', 'revive', 'kill', 'archive'];
 if (SUBCMDS.includes(positional[0])) {
   const [cmd, id, ...rest] = positional;
-  const snap = collect({});
-  const a = ctrl.findAgent(snap, id);
+  // Subcommand paths (attach/steer/revive/kill/archive) only need the agent itself;
+  // they must not pay for the Band/Jam probes.
+  const snap = collect({ skipCollaboration: true });
+  let a;
+  try {
+    a = ctrl.findAgent(snap, id);
+  } catch (e) {
+    console.error(`agent-dash: ${e.message}`);
+    process.exit(1);
+  }
   if (!a) {
     console.error(`agent-dash: no agent matching "${id}"`);
     process.exit(1);
