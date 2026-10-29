@@ -1,5 +1,6 @@
 """Optionele, expliciet aangevraagde Stable Audio-adapter. API-contract onbevestigd."""
 
+import http.client
 import os
 from pathlib import Path
 import urllib.error
@@ -12,7 +13,7 @@ DEFAULT_ENDPOINT = "https://api.stability.ai/v2beta/audio/stable-audio-2/text-to
 def generate_bridge(prompt: str, seconds: float, destination: Path, *,
                     endpoint: str = DEFAULT_ENDPOINT, model: str | None = None,
                     max_seconds: float = 190, timeout: float = 120) -> str | None:
-    key = os.environ.get("STABILITY_API_KEY")
+    key = (os.environ.get("STABILITY_API_KEY") or "").strip()
     if not key:
         return "STABILITY_API_KEY ontbreekt; overgang wordt zonder gegenereerd tussenstuk gerenderd."
     if not endpoint.startswith("https://api.stability.ai/"):
@@ -37,6 +38,6 @@ def generate_bridge(prompt: str, seconds: float, destination: Path, *,
             return "Stability gaf geen ondersteund WAV-bestand; normale overgang gebruikt."
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(audio)
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
         return "Stability-aanvraag mislukt; normale overgang gebruikt. API-contract is onbevestigd."
     return None
