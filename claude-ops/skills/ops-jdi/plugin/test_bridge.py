@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 SPEC = importlib.util.spec_from_file_location('bridge', Path(__file__).parent / 'hooks/bridge.py')
 b = importlib.util.module_from_spec(SPEC)
@@ -537,9 +538,11 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 with b.store('s', root):
                     pass
-            os.chmod(root, 0o710)  # group-execute only: still unsafe for a state dir
-            with self.assertRaises(ValueError):
-                b.private_dir(root)
+            real = root.lstat()
+            widened = os.stat_result((real.st_mode | 0o010,) + tuple(real)[1:])  # simulated group bit; no chmod needed
+            with unittest.mock.patch.object(Path, 'lstat', return_value=widened):
+                with self.assertRaises(ValueError):
+                    b.private_dir(root)
 
     def test_every_hook_is_a_model_free_command(self):
         import ast
