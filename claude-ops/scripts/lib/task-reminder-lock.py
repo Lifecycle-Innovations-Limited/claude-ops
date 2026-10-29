@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Portable lock and counter transaction for bin/ops-task-reminder.
+"""Portable lock + counter transaction for bin/ops-task-reminder.
 
-Used where flock(1) is absent. Holds a real fcntl.flock on the same
-"<state_file>.flock" file the flock(1) branch uses, so the two agree on a box
-that has both, and runs the whole read-increment-write while holding it. The
-lock is the open file, so the kernel releases it when this process exits or is
-killed. Nothing is reclaimed by age and nothing is unlinked, so one worker
-cannot remove another's lock.
+Used where flock(1) is missing (macOS). It takes a real fcntl.flock() on the
+same "<state_file>.flock" inode the flock(1) branch uses, so the two interoperate
+on a box that has both. The whole read-increment-write (or reset) happens here
+while the lock is held; the lock is the open file description, so the kernel
+drops it when this process exits or is killed. The lock file is never renamed,
+truncated or unlinked, so there is no pathname to race on.
 
 Usage: task-reminder-lock.py <state_file> <threshold> <lock_timeout_s> <tool> <is_agent 0|1>
 
-Always exits 0. A lock not taken within the deadline is a missed count and no
-output. Unexpected errors go to stderr, never silently swallowed.
+Exit status is always 0 (fail-open): a lock that is not taken within the
+deadline means a missed count and no output. Unexpected errors are reported on
+stderr, never swallowed silently.
 """
 import fcntl
 import os
@@ -21,7 +22,7 @@ import time
 MAX_TIMEOUT_S = 600.0
 
 
-def bounded(raw, default):
+def parse_float(raw, default):
     try:
         value = float(raw)
     except (TypeError, ValueError):
@@ -50,7 +51,7 @@ def write_state(path, text):
     os.replace(tmp, path)
 
 
-def reminder(threshold):
+def reminder_json(threshold):
     return """{
   "suppressOutput": true,
   "hookSpecificOutput": {
@@ -70,11 +71,11 @@ def main(argv):
         threshold = int(raw_threshold)
     except ValueError:
         threshold = 10
-    timeout_s = bounded(raw_timeout, 2.0)
+    timeout_s = parse_float(raw_timeout, 2.0)
 
     fd = acquire(state_file + ".flock", timeout_s)
     if fd is None:
-        return 0
+        return 0  # fail-open: a missed count is cheaper than a stuck hook
 
     # Namespaced names such as "mcp__<server>__TaskUpdate": only the segment
     # after the last "__" counts.
@@ -92,7 +93,7 @@ def main(argv):
     if count >= threshold:
         write_state(state_file, "0\n")
         if is_agent != "1":
-            sys.stdout.write(reminder(threshold))
+            sys.stdout.write(reminder_json(threshold))
     else:
         write_state(state_file, "%d\n" % count)
     sys.stdout.flush()
