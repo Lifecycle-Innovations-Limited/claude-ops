@@ -42,7 +42,10 @@ function headlessArgs(args) {
   const rest = [];
   const documents = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--') { rest.push(...args.slice(i)); break; }
+    if (args[i] === '--') {
+      rest.push(...args.slice(i));
+      break;
+    }
     if (args[i] === '--settings') {
       if (args[i + 1] == null) throw new Error('--settings requires a value');
       documents.push(args[++i]);
@@ -54,7 +57,9 @@ function headlessArgs(args) {
   }
   let settings = '{"enabledPlugins":{"telegram@claude-plugins-official":false}}';
   if (documents.length) {
-    const composed = spawnSync('python3', ['-I', join(__dirname, '../lib/headless-settings.py'), ...documents], { encoding: 'utf8' });
+    const composed = spawnSync('python3', ['-I', join(__dirname, '../lib/headless-settings.py'), ...documents], {
+      encoding: 'utf8',
+    });
     if (composed.error) throw composed.error;
     if (composed.status !== 0) throw new Error(composed.stderr.trim() || 'settings composition failed');
     settings = composed.stdout.trim();
