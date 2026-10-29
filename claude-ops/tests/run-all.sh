@@ -35,6 +35,7 @@ echo "claude-ops Test Suite"
 echo "Running from: $TESTS_DIR"
 echo ""
 
+run_suite "$TESTS_DIR/test-mcp-session.sh"
 run_suite "$TESTS_DIR/test-skills-lint.sh"
 run_suite "$TESTS_DIR/test-agents-lint.sh"
 run_suite "$TESTS_DIR/test-compact-discovery.sh"
