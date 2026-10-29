@@ -11,7 +11,11 @@
 # hook exits 0 with no output — a missed count is cheaper than a stuck hook.
 #
 # Test knobs: OPS_TASK_REMINDER_LOCK_IMPL=auto|flock|mkdir forces the lock
-# strategy; OPS_TASK_REMINDER_LOCK_TIMEOUT overrides the 2s wait.
+# strategy; OPS_TASK_REMINDER_LOCK_TIMEOUT overrides the 2s give-up;
+# OPS_TASK_REMINDER_LOCK_WAIT overrides how long the mkdir lock keeps waiting
+# while a live hook holds it (default = the give-up time). A separate wait is
+# needed because an exact count must outlast a slow runner, while a lock held
+# by a dead hook must still give up fast.
 set -e
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 . "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh" 2>/dev/null || {
@@ -36,6 +40,7 @@ state_file="$STATE_DIR/task-reminder-${sid}${aid:+-agent-$aid}"
 
 # ── per-session lock ───────────────────────────────────────────────────────
 LOCK_TIMEOUT_S="${OPS_TASK_REMINDER_LOCK_TIMEOUT:-2}"
+LOCK_WAIT_S="${OPS_TASK_REMINDER_LOCK_WAIT:-$LOCK_TIMEOUT_S}"
 LOCK_STALE_MIN=1 # a mkdir lock older than this belongs to a killed hook
 lock_impl="${OPS_TASK_REMINDER_LOCK_IMPL:-auto}"
 if [ "$lock_impl" = "auto" ]; then
@@ -53,12 +58,17 @@ acquire_lock() {
     flock -w "$LOCK_TIMEOUT_S" 9 || return 1
     return 0
   fi
-  # Wall-clock deadline, not a try count: under load every sleep/fork is slow.
-  local d="${state_file}.lockd" tries=0 deadline=$((SECONDS + LOCK_TIMEOUT_S))
+  # Two deadlines. LOCK_WAIT bounds how long a live hook may hold the lock
+  # before this call gives up (exact counts need this long). LOCK_TIMEOUT
+  # bounds only the stale-reclaim check: a lock left by a killed hook is
+  # cleared once it is older than LOCK_STALE_MIN and the give-up time has
+  # passed, so a dead lock never stalls the hook.
+  local d="${state_file}.lockd" tries=0
+  local wait_deadline=$((SECONDS + LOCK_WAIT_S))
+  local stale_deadline=$((SECONDS + LOCK_TIMEOUT_S))
   while ! mkdir "$d" 2>/dev/null; do
-    [ "$SECONDS" -ge "$deadline" ] && return 1
-    # Reclaim a lock left behind by a hook that was killed mid-update.
-    if [ $((tries % 10)) -eq 0 ] &&
+    [ "$SECONDS" -ge "$wait_deadline" ] && return 1
+    if [ "$SECONDS" -ge "$stale_deadline" ] &&
       [ -n "$(find "$d" -maxdepth 0 -mmin +"$LOCK_STALE_MIN" 2>/dev/null)" ]; then
       rmdir "$d" 2>/dev/null || true
     fi

@@ -32,9 +32,10 @@ N=25
 SID="concurrency-test"
 
 # Exact-count runs wait up to 60s for the lock, so a slow or loaded runner
-# tests mutual exclusion rather than timing. The fail-open case (5) uses the
-# real 2s default.
-LOCK_TIMEOUT=60
+# tests mutual exclusion rather than timing. The give-up stays at 2s so a
+# lock held by a dead hook is abandoned fast (case 5).
+LOCK_TIMEOUT=2
+LOCK_WAIT=60
 
 # run_hook <impl> <threshold> <state_dir> <out_file> [tool] [agent_id]
 run_hook() {
@@ -50,6 +51,7 @@ run_hook() {
       CLAUDE_PLUGIN_OPTION_TASK_REMINDER_THRESHOLD="$2" \
       OPS_TASK_REMINDER_LOCK_IMPL="$1" \
       OPS_TASK_REMINDER_LOCK_TIMEOUT="$LOCK_TIMEOUT" \
+      OPS_TASK_REMINDER_LOCK_WAIT="${LOCK_WAIT:-$LOCK_TIMEOUT}" \
       bash "$SCRIPT" >"$4" 2>"$diagnostic.stderr" || rc=$?
   printf '%s\n' "$rc" >"$diagnostic.exit"
   return "$rc"
@@ -132,6 +134,7 @@ mkdir -p "$state"
 echo 5 >"$state/task-reminder-$SID"
 mkdir "$state/task-reminder-$SID.lockd"
 LOCK_TIMEOUT=2
+LOCK_WAIT=2
 start=$(date +%s)
 rc=0
 run_hook mkdir 1 "$state" "$TMP/held-out" || rc=$?
@@ -146,7 +149,8 @@ fi
 
 # 6. The mkdir lock is released after a normal run.
 rmdir "$state/task-reminder-$SID.lockd"
-LOCK_TIMEOUT=60
+LOCK_TIMEOUT=2
+LOCK_WAIT=60
 run_hook mkdir 1000 "$state" "$TMP/rel-out" || true
 if [ ! -d "$state/task-reminder-$SID.lockd" ] && [ "$(cat "$state/task-reminder-$SID")" = "6" ]; then
   pass "mkdir lock released after a run"
