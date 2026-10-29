@@ -175,7 +175,7 @@ jobs:
   # skipped (path-gated or Graphite optimizer skip) is treated as passing.
   ci-summary:
     name: CI Summary
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
     timeout-minutes: 5
     permissions: {}
     needs: [optimize-ci, lint-and-check, pii-gate, pii-gate-metadata, test-suite]
