@@ -126,17 +126,29 @@ for impl in $impls; do
   fi
 done
 
-# 5. Fail-open: a held (fresh) mkdir lock makes the hook exit 0, silent, in bounded time.
+# 5. Fail-open: a lock held by a live process makes the hook exit 0, silent,
+#    in bounded time. The holder keeps the real .flock file, the same one both
+#    lock strategies use.
 state="$TMP/state-held"
 mkdir -p "$state"
 echo 5 >"$state/task-reminder-$SID"
-mkdir "$state/task-reminder-$SID.lockd"
+python3 - "$state/task-reminder-$SID.flock" <<'PY' &
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+time.sleep(30)
+PY
+holder=$!
+# Give the holder a moment to take the lock before the hook contends for it.
+sleep 0.3
 LOCK_TIMEOUT=2
 start=$(date +%s)
 rc=0
 run_hook mkdir 1 "$state" "$TMP/held-out" || rc=$?
 elapsed=$(($(date +%s) - start))
 got="$(cat "$state/task-reminder-$SID")"
+kill "$holder" 2>/dev/null || true
+wait "$holder" 2>/dev/null || true
 # The lock deadline is ~2s; the slack covers process startup on a loaded runner.
 if [ "$rc" = "0" ] && [ ! -s "$TMP/held-out" ] && [ "$got" = "5" ] && [ "$elapsed" -le 6 ]; then
   pass "held lock -> exit 0, no output, counter untouched (${elapsed}s)"
@@ -144,25 +156,26 @@ else
   fail "held lock -> rc=$rc elapsed=${elapsed}s counter=$got output=$(wc -c <"$TMP/held-out")B"
 fi
 
-# 6. The mkdir lock is released after a normal run.
-rmdir "$state/task-reminder-$SID.lockd"
+# 6. A finished run leaves no lock directory behind, and the next run counts.
 LOCK_TIMEOUT=60
 run_hook mkdir 1000 "$state" "$TMP/rel-out" || true
 if [ ! -d "$state/task-reminder-$SID.lockd" ] && [ "$(cat "$state/task-reminder-$SID")" = "6" ]; then
-  pass "mkdir lock released after a run"
+  pass "no lock directory left behind, counter 5 -> 6"
 else
-  fail "mkdir lock left behind or counter wrong"
+  fail "lock directory left behind or counter wrong"
 fi
 
-# 7. A stale mkdir lock (left by a killed hook) is reclaimed, not waited on.
-mkdir "$state/task-reminder-$SID.lockd"
-touch -t 200001010000 "$state/task-reminder-$SID.lockd"
+# 7. A lock whose holder has died is taken at once, not waited out. The kernel
+#    releases an fcntl lock when its holder exits, so a killed hook never blocks
+#    the next one. The old .lockd lock had to be reclaimed by age instead.
 LOCK_TIMEOUT=2
+start=$(date +%s)
 run_hook mkdir 1000 "$state" "$TMP/stale-out" || true
-if [ ! -d "$state/task-reminder-$SID.lockd" ] && [ "$(cat "$state/task-reminder-$SID")" = "7" ]; then
-  pass "stale mkdir lock reclaimed, counter 6 -> 7"
+elapsed=$(($(date +%s) - start))
+if [ "$elapsed" -le 2 ] && [ "$(cat "$state/task-reminder-$SID")" = "7" ]; then
+  pass "dead holder's lock taken at once, counter 6 -> 7 (${elapsed}s)"
 else
-  fail "stale mkdir lock not reclaimed (counter $(cat "$state/task-reminder-$SID"))"
+  fail "dead holder blocked the next run (${elapsed}s, counter $(cat "$state/task-reminder-$SID"))"
 fi
 
 # 9. Subagents share the parent's session_id but carry agent_id. Their calls
@@ -227,6 +240,53 @@ if printf '%s' "$entry" | jq -e '.hooks[0].async == true and .hooks[0].timeout >
   pass "wiring: hook is async with timeout above the 2s lock deadline"
 else
   fail "wiring: hook must be async with timeout > 2 (got $(printf '%s' "$entry" | jq -c '.hooks[0] | {async, timeout}'))"
+fi
+
+# 10. Regression: the old portable lock reclaimed a .lockd directory by age.
+#     That reclaim removes a lock another live worker still holds, so two
+#     workers write the counter at once and one update is lost. The threshold
+#     here is 0 minutes so the reclaim always fires; on CI the same reclaim
+#     fired at +1 minute once load made a fresh lock look old. The new lock
+#     has nothing to reclaim, so the same burst keeps every update.
+old_lock_counter() {
+  local state="$1" n="$2" sf="$1/counter" d
+  rm -rf "$state"; mkdir -p "$state"
+  one() {
+    local dd="$sf.lockd" tries=0 deadline=$((SECONDS + 30))
+    while ! mkdir "$dd" 2>/dev/null; do
+      if [ -n "$(find "$dd" -maxdepth 0 -mmin 0 2>/dev/null)" ]; then
+        rmdir "$dd" 2>/dev/null || true
+      fi
+      [ "$SECONDS" -ge "$deadline" ] && return 0
+      tries=$((tries + 1)); sleep 0.05
+    done
+    echo $(( $(cat "$sf" 2>/dev/null || echo 0) + 1 )) > "$sf"
+    rmdir "$dd" 2>/dev/null || true
+  }
+  local i
+  for i in $(seq 1 "$n"); do one & done
+  wait
+  cat "$sf" 2>/dev/null || echo 0
+}
+old_got="$(old_lock_counter "$TMP/old-lock" 40)"
+if [ "$old_got" -lt 40 ]; then
+  pass "old .lockd lock loses updates under its own reclaim ($old_got/40)"
+else
+  fail "old .lockd lock kept every update ($old_got/40); the race did not fire"
+fi
+new_state="$TMP/new-lock"
+mkdir -p "$new_state"
+pids=()
+for i in $(seq 1 25); do
+  run_hook mkdir 1000 "$new_state" "$TMP/new-out-$i" &
+  pids+=($!)
+done
+for p in "${pids[@]}"; do wait "$p" || true; done
+new_got="$(cat "$new_state/task-reminder-$SID" 2>/dev/null || echo 0)"
+if [ "$new_got" = "25" ]; then
+  pass "new lock keeps every update over the same burst (25/25)"
+else
+  fail "new lock lost updates ($new_got/25)"
 fi
 
 for result in "$TMP/diagnostics/"*.exit; do
