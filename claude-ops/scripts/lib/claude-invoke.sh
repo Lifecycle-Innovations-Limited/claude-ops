@@ -46,12 +46,29 @@ _claude_invoke_find_root() {
 # getUpdates with the claudecode bot token (from ~/.claude/channels/telegram/.env)
 # and knocks hermes-primary claudecode out with telegram_polling_conflict.
 CLAUDE_INVOKE_NO_TG_SETTINGS='{"enabledPlugins":{"telegram@claude-plugins-official":false}}'
+_CLAUDE_INVOKE_SETTINGS_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/headless-settings.py"
 
 _claude_invoke_exec() {
   env -u ANTHROPIC_API_KEY -u CLAUDE_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN "$@"
 }
 
 claude_invoke() {
+  local settings="$CLAUDE_INVOKE_NO_TG_SETTINGS"
+  local documents=() args=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --settings)
+        [ "$#" -ge 2 ] || { printf 'claude-invoke: --settings requires a value\n' >&2; return 2; }
+        documents+=("$2"); shift 2 ;;
+      --settings=*) documents+=("${1#--settings=}"); shift ;;
+      --) args+=("$@"); break ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  if [ "${#documents[@]}" -gt 0 ]; then
+    settings="$(python3 -I "$_CLAUDE_INVOKE_SETTINGS_HELPER" "${documents[@]}")" || return $?
+  fi
+  set -- "${args[@]}"
   if [ "${CLAUDE_OPS_USE_CREDIT_POOL:-0}" = "1" ]; then
     local repo_root
     repo_root="$(_claude_invoke_find_root)" || repo_root=""
@@ -60,11 +77,11 @@ claude_invoke() {
       # Wrapper not found — log a warning and fall back to direct claude so
       # daemon jobs are never silently dropped due to misconfiguration.
       printf '[claude-invoke] WARNING: claude-p-as.mjs not found (root=%s) — falling back to direct claude\n' "${repo_root:-unresolved}" >&2
-      _claude_invoke_exec claude --settings "$CLAUDE_INVOKE_NO_TG_SETTINGS" "$@"
+      _claude_invoke_exec claude --settings "$settings" "$@"
       return $?
     fi
-    _claude_invoke_exec node "$wrapper" -- --settings "$CLAUDE_INVOKE_NO_TG_SETTINGS" "$@"
+    _claude_invoke_exec node "$wrapper" -- --settings "$settings" "$@"
   else
-    _claude_invoke_exec claude --settings "$CLAUDE_INVOKE_NO_TG_SETTINGS" "$@"
+    _claude_invoke_exec claude --settings "$settings" "$@"
   fi
 }

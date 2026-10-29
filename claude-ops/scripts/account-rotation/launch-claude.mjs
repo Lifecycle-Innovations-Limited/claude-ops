@@ -230,6 +230,10 @@ let session;
 try {
   session = spawnWithAccount(args, config, state, { env: baseEnv, detached: false, stdio: 'inherit' });
 } catch (err) {
+  if (err.code === 'DIRECT_OAUTH_SETTINGS_COMPOSITION_FAILED') {
+    console.error('claude-rotate-launcher: direct OAuth settings composition failed');
+    process.exit(2);
+  }
   console.error(`claude-rotate-launcher: spawnWithAccount failed (${err.message})`);
   fallback();
 }
