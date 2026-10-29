@@ -67,11 +67,14 @@ acquire_lock() {
   local wait_deadline=$((SECONDS + LOCK_WAIT_S))
   local stale_deadline=$((SECONDS + LOCK_TIMEOUT_S))
   while ! mkdir "$d" 2>/dev/null; do
-    [ "$SECONDS" -ge "$wait_deadline" ] && return 1
+    # Reclaim first, then give up. With equal defaults the stale check must
+    # run before the wait deadline returns, or a dead lock is never cleared.
     if [ "$SECONDS" -ge "$stale_deadline" ] &&
       [ -n "$(find "$d" -maxdepth 0 -mmin +"$LOCK_STALE_MIN" 2>/dev/null)" ]; then
       rmdir "$d" 2>/dev/null || true
+      continue
     fi
+    [ "$SECONDS" -ge "$wait_deadline" ] && return 1
     tries=$((tries + 1))
     sleep 0.05
   done
