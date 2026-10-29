@@ -299,6 +299,48 @@ function buildDirectOauthSettingsOverride() {
   }
 }
 
+const DIRECT_OAUTH_ENV_OVERRIDE = {
+  ANTHROPIC_BASE_URL: '',
+  ANTHROPIC_API_BASE: '',
+  ANTHROPIC_API_KEY: '',
+  ANTHROPIC_AUTH_TOKEN: '',
+};
+
+/**
+ * Add the direct-OAuth credential-clearing overlay to a claude arg list.
+ * Without a caller-supplied --settings the shared override file is appended.
+ * With one (inline JSON or a file path) the caller's settings are kept and the
+ * credential overrides are merged into them, so a caller that passes its own
+ * --settings (e.g. the Telegram plugin disable) does not lose the overlay.
+ * Unreadable caller settings are left untouched.
+ */
+export function applyDirectOauthSettings(args) {
+  const idx = args.findIndex((a) => a === '--settings' || a.startsWith('--settings='));
+  if (idx === -1) {
+    const overridePath = buildDirectOauthSettingsOverride();
+    return overridePath ? [...args, '--settings', overridePath] : args;
+  }
+  const inline = args[idx].startsWith('--settings=');
+  const valueIdx = inline ? idx : idx + 1;
+  const raw = inline ? args[idx].slice('--settings='.length) : args[valueIdx];
+  if (raw == null) return args;
+  try {
+    const doc = raw.trim().startsWith('{') ? JSON.parse(raw) : JSON.parse(readFileSync(raw, 'utf8'));
+    const merged = { ...doc, env: { ...(doc.env || {}), ...DIRECT_OAUTH_ENV_OVERRIDE } };
+    if (!existsSync(DIRECT_OAUTH_SETTINGS_DIR)) {
+      mkdirSync(DIRECT_OAUTH_SETTINGS_DIR, { recursive: true });
+    }
+    const outPath = join(DIRECT_OAUTH_SETTINGS_DIR, `direct-oauth.${process.pid}.${Date.now()}.settings.json`);
+    writeFileSync(outPath, JSON.stringify(merged, null, 2));
+    const next = [...args];
+    if (inline) next[idx] = `--settings=${outPath}`;
+    else next[valueIdx] = outPath;
+    return next;
+  } catch {
+    return args;
+  }
+}
+
 /**
  * Every spawned session authenticates directly, with its own OAuth token.
  *
@@ -400,11 +442,8 @@ export function spawnWithAccount(args, config, state, opts = {}) {
 
   const directOauthToken = childEnv.CLAUDE_CODE_OAUTH_TOKEN && !isLegacyRelayToken(childEnv.CLAUDE_CODE_OAUTH_TOKEN);
   let spawnArgs = args;
-  if (directOauthToken && !childEnv.ANTHROPIC_BASE_URL && !args.includes('--settings')) {
-    const overridePath = buildDirectOauthSettingsOverride();
-    if (overridePath) {
-      spawnArgs = [...args, '--settings', overridePath];
-    }
+  if (directOauthToken && !childEnv.ANTHROPIC_BASE_URL) {
+    spawnArgs = applyDirectOauthSettings(args);
   }
 
   const proc = spawn(childEnv.CLAUDE_REAL_BIN || 'claude', spawnArgs, {
