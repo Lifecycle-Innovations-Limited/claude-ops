@@ -618,7 +618,7 @@ def diagnose_config(base=None, home=None, now=None, active_sid=None):
         pass
     elif problem or not isinstance(settings, dict):
         out.append(finding('settings-unparsable', 'high', settings_path, problem or 'not an object',
-                           'Not applied by this plugin. Restore settings.json from backup with Sam\'s approval.'))
+                           'Not applied by this plugin. Restore settings.json from backup with the owner\'s approval.'))
     else:
         hooks = settings.get('hooks') if isinstance(settings.get('hooks'), dict) else {}
         for event, groups in sorted(hooks.items()):
@@ -633,7 +633,7 @@ def diagnose_config(base=None, home=None, now=None, active_sid=None):
                         out.append(finding('settings-hook-missing:%s/%d/%d' % (event, gi, hi), 'high', settings_path,
                                            '; '.join('%s %s' % (p, issue) for p, issue in bad),
                                            'Preferred: restore the missing script (if this hook is a guard, removing it unguards the tool). '
-                                           'Alternative with Sam\'s approval: apply the patch. Never applied automatically.',
+                                           'Alternative with the owner\'s approval: apply the patch. Never applied automatically.',
                                            patch=[dict(op='remove', path='/hooks/%s/%d/hooks/%d' % (pointer_escape(event), gi, hi))]))
 
     installed_path = home / '.claude/plugins/installed_plugins.json'
@@ -642,7 +642,7 @@ def diagnose_config(base=None, home=None, now=None, active_sid=None):
         pass
     elif problem or not isinstance(installed, dict):
         out.append(finding('installed-plugins-unparsable', 'medium', installed_path, problem or 'not an object',
-                           'Not applied by this plugin. Restore from backup with Sam\'s approval.'))
+                           'Not applied by this plugin. Restore from backup with the owner\'s approval.'))
     elif isinstance(installed.get('plugins'), dict):
         for name, rows_ in sorted(installed['plugins'].items()):
             rows = rows_ if isinstance(rows_, list) else [rows_]
@@ -652,7 +652,7 @@ def diagnose_config(base=None, home=None, now=None, active_sid=None):
                     suffix = '/%d' % i if isinstance(rows_, list) else ''
                     out.append(finding('plugin-install-missing:%s%s' % (name, suffix), 'medium', installed_path,
                                        '%s: installPath does not exist: %s' % (name, path[:200]),
-                                       'Reinstall the plugin, or with Sam\'s approval apply the patch to drop the stale entry. Never applied automatically.',
+                                       'Reinstall the plugin, or with the owner\'s approval apply the patch to drop the stale entry. Never applied automatically.',
                                        patch=[dict(op='remove', path='/plugins/%s%s' % (pointer_escape(name), suffix))]))
 
     out.sort(key=lambda f: (SEVERITY_ORDER[f['severity']], f['id']))
@@ -694,7 +694,7 @@ def apply_fix(s, ids, base=None, home=None, now=None):
             results.append(dict(id=fid, status='noop', reason='no current finding with this id (already fixed, or never present)'))
             continue
         if not found['autoFixable']:
-            results.append(refuse(fid, 'not auto-fixable or outside this plugin; proposed patch needs Sam\'s approval and is never applied here', found))
+            results.append(refuse(fid, 'not auto-fixable or outside this plugin; proposed patch needs the owner\'s approval and is never applied here', found))
             continue
         stamp = time.time()
         fix_id = 'fix-%d-%s' % (int(stamp), digest([fid, stamp])[:8])

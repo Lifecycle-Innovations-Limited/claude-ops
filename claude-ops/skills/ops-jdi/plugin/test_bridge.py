@@ -537,7 +537,7 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 with b.store('s', root):
                     pass
-            os.chmod(root, 0o755)
+            os.chmod(root, 0o750)
             with self.assertRaises(ValueError):
                 b.private_dir(root)
 

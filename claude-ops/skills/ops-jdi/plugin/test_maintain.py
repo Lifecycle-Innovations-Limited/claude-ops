@@ -40,7 +40,7 @@ class Fixture:
         (self.base / 'types/index.d.ts').write_text('export {}\n')
         (self.base / 'hooks/register.tsx').write_text('export {}\n')
         (self.base / 'hooks/bridge.py').write_text('#!/usr/bin/env python3\nprint(1)\n')
-        os.chmod(self.base / 'hooks/bridge.py', 0o755)
+        os.chmod(self.base / 'hooks/bridge.py', 0o700)
         (self.base / 'hooks/hooks.json').write_text(json.dumps({'modules': ['./register.tsx'], 'hooks': {'Stop': [
             {'hooks': [{'type': 'command', 'command': 'python3 -I "${CLAUDE_PLUGIN_ROOT}/hooks/bridge.py"'}]}]}}))
         (self.home / '.claude/plugins').mkdir(parents=True)
@@ -90,7 +90,7 @@ class DiagnoseTests(unittest.TestCase):
         self.assertEqual(self.fx.diagnose(), [])
 
     def test_finding_shape(self):
-        os.chmod(self.fx.base / 'hooks/bridge.py', 0o644)
+        os.chmod(self.fx.base / 'hooks/bridge.py', 0o600)
         (finding,) = self.fx.diagnose()
         self.assertEqual(set(finding), {'id', 'severity', 'source', 'evidence', 'proposedFix', 'autoFixable', 'patch'})
         self.assertIn(finding['severity'], ('high', 'medium', 'low'))
@@ -150,7 +150,7 @@ class DiagnoseTests(unittest.TestCase):
         self.assertTrue(all(not f['autoFixable'] for f in found.values()))
 
     def test_exec_bit_on_own_scripts_is_low_and_autofixable(self):
-        os.chmod(self.fx.base / 'hooks/bridge.py', 0o644)
+        os.chmod(self.fx.base / 'hooks/bridge.py', 0o600)
         (item,) = self.fx.diagnose()
         self.assertEqual((item['id'], item['severity'], item['autoFixable']), ('exec-bit:hooks/bridge.py', 'low', True))
 
@@ -202,7 +202,7 @@ class DiagnoseTests(unittest.TestCase):
 
     def test_diagnose_is_idempotent_and_read_only(self):
         self.fx.state('old.json', 8)
-        os.chmod(self.fx.base / 'hooks/bridge.py', 0o644)
+        os.chmod(self.fx.base / 'hooks/bridge.py', 0o600)
         before = {p: (p.stat().st_mode, sha(p)) for p in self.fx.tmp.rglob('*') if p.is_file()}
         first = self.fx.diagnose()
         second = self.fx.diagnose()
@@ -266,7 +266,7 @@ class IncidentTests(unittest.TestCase):
     def test_cli_end_to_end_in_isolated_copy(self):
         plugin = self.fx.base
         (plugin / 'hooks/bridge.py').write_bytes((HERE / 'hooks/bridge.py').read_bytes())
-        os.chmod(plugin / 'hooks/bridge.py', 0o755)
+        os.chmod(plugin / 'hooks/bridge.py', 0o700)
         self.fx.state('old.json', 8)
         env = dict(os.environ, HOME=str(self.fx.home))
         run = lambda *args, stdin='': subprocess.run([sys.executable, '-I', str(plugin / 'hooks/bridge.py'), *args, '--session', 'cli'],
@@ -331,28 +331,28 @@ class ApplyFixTests(unittest.TestCase):
 
     def test_exec_bit_fix_backup_hashes_and_mode_rollback(self):
         script = self.fx.base / 'hooks/bridge.py'
-        os.chmod(script, 0o644)
+        os.chmod(script, 0o600)
         pre = sha(script)
         (result,) = self.fx.apply(self.s, ['exec-bit:hooks/bridge.py'])
         self.assertEqual(result['status'], 'applied')
-        self.assertEqual(stat_mode(script), 0o744)
+        self.assertEqual(stat_mode(script), 0o700)
         self.assertEqual((result['preHash'], result['postHash'], sha(result['backup'])), (pre, pre, pre))
         self.assertTrue(result['validated'])
         self.assertEqual(self.fx.diagnose(), [])
         self.assertEqual(self.fx.rollback(self.s, result['fixId'])['status'], 'rolled-back')
-        self.assertEqual(stat_mode(script), 0o644)
+        self.assertEqual(stat_mode(script), 0o600)
 
     def test_exec_bit_rollback_conflict_when_mode_changed_again(self):
         script = self.fx.base / 'hooks/bridge.py'
-        os.chmod(script, 0o644)
+        os.chmod(script, 0o600)
         (result,) = self.fx.apply(self.s, ['exec-bit:hooks/bridge.py'])
-        os.chmod(script, 0o700)
+        os.chmod(script, 0o500)
         self.assertEqual(self.fx.rollback(self.s, result['fixId'])['status'], 'conflict')
-        self.assertEqual(stat_mode(script), 0o700)
+        self.assertEqual(stat_mode(script), 0o500)
 
     def test_exec_bit_rollback_conflict_when_bytes_changed(self):
         script = self.fx.base / 'hooks/bridge.py'
-        os.chmod(script, 0o644)
+        os.chmod(script, 0o600)
         (result,) = self.fx.apply(self.s, ['exec-bit:hooks/bridge.py'])
         script.write_text('#!/usr/bin/env python3\nprint(2)\n')
         self.assertEqual(self.fx.rollback(self.s, result['fixId'])['status'], 'conflict')
@@ -360,7 +360,7 @@ class ApplyFixTests(unittest.TestCase):
 
     def test_apply_resolution_satisfies_resolve_incident_contract(self):
         script = self.fx.base / 'hooks/bridge.py'
-        os.chmod(script, 0o644)
+        os.chmod(script, 0o600)
         (result,) = self.fx.apply(self.s, ['exec-bit:hooks/bridge.py'])
         resolution = result['resolution']
         self.assertEqual(set(resolution), {'source', 'backup', 'validation', 'rollback', 'preHash', 'postHash'})
@@ -385,7 +385,7 @@ class ApplyFixTests(unittest.TestCase):
         results = self.fx.apply(self.s, ['settings-hook-missing:Stop/0/0', 'plugin-install-missing:gone@m/0'])
         self.assertEqual([r['status'] for r in results], ['refused', 'refused'])
         self.assertIn('/hooks/Stop/0/hooks/0', json.dumps(results[0]['patch']))
-        self.assertIn('Sam', results[0]['reason'])
+        self.assertIn('owner', results[0]['reason'])
         self.assertEqual(sha(self.fx.home / '.claude/settings.json'), settings_before)
         self.assertEqual(sha(self.fx.home / '.claude/plugins/installed_plugins.json'), installed_before)
         self.assertEqual(self.s['fixes'], [])

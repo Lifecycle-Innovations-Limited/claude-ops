@@ -100,7 +100,7 @@ Run `python3 -I <modroot>/repair_fixture.py` offline. It reproduces a JSON parse
 - `~/.claude/settings.json`: only the `hooks` tree is walked, and only the **absolute script paths** in each command are checked for existence. The `env` block, tokens, arguments and `KEY=value` prefixes are never read into a finding or printed,
 - `~/.claude/plugins/installed_plugins.json`: entries whose `installPath` is missing.
 
-Each finding is `{id, severity, source, evidence, proposedFix, autoFixable, patch}`. Findings outside this plugin carry the exact JSON-pointer `patch` that would fix them, as a proposal for Sam. Ids are deterministic (`exec-bit:hooks/bridge.py`, `settings-hook-missing:Stop/0/0`, `plugin-install-missing:name@market/0`, `runtime-stale:<file>.json` ...).
+Each finding is `{id, severity, source, evidence, proposedFix, autoFixable, patch}`. Findings outside this plugin carry the exact JSON-pointer `patch` that would fix them, as a proposal for the owner. Ids are deterministic (`exec-bit:hooks/bridge.py`, `settings-hook-missing:Stop/0/0`, `plugin-install-missing:name@market/0`, `runtime-stale:<file>.json` ...).
 
 | Command | Effect |
 |---|---|
@@ -116,7 +116,7 @@ Direct bridge use: `diagnose-config` (stdin `{"generation":G,"record":true|false
 
 **Never applied, only proposed:** anything in `settings.json`, `installed_plugins.json`, other plugins, hooks of other plugins, managed settings, guards, permissions, credentials or auth. These findings are refused by `apply-fix` with their patch. A missing guard script is better restored than removed from settings.
 
-**Not automated:** repairing a corrupt `plugin.json`/`hooks.json` (restore from backup; guessing content is not a fix), reinstalling plugins, resolving incidents (stays with `resolve-incident` and its receipts), recent corrupt state files (kept on purpose for diagnosis until 7 days old), and any scheduled or recurring run. `maintain` runs only when asked. A recorded incident for a finding outside this plugin has no automatic way to close; give it a `wait` with Sam's approval pointer, or fix the cause and resolve it by hand.
+**Not automated:** repairing a corrupt `plugin.json`/`hooks.json` (restore from backup; guessing content is not a fix), reinstalling plugins, resolving incidents (stays with `resolve-incident` and its receipts), recent corrupt state files (kept on purpose for diagnosis until 7 days old), and any scheduled or recurring run. `maintain` runs only when asked. A recorded incident for a finding outside this plugin has no automatic way to close; give it a `wait` with the owner's approval pointer, or fix the cause and resolve it by hand.
 
 Tests: `test_maintain.py` (temp fixtures only: findings, secrets never in output, only named files opened, record/idempotence, apply/backup/hash/rollback/conflict, refusal outside the plugin, symlinks, lock, state migration) and `maintain.test.tsx` (command wiring, zero model calls).
 

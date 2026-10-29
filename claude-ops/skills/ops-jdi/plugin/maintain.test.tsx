@@ -23,7 +23,7 @@ test('maintain is read-only by default: diagnose without recording, no fix, no m
   expect(stdinFor(f, 'diagnose-config').record).toBe(false)
   expect(r.text).toContain('alleen lezen')
   expect(r.text).toContain('settings-hook-missing:Stop/0/0')
-  expect(r.text).toContain('voorstel voor Sam, niet toegepast')
+  expect(r.text).toContain('voorstel voor de eigenaar, niet toegepast')
   expect(f.model.fork + f.model.complete + f.model.classify).toBe(0)
 })
 test('maintain record asks the bridge to record incidents', async ($, on) => {

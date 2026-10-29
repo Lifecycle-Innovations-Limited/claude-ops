@@ -107,7 +107,7 @@ const maintain = async ($: import('claude-code').EngineInterface, mode: string) 
   } catch {
     return 'Onderhoud: diagnose mislukt. Er is niets gewijzigd.'
   }
-  const line = (f: Finding) => `- [${f.severity}] ${f.id}: ${f.evidence}${f.autoFixable ? ' (herstelbaar binnen de plugin)' : ` | voorstel voor Sam, niet toegepast: ${f.proposedFix}`}`
+  const line = (f: Finding) => `- [${f.severity}] ${f.id}: ${f.evidence}${f.autoFixable ? ' (herstelbaar binnen de plugin)' : ` | voorstel voor de eigenaar, niet toegepast: ${f.proposedFix}`}`
   const shown = findings.slice(0, 15).map(line)
   const more = findings.length > shown.length ? [`... en ${findings.length - shown.length} meer`] : []
   const head = findings.length === 0
