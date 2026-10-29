@@ -282,14 +282,20 @@ function buildDirectOauthSettingsOverride(args) {
     let caller = {};
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
-      if (arg === '--') { rest.push(...args.slice(i)); break; }
+      if (arg === '--') {
+        rest.push(...args.slice(i));
+        break;
+      }
       let document;
       if (arg === '--settings') {
         if (args[i + 1] == null) throw new Error('--settings requires a value');
         document = args[++i];
       } else if (arg.startsWith('--settings=')) {
         document = arg.slice('--settings='.length);
-      } else { rest.push(arg); continue; }
+      } else {
+        rest.push(arg);
+        continue;
+      }
       caller = JSON.parse(document.trimStart().startsWith('{') ? document : readFileSync(document, 'utf8'));
       if (!caller || Array.isArray(caller) || typeof caller !== 'object') throw new Error('settings must be an object');
     }
@@ -306,7 +312,10 @@ function buildDirectOauthSettingsOverride(args) {
     if (!existsSync(DIRECT_OAUTH_SETTINGS_DIR)) {
       mkdirSync(DIRECT_OAUTH_SETTINGS_DIR, { recursive: true });
     }
-    const outPath = join(DIRECT_OAUTH_SETTINGS_DIR, `direct-oauth.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.settings.json`);
+    const outPath = join(
+      DIRECT_OAUTH_SETTINGS_DIR,
+      `direct-oauth.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.settings.json`,
+    );
     const tmpPath = `${outPath}.${process.pid}.tmp`;
     writeFileSync(tmpPath, JSON.stringify(overrideDoc, null, 2), { mode: 0o600 });
     renameSync(tmpPath, outPath); // atomic replace — safe under concurrent spawns
@@ -443,7 +452,11 @@ export function spawnWithAccount(args, config, state, opts = {}) {
   });
 
   if (settingsOverride) {
-    const cleanup = () => { try { unlinkSync(settingsOverride.path); } catch {} };
+    const cleanup = () => {
+      try {
+        unlinkSync(settingsOverride.path);
+      } catch {}
+    };
     // Registered before the launcher receives proc: its exit handler may exit
     // the parent before close fires, so remove caller settings synchronously.
     proc.once('exit', cleanup);
