@@ -1,0 +1,6 @@
+{
+  "name": "just-do-it",
+  "version": "0.1.0",
+  "description": "Continue authorized work through verification and delivery; surface and repair actionable setup issues.",
+  "types": "./types/index.d.ts"
+}
