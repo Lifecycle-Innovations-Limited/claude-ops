@@ -65,6 +65,37 @@ def files(root):
             for p in root.rglob("*") if p.is_file() and "runtime" not in p.relative_to(root).parts}
 
 
+RUNTIME_FILES = ('.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/bridge.py',
+                 'hooks/register.tsx', 'types/index.d.ts', 'hooks/fleet_guard.py',
+                 'hooks/fleet.ts', 'hooks/fleet-source.py', 'hooks/fleet-runtime.ts',
+                 'hooks/fleet-entry.ts')
+
+
+def runtime_manifest(root):
+    """Explicit runtime payload; generated host declarations and unknown files stay private."""
+    root = Path(root)
+    result = {}
+    for rel in RUNTIME_FILES:
+        path = root / rel
+        if any(p.is_symlink() for p in (path, *path.parents)):
+            raise RuntimeError('Runtime manifest refuses symlinks')
+        if path.is_file():
+            result[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return result
+
+
+def compare_runtime(source, target):
+    """Read-only comparison, never adoption or installation authority."""
+    source, target = Path(source), Path(target)
+    left, right = runtime_manifest(source), runtime_manifest(target)
+    return dict(source=left, target=right,
+                changed=sorted(k for k in left.keys() & right.keys() if left[k] != right[k]),
+                missing=sorted(left.keys() - right.keys()),
+                preserved=sorted(str(p.relative_to(target)) for p in target.rglob('*')
+                                 if p.is_file() and str(p.relative_to(target)) not in RUNTIME_FILES
+                                 and 'runtime' not in p.relative_to(target).parts))
+
+
 def copy_runtime(source, target, overwrite=False):
     if source.exists():
         safe_tree(source)

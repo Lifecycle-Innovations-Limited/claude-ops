@@ -1,163 +1,101 @@
 # Just Do It
 
-Local hybrid plugin for TEAM-1. Native command hooks maintain an atomic session cache and gate explicit unfinished work. The module displays that same cache, provides pause/resume and an on-demand semantic audit. It does not intercept `classic.Stop`, inject a large prompt, start timers, or run recursive Claude subprocesses.
+An opt-in continuation plugin. Native Python command hooks maintain a session cache; the module shows that cache and offers pause, resume, maintenance and an advisory audit. Linear remains the work record. This cache never grants permission.
 
-## Cost model: no model calls except an explicit audit
+## Evidence and delivery
 
-- The Stop gate is **deterministic**: `hooks/bridge.py` is a plain command hook (no network, no model, no subprocess). Healthy idle conversations and every ordinary Stop make **zero model calls**.
-- The earlier `type: "agent"` Stop hook was **removed because of measured cost**: it spawned a subagent on every Stop (documented up to 50 tool-use turns), and a paid smoke of that exact shape ended `error_max_budget_usd` at a reported $1.021233 for a trivial 9-turn task. A `type: "prompt"` Stop hook was deliberately not added either: it cannot see this plugin's session state, so it cannot judge scope or DoD.
-- The **only** model call is `/just-do-it audit`, requested by the human or by the main agent. It uses `$.model.fork` (one tool-less completion over the session transcript, see `ModelForkRequest`/`ModelForkResult`). The pane shows `audits op verzoek: N` and the audit result prints the token usage, so the cost is visible.
+For action requests declare outcomes with DoD, owner and a real issue identifier. Successful receipts, explicit inspection and typed transcript/file pointers form an evidence index. Metadata receipts cannot prove an outcome. Dependency checks are transitive. Changed files, evidence or generation require reinspection.
 
-## Acceptance: verified AND delivered
+`deliver` records the exact proposed final text and outcome ids. Stop compares its hash against the actual final assistant message and checks every delivery-relevant outcome. Missing, empty, mismatched or incomplete delivery remains open. Matching evidence and delivery produce `delivered; semantic review pending`.
 
-A contract is accepted at Stop only when all hold:
+**No current route certifies independent semantic completion.** `audit-record` is callable by the implementing agent, so its verdict, provenance fields and even text starting with `ADEQUAAT` cannot establish independence. `/just-do-it audit` calls the host's documented `model.fork` once and records advisory telemetry only. HIATEN, ONZEKER, empty/error and positive advisory replies all leave semantic verification pending. Hashes bind bytes; they do not establish correctness. No accepted/verified label is emitted by the current completion path.
 
-1. Every required (non-suspended) outcome has current-generation, inspected, typed evidence and its dependencies are ready (unchanged rules below).
-2. A **delivery record** exists whose `messageHash` equals the digest of the *actual* `last_assistant_message` in the current Stop payload.
-3. That record references **every** delivery-relevant outcome (all non-suspended outcomes of the contract).
+Bridge commands use `python3 -I <plugin>/hooks/bridge.py ACTION --session SESSION_ID`. JSON actions read stdin; use current generation. Omit revision unless deliberately using optimistic concurrency.
 
-Delivery record: the agent runs `python3 -I <modroot>/hooks/bridge.py deliver --session <id>` with stdin `{"generation":G,"text":"<exact final message>","outcomes":["id",...]}` (or `"messageHash"` instead of `text`: the bridge digest, which is sha256 of the JSON-encoded string; prefer `text`). It then ends the turn with exactly that text. The record is only an announcement: the bridge compares it with the real Stop payload and never accepts the assertion alone.
+- `contract`: `{"generation":1,"issue":"TEAM-1","outcomes":[{"id":"result","owner":"session","dod":"Required effect","dependencies":[]}]}`.
+- `evidence`: `{"generation":1,"id":"result","receipt":"actual-id","pointer":{"type":"transcript","tool":"Bash","tool_use_id":"actual-id","outputHash":"actual-hash"},"inspection":"What the output establishes"}`. File pointers require an actual Read receipt and current file hash.
+- `deliver`: `{"generation":1,"text":"Exact final text","outcomes":["result"]}`.
+- `reconcile`: `{"generation":2,"items":[{"id":"result","disposition":"retain"}]}`. Cover every unresolved `needsReconciliation` outcome in one batch, even when its generation is current. `contract` only declares new outcomes or repeats an identical existing contract without changing its generation; changes to an existing contract require authorized `reconcile`. Pending lists retain owned work requiring reconciliation. A question ending in `?` can receive an answer while that work remains visible in `next` and pending. Supported dispositions are `retain`, `amend`, `add`, `pause`, `cancel`, `supersede`. Every entry binds to the observed UserPromptSubmit generation and full prompt hash; scope changes also require an exact quote within the retained first 2,000 prompt characters. Unknown legacy prompt provenance cannot authorize reconciliation. `amend` requires the new `dod`; `add` requires a new id, `dod`, `owner` and a top-level `issue` matching `[A-Z][A-Z0-9]+-\d+` (the same syntax validator as `contract`), or top-level `inheritIssueFrom` naming an existing outcome whose issue passes that validator. Example: `{"generation":2,"inheritIssueFrom":"result","items":[{"id":"result","disposition":"retain"},{"id":"extra","disposition":"add","quote":"add extra","dod":"Extra effect","owner":"session"}]}`. Issue and inheritance cannot be combined; null and arbitrary identifiers are refused atomically. Syntax validation does not verify the issue against Linear.  `supersede` requires a different existing or batch-added `replacement`. Existing ownership, receipts, contract and disposition history survive. Pause/cancel/supersede suspend the old outcome without declaring completion. Quotes link sources; semantic interpretation still needs review. Contract and reconciliation cache edits validate transactionally before committing.
+- Optional contract `criteria`: `[{"id":"bytes","kind":"file-sha256","path":"/absolute/result","sha256":"<64 lowercase hex characters>"}]`. `check-outcome` with generation/id records each criterion against the current criteria hash and generation. Stop rechecks exact bytes through a bounded no-follow directory walk. `{"id":"meaning","kind":"semantic"}` explicitly remains pending. Unknown kinds, including commands, are refused. These checks require ordinary inspected evidence too; byte matches never certify semantic acceptance. Outcomes without criteria remain evidence-only and semantically pending.
+- `wait`/`release-wait`: concrete observed prerequisite pointers, current generation and collection/id. Waiting propagates to dependents; independent work continues. Release never grants authority.
 
-| Situation at Stop | Result |
-|---|---|
-| Evidence complete, no delivery record | block once with `record delivery for outcome X ...`; repeats escalate through the existing no-progress diagnosis, never to acceptance |
-| Record exists, hash differs from actual final message | block with `delivery mismatch ...` |
-| Record matches but omits an outcome | block with `delivery omits outcome X ...` |
-| Empty final message | block |
-| Record references an unknown outcome | `deliver` itself is rejected |
-| Record from an older generation | cleared on every new generation (prompt, pause, resume, interrupt); `deliver` with an old generation is rejected as stale |
-| Record matches, all outcomes referenced | accepted; phase `accepted; verified and delivered; ...` |
+Pause, interruption, approval refusal and native loop ceilings win. Repeated unchanged work requests diagnosis and an actual transcript-bound incomplete handoff. No recursive Claude process, timer, daemon or cron is created. Plain questions need no artificial contract. Suspended outcomes remain unresolved rather than silently complete.
 
-Phases carry `semantic audit advised` while no audit has been recorded for the current generation (`semantic audit recorded` after one). The blocking Stop reason then tells the main agent to run `/just-do-it audit` itself. The audit is advice: acceptance never depends on it.
+## Native prompt provenance
 
-## Semantic audit (on demand)
+The local 2.1.312 types document the native envelope as BaseHookInput plus `hook_event_name: UserPromptSubmit`, `prompt: string`, optional `source: user|sdk|system|loop_wakeup|schedule_wakeup|poll_event`, and optional `session_title`. They describe `source=user` as the interactive composer. This serialized field does not authenticate an arbitrary bridge CLI invocation. All serialized prompt callbacks now preserve intent, generation, evidence and waits, including callbacks claiming `source=user`, `origin=composer` or `authenticated=true`. `lastPromptSource.authenticated` is always false. `reconcile` refuses even legacy cached user provenance because no protected module-to-Python authority transport has been established.
 
-`/just-do-it audit` reads the cached contract through the bridge, asks `$.model.fork` for a verdict (`ADEQUAAT`, `HIATEN` or `ONZEKER` plus short points), and records only telemetry through the bridge action `audit-record` (request counter, truncated advisory verdict, usage, `acceptance: "none"`). It never touches outcomes, evidence, deliveries, waits or phase logic, and never claims completion. Safe failure modes: no contract, unreadable bridge, `nothing-to-fork`, API error, empty reply or a throwing fork all produce a "geen verdict" report; without a contract or bridge no model call is made at all. New evidence or a new generation marks the last audit stale; the counter survives.
+Every unbound native `UserPromptSubmit` advances a separate `observationRevision` and sets `promptBindingPending`, regardless of missing/unknown/system/peer/user claims. This is an observation barrier, not new Sam authority: intent, generation, owned contracts, evidence/history, receipt inspection records and valid waits survive. Evidence inspection and mechanical checks are revision-bound, so old verification is stale; audit telemetry is marked stale and delivery candidates from older observations cannot be recognized. New CLI inspection/check/delivery records use the current observation revision but cannot clear the unresolved binding. No CLI authority flag or reset action is exposed; pause/resume does not clear it. A supported protected host transport remains required before completion recognition can resume. Stop can still yield for valid prerequisite/background waits, ordinary conversation and status questions; those yields never assert delivery. A status answer preserves pending owned work. Other unbound work yields incomplete through the existing loop ceiling or transcript handoff. Repeated observations, including identical text without a host event id, each create a barrier; existing event-id deduplication remains unchanged. Legacy caches migrate additively with revision zero and no new binding claim.
 
-## Admission and acceptance
+The module observes documented `prompt.submit` only, retaining engine-pinned `origin` and `isMeta` in its session atom. Its observation binds session, current cached generation, local sequence, SHA-256 of exact text and optional running turn id. The host supplies no message id on PromptSubmitInput; `observationId` is explicitly a local binding, not a host message id. Only non-meta composer origin is classified human locally. No observation is serialized to the CLI as authority. It always calls `next(e)` unchanged; the types state that next runs lower module hooks, then native UserPromptSubmit settings hooks, then enters the prompt. A policy that skips this hook leaves no observation; no alternate event is used to evade it. Observation/hash failures still forward the prompt unchanged. This is host-local observation, not completed native authorization wiring. Explicit existing module pause/resume controls remain separate. Full human intent updates and scope reconciliation remain unavailable through Python pending a supported protected handoff.
 
-Official documentation distinguishes native plugin command hooks from function module hooks:
-https://code.claude.com/docs/en/hooks
-https://code.claude.com/docs/en/settings
+## Incident provenance
 
+Every new failed tool callback creates an incident linked to its exact receipt id, generation, inputHash and outputHash. Identical duplicate callbacks are no-ops across the success/failure callback names. Conflicting callback payloads preserve the original receipt and open a provenance-conflict incident. Each distinct call keeps its own incident even when command/output bytes repeat.
 
-**Still unproven (no completion claim):**
+Empty failure output and timeouts start with `effect: unknown`. Inspect the source and read back actual effects before retrying a write or requesting waiver. `waive-incident` requires the existing inspected local evidence, an allowed classification, substantive note, exact pointer and explicit effect (`not-started`, `confirmed-no-effect`, or `effect-confirmed`). These are agent assertions with evidence linkage, not independently verified semantic facts. `resolve-incident` additionally requires owned plugin source/backup hashes, current Read receipts, validation and rollback records.
 
-- Live acceptance of this version in the protected runtime: premature stop, continuation, typed evidence, delivery record and accepted final answer have only been exercised by offline fixtures (`test_bridge.py`, `test_repairs.py`, module tests), not by a real session. `smoke.py` has been updated but not run.
-- Measured audit cost: `/just-do-it audit` has never been run against a real model; token usage and cache behaviour of `$.model.fork` are unmeasured.
-- Durable installation, restart/resume and restore of the previous version; independent review.
-- Multi-outcome and human-wait cases, and real maintenance integration, in the protected runtime.
-- `tsc -p` for this revision depends on machine resource admission (see Reproduce checks). `tsc` is not on PATH here; the existing TypeScript under `~/.local/share/gstack/node_modules/typescript/bin/tsc` (run with `node`) is the only compiler found.
-- `/just-do-it maintain` and `apply-fix` are verified on temp fixtures, module mocks and one read-only run of `diagnose-config` against this machine. `apply-fix` has not been run on the real plugin tree, and no real fault in a live configuration has been repaired.
+Legacy unresolved tool incidents without an exact sourceReceipt remain unchanged and cannot be waived or resolved through fabricated reconstruction. Their source gap is an open diagnostic obligation. Closed history is preserved.
 
-At `stop_hook_active` the command preserves the native loop ceiling and emits an explicit INCOMPLETE system message with missing work. Native termination can still occur without a handoff record; state remains incomplete. Pause/stop/cancel and approval waits stay authoritative.
+## Maintenance
 
-No arbitrary cycle count means success. After two unchanged repeats, the command requests one diagnostic inspection and concrete blocker delivery. Record `handoff` with current generation, blocker and `pointer: {"type":"transcript-message","path":"actual native transcript_path","message_id":"actual assistant uuid","messageHash":"digest of actual delivered text"}`. The bridge reads back that assistant row and binds it to the Stop delivery hash and pending fingerprint. A new prompt invalidates the record. This verifies delivery identity, not semantic adequacy.
+SessionStart runs a deterministic own-plugin adapter. Successful Write/Edit callbacks to the named own scripts, manifest, hooks config, module and state types trigger rechecking; failed Read/Write/Edit callbacks to those exact paths also trigger diagnosis. Other failures cannot grant repair authority. Hash/mode signatures include missing files; failure fingerprints exclude callback ids, so repeated identical failures deduplicate. A 30-second minimum interval queues work for the next relevant event or prompt; unchanged checks deduplicate for five minutes. There is no timer or daemon, so queued work waits for another event. Pause/interruption wins. Automatic diagnosis checks an explicit allowlist before every declaration-target filesystem access: the three own scripts, manifest, hooks config, `hooks/register.tsx` and `types/index.d.ts`. Absolute/traversal/unknown or malformed declarations produce findings without target probes. Every automatic configuration read, including signatures, manifest checks, SessionStart probes, diagnosis, validation and repair preflight, uses the existing directory-fd no-follow reader, rejecting custom symlink ancestors and leaves. Automatic script repair pins source and archive descriptors and uses descriptor chmod; its validation rollback uses the same bounded reader. Manual repair and general evidence hashing retain their separate behavior. Automatic diagnosis does not search PATH; manual broader diagnosis retains its documented settings/install-path/PATH scope. Diagnosis is limited to named plugin files; repair requires a `just-do-it` manifest and performs at most three owner-execute-bit repairs on the named own scripts. Each repair reuses `apply_fix`, backup/hash validation and conflict-aware rollback. No HOME/config/secret scan runs automatically. State archiving remains a manual maintenance operation because age alone cannot prove an outcome is finished.
 
-## Local integration
+`/just-do-it maintain` reads named plugin files and the hook/install-path portions of the existing settings and installed-plugin records. `maintain record` records high/medium findings; `maintain fix` applies only existing explicitly safe own-plugin repairs. Unknown options remain read-only. External settings/hook/plugin findings are proposals only. Guards, permissions, routing, other plugins, auth and credentials are never changed.
 
-Start a fresh protected session explicitly with `claude --plugin-dir /absolute/path/to/just-do-it`. Keep existing security plugins and hooks enabled. Do not change policy, tiers or permissions. Local durable installation is separate acceptance work; no marketplace publication is needed or performed.
+External diagnostic adapters remain pending. The installed `hook-doctor` skill documents a read-only `node <hook-doctor>/bin/doctor.mjs <project> --json` diagnostic (no network or writes), but it also reads user settings and referenced scripts. It is not invoked automatically: the bridge's closed local-only import/process contract permits no subprocess path, and an external adapter needs a separately bounded host-side integration. No broad repair authority is inferred from its findings. Failures before the Python hook starts, Bash-based config writes, changes outside the exact named files and external edits without a later matching event are not automatically observed. The `maintenance.coverage` field makes this limited adapter scope explicit. Ownership is checked locally by manifest and file ownership; this is not a fleet lease or exclusive-writer proof. Run installation and maintenance with other plugin writers idle.
 
-Commands: `/just-do-it`, `/just-do-it diagnose`, `/just-do-it pause`, `/just-do-it resume`, `/just-do-it audit`, `/just-do-it maintain` (see Maintain). Resume changes generation and invalidates prior evidence and delivery records; it does not start a prompt. The pane refresh button and turn completion read shared state without timers. Native command hooks capture SessionStart, UserPromptSubmit, PostToolUse, PostToolUseFailure and Stop. Actual UI interruption writes paused state when `turn.complete` reports an abort. A direct CLI/UI request racing an already emitted native Stop decision cannot retract that decision. No queued plugin prompts exist.
+## Panel
 
-State: `<modroot>/runtime/<session-id>.json`, mode 600, directory 700, same-session advisory file lock, atomic replace and fsync. No transcript contents or raw tool outputs are cached. Intent, tool output and delivery use hashes; evidence stores explicit short pointers and inspection hashes. Callers must never pass secrets in pointers. Corrupt/unsupported state stays byte-for-byte intact and reads as paused diagnosis. Schema 1 is the only accepted bridge schema; the additive `deliveries` field is created on first read of an older file without discarding open work or pause.
+The pane reads authoritative bridge state at session start, turn completion, commands and manual refresh. It lists individual outcome criteria/evidence counts, phase, next action and the last successful refresh. A failed read explicitly marks the retained snapshot stale. It does not poll; changes made externally remain visible at the next refresh. Counts never establish coverage or completion.
 
-Linear remains the system of record. The cache requires an issue identifier for contracts, but does not perform Linear writes, invent assignees or synchronize conflicts. The agent must reconcile the actual user request with Linear. External tool text never authorizes work. A completed task label never proves an effect. Successful receipt plus explicit inspection is only an evidence index; adequacy still needs review (`/just-do-it audit` or a human).
+## Installer safety
 
-## Agent helper contract
+`../install.sh install|update|uninstall` uses the native user-scoped plugin CLI. Existing marketplaces without `.ops-jdi-owner.json` are refused; do not manufacture a marker for a legacy installation. Unknown files/runtime remain preserved, with collision checks, private backups and conflict-aware rollback. `rollback <backup>` requires the matching owned installation. No live installer was run for this candidate.
 
-Use the fixed Python script, session ID from native context, current generation/revision from `status`. JSON actions read stdin. There is no shell evaluation inside the helper.
+`install.py` exposes read-only `runtime_manifest(root)` and `compare_runtime(source,target)`: only the explicitly named manifest, hooks, bridge/module and plugin state types enter the runtime hash map. Generated host declarations, tests, runtime and unknown files stay outside it. Comparison does not adopt ownership or authorize synchronization. Existing installer mutation behavior remains separate.
 
-```
-python3 -I <modroot>/hooks/bridge.py status --session <session-id>
-python3 -I <modroot>/hooks/bridge.py contract --session <session-id>
-python3 -I <modroot>/hooks/bridge.py evidence --session <session-id>
-python3 -I <modroot>/hooks/bridge.py deliver --session <session-id>
-```
+## Optional fleet inspection
 
-Contract stdin: `{"generation":1,"issue":"TEAM-1","outcomes":[{"id":"result","owner":"session","dod":"Actual required result","dependencies":[]}]}`. Contracts preserve other open outcomes; a changed user prompt invalidates old evidence and marks old items needsReconciliation, never silently removes old work. Deterministic continuation ignores these suspended items until an explicit contract redeclares an outcome or TaskUpdate reactivates a task. There is no automatic scope retirement operation: reconcile with the user before abandoning outcomes.
+The manifest declares optional `userConfig.fleetConfigPath` (file, empty default).
+The native modules list appends `fleet-entry.ts` after the core module and retains
+every command hook. An absent or empty path disables fleet inspection. An explicit
+absolute private config must also enable inspection and supply a nonzero durable
+judge allowance before a session-owned 60-second timer starts. Enabled inspection
+may call the host model; no model calls were made for this offline integration.
+Session end and invalid/disabled config cancel the timer. See
+[the fleet contract](docs/fleet-guard.md) for source bounds and config fields.
 
-Evidence stdin, action `evidence`: `{"generation":1,"collection":"outcomes","id":"result","receipt":"actual-tool-use-id","pointer":{"type":"transcript","tool":"Bash","tool_use_id":"actual-tool-use-id","outputHash":"recorded receipt outputHash"},"inspection":"What the actual output establishes"}`. This references exactly the recorded successful tool output. Alternatively `pointer: {"type":"file","path":"absolute existing owned file","sha256":"actual SHA256"}`: this requires a successful current-generation Read receipt for that exact path and hash. Changed files become pending again. Collections: outcomes/tasks/incidents. Cache stores hashes, output byte count and Read path/hash only. Never put secrets in pointers. Metadata receipts remain rejected. A successful Bash hello is only an index to hello, not proof of an arbitrary outcome. Dependency checks are transitive; missing prerequisites and cycles remain pending. Hashes prove byte identity only.
+Fleet judgments are advisory. A queued advisory is not execution, receipt of an
+effect, authorization, or completion. Native source safety gaps currently prevent
+advisory sending. The protected host-to-native origin transport remains unresolved:
+local human transcript observations never clear `promptBindingPending`, authorize
+bridge reconciliation or establish independent bridge acceptance. There is no
+universal completion guarantee or live runtime acceptance claim.
 
-Deliver stdin, action `deliver`: see Acceptance above. Wait stdin, action `wait`: `{"generation":1,"id":"task-id","kind":"approval","pointer":"actual-approval-request"}`. Other kinds: prerequisite/background. Wait is generation-bound and applies transitively to that task's dependents. Outcomes also accept `collection: "outcomes"`, including transitive outcome dependencies. Independent work continues. An incident can wait using `collection: "incidents"`. `release-wait` requires collection/id/current generation and a concrete observed `pointer`; it clears the condition and evidence for reinspection, never grants approval. Old or legacy waits become reconciliation work when reactivated; a new prompt invalidates authorization, never grants it. Duplicate native tool callbacks use tool-use IDs; concurrent helper writes serialize; the `revision` field is optional and normally omitted: every tool call bumps the revision, so a value read earlier is already stale (measured: a live smoke failed twice on this). Effects are never executed by this controller.
+The runtime hash manifest includes `fleet_guard.py`, `fleet.ts`, `fleet-source.py`,
+`fleet-runtime.ts` and `fleet-entry.ts` alongside the core files. Existing installer
+backup, collision, ownership, runtime and unknown-file preservation rules remain
+applicable; the current unowned marketplace must still be refused.
 
-Module-only action `audit-record` (generation required) stores audit telemetry as described above; agents should use `/just-do-it audit` instead of calling it.
+## Checks and limits
 
-## Maintenance boundaries
-
-Actual PostToolUseFailure and structured error outputs create deduplicated incidents using source/category fingerprints; no raw error text is cached. Generic notifications and repeated policy notices never schedule work. An explicit `incident` action accepts only category `actual failure`; the agent must first verify the source.
-
-Maintenance prescription for the owning agent: inspect actual failure and source; check current resource ownership/peers; discover the existing supported diagnostic tool; preserve a recoverable backup and source hash; make only an authorized smallest repair; rerun the original failing command and inspect output; record evidence and rollback hash. Before rollback compare the current file with the exact post-edit hash; on conflict preserve both and reconcile. Authentication/security changes, account recovery, password changes and new permissions are never automated. The controller never executes a repair. `resolve-incident` requires an inspected current successful local receipt, backup pointer, preHash/postHash SHA256, validation and rollback records, a `source` under this plugin's owned tree (outside runtime), an existing owned backup, matching bytes and current-generation Read receipts for both. Unresolved actual incidents prevent a clean stop except explicit current-generation waits, delivered incomplete handoff, native ceiling or pause. SessionStart parses only this integration's own manifests and checks its Python executable/script readability; it never scans HOME or reads secrets.
-
-Run `python3 -I <modroot>/repair_fixture.py` offline. It reproduces a JSON parse failure in a new temporary fixture, backs up original bytes, repairs and validates, repeats idempotently, rejects a concurrent-edit rollback, then restores and verifies the original hash. This proves the local fixture cycle only.
-
-## Maintain: self-maintenance of the Claude Code setup (TEAM-1)
-
-`/just-do-it maintain` calls bridge action `diagnose-config`. It makes no model call and inspects **only named files**, no HOME sweep:
-
-- this plugin's `.claude-plugin/plugin.json` (parses; `types` file exists) and `hooks/hooks.json` (parses; module files exist; every script path in a hook command exists and is readable; `python3` resolves on PATH),
-- the `runtime/*.json` state files of this plugin (age and parse only),
-- `~/.claude/settings.json`: only the `hooks` tree is walked, and only the **absolute script paths** in each command are checked for existence. The `env` block, tokens, arguments and `KEY=value` prefixes are never read into a finding or printed,
-- `~/.claude/plugins/installed_plugins.json`: entries whose `installPath` is missing.
-
-Each finding is `{id, severity, source, evidence, proposedFix, autoFixable, patch}`. Findings outside this plugin carry the exact JSON-pointer `patch` that would fix them, as a proposal for the owner. Ids are deterministic (`exec-bit:hooks/bridge.py`, `settings-hook-missing:Stop/0/0`, `plugin-install-missing:name@market/0`, `runtime-stale:<file>.json` ...).
-
-| Command | Effect |
-|---|---|
-| `/just-do-it maintain` | Read-only report. Nothing is written, no incident is recorded. Unknown arguments behave the same. |
-| `/just-do-it maintain record` | Same report, and every `high`/`medium` finding becomes a bridge incident (`actual failure`, fingerprint over source, category and finding id), so the Stop gate sees it. `low` findings stay informational. Re-running creates no duplicates. |
-| `/just-do-it maintain fix` | Sends the `autoFixable` finding ids to `apply-fix`. Nothing else. |
-
-Direct bridge use: `diagnose-config` (stdin `{"generation":G,"record":true|false}`, default `record: true`), `apply-fix` (`{"generation":G,"ids":[...]}`), `rollback-fix` (`{"generation":G,"fixId":"..."}`).
-
-**`apply-fix` limits.** It re-runs the diagnosis and only acts on ids that diagnosis reports as `autoFixable` inside this plugin's tree. The caller never supplies a path, so traversal ids and absolute paths find nothing. Two fix kinds exist: (1) a `runtime/*.json` state file that is corrupt or older than 7 days is moved to `runtime/archive/<fixId>/` (bytes preserved, mode 600; refused while its lock is held, for the active session, for symlinks, or if it changed since diagnosis); (2) a missing owner exec bit on `hooks/bridge.py`, `repair_fixture.py` or `smoke.py` is set (`chmod u+x`, a byte copy goes to the archive first). Each apply records backup path, `preHash`/`postHash`, a validation (the diagnosis is re-run and the finding must be gone, otherwise the change is reverted), and a rollback description in the state field `fixes`. The `resolution` object has exactly the fields the existing `resolve-incident` contract asks for (`source`, `backup`, `preHash`, `postHash`, `validation`, `rollback`); a test feeds it into `resolve-incident`. Only the exec-bit kind can satisfy that contract, because it needs a source outside `runtime`; `apply-fix` never closes an incident itself. Applying twice is a no-op.
-
-**`rollback-fix`** restores a fix only if the current bytes and mode still equal what the fix produced. On any difference it returns `status: conflict`, records the reason, and changes nothing, so both the current file and the backup stay.
-
-**Never applied, only proposed:** anything in `settings.json`, `installed_plugins.json`, other plugins, hooks of other plugins, managed settings, guards, permissions, credentials or auth. These findings are refused by `apply-fix` with their patch. A missing guard script is better restored than removed from settings.
-
-**Not automated:** repairing a corrupt `plugin.json`/`hooks.json` (restore from backup; guessing content is not a fix), reinstalling plugins, resolving incidents (stays with `resolve-incident` and its receipts), recent corrupt state files (kept on purpose for diagnosis until 7 days old), and any scheduled or recurring run. `maintain` runs only when asked. A recorded incident for a finding outside this plugin has no automatic way to close; give it a `wait` with the owner's approval pointer, or fix the cause and resolve it by hand.
-
-Tests: `test_maintain.py` (temp fixtures only: findings, secrets never in output, only named files opened, record/idempotence, apply/backup/hash/rollback/conflict, refusal outside the plugin, symlinks, lock, state migration) and `maintain.test.tsx` (command wiring, zero model calls).
-
-## Cost evidence: a Stop makes no model call (free, local)
-
-`test_cost.py` proves, without any provider call, that the Stop hook is a local script: an AST check of `hooks/bridge.py` allows only a closed list of standard-library imports (no `subprocess`, `socket`, `ssl`, `http`, `urllib`, `asyncio`, `importlib`), forbids dynamic import/`eval`/`exec` and `os.system`/`popen`/`spawn*`/`exec*`, and rejects any string that launches a model CLI, names a provider or contains a URL. A Stop run in-process with sockets, `Popen` and `os.system` booby-trapped passes. Every registered hook must be the one `python3 -I bridge.py` command hook.
-
-A timing test runs the real hook 50 times as a subprocess and prints one line, for example `STOP_TIMING runs=50 cpu_median_ms=98.9 ... wall_median_ms=505.7 ...`. It asserts median CPU time < 250 ms, and median wall time < 250 ms unless the machine is saturated (load average above the CPU count; the line says `wall_assert=skipped`). On a loaded machine wall time mostly measures the scheduler and Python start-up.
-
-**This is not a billed measurement.** It shows that the hook is a local script that does no model work. It does not read an invoice, a token counter or a provider log, and it says nothing about what the surrounding session costs.
-
-## Reproduce checks
+Run through the existing resource-admission route after `rb status`:
 
 ```
-python3 -I -m unittest discover -s <modroot> -p 'test*.py' -v
-claude plugin test <modroot>
-tsc -p <modroot>   # run through your own resource admission wrapper if you use one
-claude plugin validate <modroot>
+python3 -I -m unittest discover -s <plugin> -p 'test*.py'
+python3 -I -m unittest discover -s <skill> -p 'test_install.py' -v
+python3 -I -m unittest discover -s <skill> -p 'test_manifest.py' -v
+tsc -p <plugin> --noEmit
+claude plugin test <plugin>
+claude plugin validate <plugin>
+python3 -I <plugin>/repair_fixture.py
 ```
 
-Use the existing resource-admission wrapper for `tsc`; do not bypass it. No global dependency installation. Module tests mock the documented process bridge and model entry points (including a counter proving zero model calls in ordinary operation); Python tests exercise real files and native payload fixtures. Neither proves live protected-runtime execution. Directory publication checks report missing license/icon/author; no publication is requested and no license is invented.
+Transcript-message scans require POSIX directory-fd `open`/`stat`, no-follow `stat`, and `O_DIRECTORY`, `O_NOFOLLOW`, `O_NONBLOCK`; unsupported platforms fail closed with handoff pending. Every directory is opened relative to a held parent descriptor without following links. Leaf ownership/type and before/after identity, plus the directory edges, are checked before acceptance. On macOS only the exact root-owned system links `/var -> private/var`, `/tmp -> private/tmp`, `/etc -> private/etc` are expanded and rechecked; their `/private/...` targets still undergo the same no-follow walk. Custom symlink ancestors and leaves are rejected. Concurrent mutation observed during scanning remains pending; this is an observation-time check, not a filesystem lock or semantic certification. Limits remain 128 MB total, 1 MB per record, five seconds; general file evidence still has its separate 16 MB limit.
 
-Independent opt-in live smoke (spends up to the budget you pass, at most $2): `python3 -I <modroot>/smoke.py --run-paid-smoke --max-budget-usd 0.50`. Both flags are required; without them the script exits 2 and spends nothing. It starts one fresh session with a unique ID in a scratch directory and walks: declare contract -> deliberately premature stop (`JDI_FIRST_PASS`) -> Stop-hook continuation -> harmless `echo JDI_SECOND_PASS` -> typed evidence from the status receipt -> `deliver` with text `JDI_SECOND_PASS` -> final answer exactly `JDI_SECOND_PASS`. Read independently: the printed `state_summary` and the state file (`stopInvocations >= 2`, `continuations >= 1`, `deliveries` holding the hash of `JDI_SECOND_PASS`, outcome `smoke` with one evidence item, `phase` starting `accepted; verified and delivered`, `audit` null), the Claude JSON output (`total_cost_usd`, `num_turns`, same session ID) and the transcript (the echo tool result, the block reason mentioning delivery, no agent-hook subagent). A zero exit alone is not acceptance. Do not run this script from unit tests.
+Tests use temporary fixtures and host mocks, not a live installed session. The local Stop script contains no network/model/subprocess path. Timing checks measure local latency, not billing. `/just-do-it audit` is the only explicit model call; ordinary Stop makes none. No paid proof is authorized by these commands.
 
+`smoke.py` requires both `--run-paid-smoke` and a concrete `--max-budget-usd`; without explicit opt-in it spends nothing. Its structural expectation is delivery with semantic review pending, never independent acceptance. Do not execute paid smoke without a newly approved budget.
 
-## Known limitations (2026-10-27)
-
-- **Stop uses `decision: block`**, not `additionalContext`. This is deliberate: it is the form proven live in smokes 3 to 6; `additionalContext` is documented only for SessionStart and UserPromptSubmit.
-- **Cost per Stop is zero model calls by construction**, enforced by `test_every_hook_is_a_model_free_command` (all hooks are command hooks, `bridge.py` imports no network or subprocess module). The paid smokes (about $1.4 each) are dominated by the session's base context (about 95k cache-creation tokens), so their total says nothing about the plugin itself.
-- **`/just-do-it audit` cost is unmeasured.** It is one `$.model.fork` completion; its usage is recorded in the audit telemetry on first use.
-- **Real Claude Code maintenance** is proven on fixtures (`repair_fixture.py`, `test_repairs.py`: parse failure, repair, idempotence, concurrent rollback), not yet on a real fault in a live configuration. It never touches security policy.
-- **Installer recovery** is covered by `../test_install.py` with a fake CLI and temporary files. These tests do not prove native loading or protected-runtime acceptance. Updates take effect at the next session start or `/reload-plugins`.
-
-- **State survives separate processes** (`test_state_survives_separate_processes`); resuming after a crash relies on that atomic cache.
-
-## Installer and rollback
-
-Run `../install.sh install`, `../install.sh update`, or `../install.sh uninstall` from this source checkout. `JDI_MARKET_DIR` selects the marketplace directory (default `$HOME/.claude/local-plugins/just-do-it-market`); it does not isolate Claude configuration. The installer uses user scope and checks the registered local source before mutation. Existing directories without its ownership marker are refused, including installations made by the older installer: inspect and reconcile those manually rather than adding a marker to claim unknown files.
-
-Updates call `claude plugin update`, preserve unknown files and runtime, and refuse collisions with unowned files. Each operation retains a private sibling backup and prints its path. A failed operation restores source files and attempts recovery through the supported CLI. Recovery failures are reported with the retained backup; registry recovery is not guaranteed if the CLI itself remains unavailable. No settings, hooks, permissions or registry JSON files are directly rewritten.
-
-After a successful update, restore the prior owned source with `../install.sh rollback <printed-backup-directory>`. Rollback refuses changed source files, keeps current runtime, and calls the explicit plugin update command. Runtime is copied forward from the previous installed cache when the CLI changes cache directories. Run install/update/rollback while plugin sessions are idle: the installer lock serializes installers, not running sessions. Backups contain runtime state; keep them private. Uninstall uses `--keep-data`, preserves the local source and runtime, and unregisters only this user marketplace. Reinstall with `install` if needed; first-install rollback is `uninstall`, not deletion of runtime.
-
-Run `python3 -I -m unittest discover -s <skillroot> -p 'test_install.py' -v` for the installer contract tests. They invoke no native CLI, model, or network and never change HOME or Claude configuration.
+NOT DONE: authentic independent semantic review provenance, complete typed per-DoD semantic validation beyond exact file bytes, external maintenance adapters and host hook-start failure observation, live panel/native-session/installation acceptance and paid runtime cost proofs. Cache transactions do not make filesystem repairs atomic; existing repair rollback handles those separately. Prompt hashes establish observed callback linkage, not host-authenticated user identity. Automatic source completeness and actual user meaning remain review obligations. Offline tests do not close these requirements. Final candidate needs separate independent review.

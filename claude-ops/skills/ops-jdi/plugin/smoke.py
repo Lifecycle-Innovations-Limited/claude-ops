@@ -2,7 +2,7 @@
 """Opt-in paid protected-runtime smoke; never runs on import. Requires an explicit budget argument.
 
 Flow exercised: declare contract -> premature stop -> continuation -> harmless echo -> typed evidence
--> delivery record -> accepted final answer. Scratch directory only; no config, security or real project.
+-> delivery record -> delivered answer with semantic review pending. Scratch directory only; no config, security or real project.
 """
 import argparse
 import json
