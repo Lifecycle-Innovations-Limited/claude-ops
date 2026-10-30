@@ -28,7 +28,14 @@ try {
       ],
       {
         detached: true,
-        env: { ...process.env, HOME: tmp, CLAUDE_CONFIG_DIR: join(tmp, 'config'), PATH: `${bin}:${process.env.PATH}`, CAPTURE: capture, CLAUDE_OPS_USE_CREDIT_POOL: '0' },
+        env: {
+          ...process.env,
+          HOME: tmp,
+          CLAUDE_CONFIG_DIR: join(tmp, 'config'),
+          PATH: `${bin}:${process.env.PATH}`,
+          CAPTURE: capture,
+          CLAUDE_OPS_USE_CREDIT_POOL: '0',
+        },
         stdio: 'ignore',
       },
     );
@@ -48,10 +55,14 @@ try {
     else console.log(`OBSERVED SIGTERM process-group composed-file retained=${existsSync(path)}`);
     const { spawnSync } = await import('node:child_process');
     const helper = new URL('../scripts/lib/headless-settings.py', import.meta.url).pathname;
-    const retry = spawnSync('python3', ['-I', helper], { input: '{}', encoding: 'utf8', env: { ...process.env, HOME: tmp, CLAUDE_CONFIG_DIR: join(tmp, 'config') } });
+    const retry = spawnSync('python3', ['-I', helper], {
+      input: '{}',
+      encoding: 'utf8',
+      env: { ...process.env, HOME: tmp, CLAUDE_CONFIG_DIR: join(tmp, 'config') },
+    });
     assert.equal(retry.status, 0, retry.stderr);
     assert.equal(existsSync(path), false, 'next invocation reclaims dead-owner foreground document');
-    rmSync(retry.stdout.trim(), {force:true});
+    rmSync(retry.stdout.trim(), { force: true });
     console.log(`PASS ${signal} process-group recovery removes dead-owner document`);
   }
 } finally {
