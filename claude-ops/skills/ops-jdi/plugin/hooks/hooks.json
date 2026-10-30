@@ -1,5 +1,5 @@
 {
-  "modules": ["./register.tsx", "./fleet-entry.ts"],
+  "modules": ["./register.tsx"],
   "hooks": {
     "SessionStart": [
       {
