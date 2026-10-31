@@ -35,6 +35,8 @@ Every new failed tool callback creates an incident linked to its exact receipt i
 
 Empty failure output and timeouts start with `effect: unknown`. Inspect the source and read back actual effects before retrying a write or requesting waiver. `waive-incident` requires the existing inspected local evidence, an allowed classification, substantive note, exact pointer and explicit effect (`not-started`, `confirmed-no-effect`, or `effect-confirmed`). These are agent assertions with evidence linkage, not independently verified semantic facts. `resolve-incident` additionally requires owned plugin source/backup hashes, current Read receipts, validation and rollback records.
 
+Tool-failure incidents that never had a linked failed-callback receipt (`sourceGaps` in `status`) cannot be inspected or waived. `mark-untraceable` (`{generation, ids, note}`; unique id or prefix of at least 8 characters; note of at least 20 characters; all-or-nothing) records `provenance.state = untraceable` on them. It is an annotation only: the incident stays unresolved, `waive-incident` and `resolve-incident` still refuse it, and Stop is not relaxed. `status` then lists them under `untraceableIncidents` instead of `sourceGaps`.
+
 Legacy unresolved tool incidents without an exact sourceReceipt remain unchanged and cannot be waived or resolved through fabricated reconstruction. Their source gap is an open diagnostic obligation. Closed history is preserved.
 
 ## Maintenance

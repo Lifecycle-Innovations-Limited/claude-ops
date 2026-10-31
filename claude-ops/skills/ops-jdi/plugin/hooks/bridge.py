@@ -469,6 +469,16 @@ def source_receipt(s, item):
     return receipt
 
 
+def source_gaps(s):
+    return sorted(k for k, item in s['incidents'].items()
+                  if item.get('category') == 'tool failure; inspect actual output in transcript'
+                  and item.get('status') not in ('resolved', 'waived') and not item.get('sourceReceipt'))
+
+
+def untraceable(item):
+    return isinstance(item.get('provenance'), dict) and item['provenance'].get('state') == 'untraceable'
+
+
 def event(s, p):
     name = p.get('hook_event_name', '')
     response = p.get('tool_response', {})
@@ -1268,9 +1278,8 @@ def control_candidate(s, action, data):
         if s['phase'].startswith('accepted; verified'):
             s['phase'] = 'legacy acceptance unproven; semantic review pending'
             s['next'] = 'Independent review required; old receipts and incident history preserved.'
-        s['sourceGaps'] = sorted(k for k, item in s['incidents'].items()
-            if item.get('category') == 'tool failure; inspect actual output in transcript'
-            and item.get('status') not in ('resolved', 'waived') and not item.get('sourceReceipt'))
+        s['sourceGaps'] = [k for k in source_gaps(s) if not untraceable(s['incidents'][k])]
+        s['untraceableIncidents'] = [k for k in source_gaps(s) if untraceable(s['incidents'][k])]
         return s
     if action in ('pause', 'resume', 'interrupt'):
         invalidate(s)
@@ -1451,6 +1460,27 @@ def control_candidate(s, action, data):
             raise ValueError('usable inspected validation evidence required')
         item.update(status='waived', effect=data.get('effect', item.get('effect')), waiver=dict(classification=data['classification'], note=note.strip()[:500],
                     receipt=data['receipt'], pointer=data['pointer'], generation=s['generation']))
+        stale_audit(s)
+    elif action == 'mark-untraceable':
+        # Provenance annotation only. A tool-failure incident that never had a
+        # linked failed-callback receipt cannot be inspected or waived; this says
+        # so explicitly. Status stays unresolved, so Stop, waive-incident and
+        # resolution keep refusing it exactly as before.
+        wanted = data.get('ids')
+        note = data.get('note')
+        if not isinstance(wanted, list) or not wanted or len(wanted) > 50 or any(not isinstance(i, str) for i in wanted):
+            raise ValueError('incident ids required (1 to 50)')
+        if not isinstance(note, str) or len(note.strip()) < 20:
+            raise ValueError('substantive note required')
+        gaps = source_gaps(s)
+        picked = set()
+        for want in wanted:
+            hits = [k for k in gaps if k == want] or ([k for k in gaps if k.startswith(want)] if len(want) >= 8 else [])
+            if len(hits) != 1:
+                raise ValueError('incident id must match exactly one unresolved sourceless tool-failure incident: ' + want[:20])
+            picked.add(hits[0])
+        for key in picked:
+            s['incidents'][key]['provenance'] = dict(state='untraceable', note=note.strip()[:500], generation=s['generation'])
         stale_audit(s)
     elif action == 'deliver':
         # Intent record only: Stop verifies it against the real last_assistant_message.
