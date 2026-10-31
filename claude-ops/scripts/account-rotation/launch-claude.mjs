@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { removalCommand, confirmRemoval, reconcileSettings } from './job-settings.mjs';
 import { normalizeClaudeModelArgs } from './model-args.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -200,6 +201,15 @@ function readJson(path) {
   }
 }
 
+reconcileSettings(baseEnv);
+const removal = removalCommand(rawArgs);
+if (removal) {
+  const result = spawnSync(CLAUDE_BIN, args, { env: baseEnv, stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8' });
+  if (result.stdout) process.stdout.write(result.stdout);
+  confirmRemoval(baseEnv, removal, result.status, result.stdout || '');
+  process.exit(result.status ?? 1);
+}
+
 function fallback() {
   const result = spawnSync(CLAUDE_BIN, args, {
     env: baseEnv,
@@ -208,8 +218,11 @@ function fallback() {
   process.exit(result.status ?? 1);
 }
 
-const config = readJson(CONFIG_PATH);
-const state = readJson(STATE_PATH);
+const background = rawArgs
+  .slice(0, rawArgs.indexOf('--') < 0 ? rawArgs.length : rawArgs.indexOf('--'))
+  .includes('--bg');
+const config = readJson(CONFIG_PATH) || (background ? { accounts: [] } : null);
+const state = readJson(STATE_PATH) || (background ? {} : null);
 if (!config || !state) {
   fallback();
 }
@@ -230,6 +243,10 @@ let session;
 try {
   session = spawnWithAccount(args, config, state, { env: baseEnv, detached: false, stdio: 'inherit' });
 } catch (err) {
+  if (err.code === 'DIRECT_OAUTH_SETTINGS_COMPOSITION_FAILED') {
+    console.error('claude-rotate-launcher: direct OAuth settings composition failed');
+    process.exit(2);
+  }
   console.error(`claude-rotate-launcher: spawnWithAccount failed (${err.message})`);
   fallback();
 }

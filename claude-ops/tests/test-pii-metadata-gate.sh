@@ -172,6 +172,13 @@ printf 'contact user@example.com or your.address@example.org, cc noreply@anthrop
 assert_allowed "documented email placeholders are accepted" \
   --origin "PR body" --text-file "$WORK/clean.txt"
 
+# A domain mention must never exempt private identifiers on the same line.
+AGENT_ID="$(printf '%s-%s-%s-%s-%s' 'a1b2c3d4' 'e5f6' '4789' '8abc' 'def012345678')"
+
+printf 'private session bc-%s unrelated cursor.com mention\n' "$AGENT_ID" > "$WORK/cursor-negative.txt"
+assert_blocked "an unrelated Cursor mention never exempts a private UUID" "uuid-literal" \
+  --origin "PR title/body" --text-file "$WORK/cursor-negative.txt"
+
 # --- 6. Control: a clean message must pass -------------------------------------
 # Without this, a gate that refuses everything would satisfy every case above.
 printf 'fix: audit every catalog row, not just the first\n' > "$WORK/good.txt"

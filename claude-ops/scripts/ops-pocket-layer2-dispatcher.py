@@ -122,14 +122,17 @@ def _dispatch_subagent(task: dict) -> str | None:
 
     tag = f"pocket-{task['recording_id'][:12]}"
     cmd = [
-        "claude", "--bg",
+        "claude",
+        "--settings", '{"enabledPlugins":{"telegram@claude-plugins-official":false}}',
+        "--bg",
         "--system", system_prompt,
         "--print", prompt_file,
         "--output-format", "text",
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        env = {**os.environ, "POCKET_RECORDING_ID": str(task["recording_id"])}
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
         if result.returncode != 0:
             log.error("claude --bg failed: %s", result.stderr[:500])
             return None
@@ -213,6 +216,11 @@ def main() -> int:
 
 
 def _dispatch_main() -> int:
+    helper = Path(__file__).resolve().parent / "account-rotation/job-settings.mjs"
+    try:
+        subprocess.run(["node", str(helper)], stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # Retry uncertain ownership during the next existing dispatch tick.
     if not QUEUE_PATH.exists():
         log.info("queue not found at %s — nothing to process", QUEUE_PATH)
         return 0

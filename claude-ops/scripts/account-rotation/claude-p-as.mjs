@@ -38,6 +38,36 @@ import { homedir } from 'os';
 import { readLedger, writeLedger, findAccount, upsertAccount } from './ledger.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+function headlessArgs(args) {
+  const rest = [];
+  const documents = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--') {
+      rest.push(...args.slice(i));
+      break;
+    }
+    if (args[i] === '--settings') {
+      if (args[i + 1] == null) throw new Error('--settings requires a value');
+      documents.push(args[++i]);
+    } else if (args[i].startsWith('--settings=')) {
+      documents.push(args[i].slice('--settings='.length));
+    } else {
+      rest.push(args[i]);
+    }
+  }
+  let settings = '{"enabledPlugins":{"telegram@claude-plugins-official":false}}';
+  if (documents.length) {
+    const composed = spawnSync('python3', ['-I', join(__dirname, '../lib/headless-settings.py')], {
+      encoding: 'utf8',
+      input: documents.join('\0'),
+    });
+    if (composed.error) throw composed.error;
+    if (composed.status !== 0) throw new Error(composed.stderr.trim() || 'settings composition failed');
+    settings = composed.stdout.trim();
+  }
+  return ['--settings', settings, ...rest];
+}
+
 const DEFAULT_LEDGER = join(homedir(), '.claude', 'credits-ledger.json');
 const DEFAULT_CONFIG = join(__dirname, 'config.json');
 const DEFAULT_LOCK = join(homedir(), '.claude', 'keychain.lock');
@@ -375,49 +405,58 @@ async function main(argv) {
         }
         userArgs.push(a);
       }
-      const finalArgs = ['-p', '--max-budget-usd', String(budget), ...userArgs];
-
-      // Spawn claude. Stream output through; collect for cost parsing.
-      const stdoutChunks = [];
-      const stderrChunks = [];
-      const child = spawn('claude', finalArgs, { stdio: ['inherit', 'pipe', 'pipe'] });
-      child.stdout.on('data', (b) => {
-        stdoutChunks.push(b);
-        process.stdout.write(b);
-      });
-      child.stderr.on('data', (b) => {
-        stderrChunks.push(b);
-        process.stderr.write(b);
-      });
-
-      const exitCode = await new Promise((resolve) => {
-        child.on('close', (code, signal) => {
-          if (signal) {
-            const n = constants.signals[signal];
-            resolve(n == null ? 128 : 128 + n);
-          } else {
-            resolve(code ?? 1);
-          }
+      // 2026-10-26: never start the telegram channel plugin (getUpdates poller) in headless runs.
+      const finalArgs = headlessArgs(['-p', '--max-budget-usd', String(budget), ...userArgs]);
+      const composedSettings = finalArgs[1].startsWith('{') ? null : finalArgs[1];
+      try {
+        // Spawn claude. Stream output through; collect for cost parsing.
+        const stdoutChunks = [];
+        const stderrChunks = [];
+        const child = spawn('claude', finalArgs, { stdio: ['inherit', 'pipe', 'pipe'] });
+        child.stdout.on('data', (b) => {
+          stdoutChunks.push(b);
+          process.stdout.write(b);
         });
-        child.on('error', (e) => {
-          process.stderr.write(`[claude-p-as] spawn failed: ${e.message}\n`);
-          resolve(127);
+        child.stderr.on('data', (b) => {
+          stderrChunks.push(b);
+          process.stderr.write(b);
         });
-      });
 
-      // P1a fix: scan both streams; refuse (exit 2) if parse fails — never silently floor at $0.01.
-      const out = Buffer.concat(stdoutChunks).toString('utf8');
-      const err = Buffer.concat(stderrChunks).toString('utf8');
-      const cost = parseUsageCost(out, err);
-      if (cost == null) {
-        process.stderr.write(
-          '[claude-p-as] cost parse failed; refusing to decrement; check claude CLI output format\n',
-        );
-        return 2;
+        const exitCode = await new Promise((resolve) => {
+          child.on('close', (code, signal) => {
+            if (signal) {
+              const n = constants.signals[signal];
+              resolve(n == null ? 128 : 128 + n);
+            } else {
+              resolve(code ?? 1);
+            }
+          });
+          child.on('error', (e) => {
+            process.stderr.write(`[claude-p-as] spawn failed: ${e.message}\n`);
+            resolve(127);
+          });
+        });
+
+        // P1a fix: scan both streams; refuse (exit 2) if parse fails — never silently floor at $0.01.
+        const out = Buffer.concat(stdoutChunks).toString('utf8');
+        const err = Buffer.concat(stderrChunks).toString('utf8');
+        const cost = parseUsageCost(out, err);
+        if (cost == null) {
+          process.stderr.write(
+            '[claude-p-as] cost parse failed; refusing to decrement; check claude CLI output format\n',
+          );
+          return 2;
+        }
+        decrementLedger(opts.ledger, account.email, cost);
+
+        return exitCode;
+      } finally {
+        if (composedSettings) {
+          try {
+            unlinkSync(composedSettings);
+          } catch {}
+        }
       }
-      decrementLedger(opts.ledger, account.email, cost);
-
-      return exitCode;
     } finally {
       await restoreOnce();
     }
@@ -439,6 +478,7 @@ if (invokedAsCli) {
 }
 
 export {
+  headlessArgs,
   parseArgs,
   pickAccount,
   assertNotExtraUsage,

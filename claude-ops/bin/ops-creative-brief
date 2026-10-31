@@ -211,7 +211,7 @@ EOF
     fi
     printf '%s' "$prompt" | claude_invoke "${claude_args[@]}" > "$out"
   else
-    printf '%s' "$prompt" | claude -p > "$out"
+    printf '%s' "$prompt" | claude --settings '{"enabledPlugins":{"telegram@claude-plugins-official":false}}' -p > "$out"
   fi
   printf '%s\n' "$out"
 }
