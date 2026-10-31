@@ -25,7 +25,8 @@ const bridge = async ($: import('claude-code').EngineInterface, action = 'status
     const state = JSON.parse(result.stdout) as BridgeState
     if (state.schemaVersion !== 1 || state.session_id !== sid) throw new Error('Onverwachte bridge-state.')
     await update($, work, s => ({ ...s, bridge: state, enabled: !state.paused, interrupted: state.interrupted,
-      phase: state.phase, next: state.next, stopObserved: state.stopInvocations > 0 }))
+      phase: state.phase, next: state.next, stopObserved: state.stopInvocations > 0,
+      refreshedAt: Date.now(), stale: false, detail: '' }))
     return state
   }
   const refresh = async ($: Parameters<typeof bridge>[0], action = 'status') => {
@@ -34,7 +35,7 @@ const bridge = async ($: import('claude-code').EngineInterface, action = 'status
       await $.ui.status(`Just Do It · ${state.phase}`)
       return state
     } catch {
-      await update($, work, s => ({ ...s, phase: 'Brugdiagnose nodig', detail: 'Geen actuele state beschikbaar; voltooiing niet bewezen.' }))
+      await update($, work, s => ({ ...s, stale: true, phase: 'Brugdiagnose nodig', detail: 'Geen actuele state beschikbaar; voltooiing niet bewezen.' }))
       return undefined
     }
   }
@@ -60,7 +61,7 @@ const audit = async ($: import('claude-code').EngineInterface) => {
     const reply = await $.model.fork({ prompt })
     if ('usage' in reply && reply.usage) usage = { ...reply.usage }
     if (reply.isAnswered && reply.text.trim()) verdict = reply.text.trim()
-    else reason = reply.isAnswered ? 'empty-reply' : reply.reason
+    else reason = reply.isAnswered ? 'empty-reply' : ('reason' in reply ? reply.reason : 'unanswered')
   } catch {
     reason = 'fork-unavailable'
   }
@@ -127,6 +128,32 @@ const maintain = async ($: import('claude-code').EngineInterface, mode: string) 
 }
 
 export const register: Register = on => {
+  // Observe only this documented event. Managed policy may skip it; no fallback
+  // event or serialized CLI claim may recreate the engine's pinned metadata.
+  on('prompt.submit', async ($, e, next) => {
+    try {
+      const sessionId = await $.session.id()
+      const bytes = new TextEncoder().encode(e.text)
+      const hash = await crypto.subtle.digest('SHA-256', bytes)
+      const promptHash = Array.from(new Uint8Array(hash), n => n.toString(16).padStart(2, '0')).join('')
+      await update($, work, s => {
+        const sequence = (s.promptObservation?.sequence ?? 0) + 1
+        const generation = s.bridge?.generation ?? s.generation
+        return { ...s, promptObservation: {
+          sessionId, sequence, generation, promptHash,
+          // PromptSubmitInput has no message id. This is a local observation
+          // binding, never represented as a host transcript message identifier.
+          observationId: `${sessionId}:${generation}:${sequence}:${promptHash}`,
+          turnId: e.turnId, origin: e.origin, isMeta: e.isMeta === true,
+          human: e.origin.kind === 'composer' && e.isMeta !== true,
+          authorityTransport: 'unavailable',
+        } }
+      })
+    } catch {
+      // Observation failure never blocks, drops, rewrites or resubmits a prompt.
+    }
+    return next(e)
+  })
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await $.command.register({ name: 'just-do-it', description: 'Voortgang, pause, resume, diagnose, audit of onderhoud.' })
@@ -167,7 +194,12 @@ export const register: Register = on => {
       <Text>{local.phase}</Text>
       <Text>UI geladen · command-route gedocumenteerd</Text>
       <Text>{s ? `Stop aangeroepen: ${s.stopInvocations} · integratie: ${s.integration}` : 'Brug nog niet gelezen; stopcontrole onbewezen.'}</Text>
+      <Text>{local.stale ? 'Verouderde gegevens; verversen mislukt.' : local.refreshedAt ? `Laatst gelezen: ${new Date(local.refreshedAt).toISOString()}` : 'Nog geen actuele verversing.'}</Text>
       <Text>{local.detail}</Text>
+      {s && Object.entries(s.outcomes).map(([id, value]) => {
+        const item = value as { dod?: string, evidence?: unknown[], needsReconciliation?: boolean }
+        return <Text key={id}>{`${id}: ${item.dod ?? 'DoD ontbreekt'} · bewijs ${item.evidence?.length ?? 0}${item.needsReconciliation ? ' · afstemmen vereist' : ''}`}</Text>
+      })}
       <Text>{local.next}</Text>
       {s && <Text>{Object.keys(s.outcomes).length} uitkomsten · {Object.keys(s.tasks).length} taken · {Object.keys(s.incidents).length} incidenten</Text>}
       {s && <Text dimColor>Generatie {s.generation} · {s.continuations} vervolgbeurten · 0 modelaanroepen per Stop · audits op verzoek: {s.audit?.requests ?? 0}</Text>}

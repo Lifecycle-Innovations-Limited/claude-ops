@@ -328,6 +328,44 @@ class InstallerTests(unittest.TestCase):
         self.run_install('uninstall')
         self.assertEqual((self.dest / 'runtime/session.json').read_text(), 'newest')
 
+    def test_fleet_upgrade_rolls_back_without_replacing_runtime_or_unknown_files(self):
+        fleet = ('hooks/fleet_guard.py', 'hooks/fleet.ts', 'hooks/fleet-source.py',
+                 'hooks/fleet-runtime.ts', 'hooks/fleet-entry.ts')
+        self.run_install()
+        marker = json.loads((self.market / '.ops-jdi-owner.json').read_text())
+        for rel in fleet:
+            self.assertIn(rel, marker['files'])
+            self.assertEqual((self.dest / rel).read_bytes(), (self.source / 'plugin' / rel).read_bytes())
+        self.assertNotIn('test_fleet_guard.py', marker['files'])
+        (self.dest / 'unknown.txt').write_text('private unknown file')
+        (self.dest / 'runtime').mkdir()
+        (self.dest / 'runtime/session.json').write_text('source state')
+        cache = Path(self.state()['plugins'][0]['installPath'])
+        (cache / 'runtime').mkdir()
+        (cache / 'runtime/session.json').write_text('current cached state')
+        before = {rel: (self.dest / rel).read_bytes() for rel in fleet}
+        for rel in fleet:
+            (self.source / 'plugin' / rel).write_text('replacement ' + rel)
+        result = self.run_install('update')
+        backup = Path(self.backup(result))
+        for rel in fleet:
+            self.assertEqual((backup / 'before/plugins/just-do-it' / rel).read_bytes(), before[rel])
+        self.run_install('rollback', str(backup))
+        for rel in fleet:
+            self.assertEqual((self.dest / rel).read_bytes(), before[rel])
+        self.assertEqual((self.dest / 'unknown.txt').read_text(), 'private unknown file')
+        current = Path(self.state()['plugins'][0]['installPath'])
+        self.assertEqual((current / 'runtime/session.json').read_text(), 'current cached state')
+
+    def test_new_fleet_dependency_collision_refuses_before_backup_or_registry_mutation(self):
+        path = self.source / 'plugin/hooks/fleet-entry.ts'
+        content = path.read_bytes()
+        path.unlink()
+        self.run_install()
+        (self.dest / 'hooks/fleet-entry.ts').write_text('unowned local module')
+        path.write_bytes(content)
+        self.assert_preflight_refused()
+
     def test_update_requires_existing_install(self):
         self.run_install('update', ok=False)
         self.assertFalse(self.market.exists())

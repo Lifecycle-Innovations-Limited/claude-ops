@@ -16,7 +16,7 @@ spec.loader.exec_module(b)
 class Repairs(unittest.TestCase):
     def setUp(self):
         self.s = b.fresh('repair')
-        b.event(self.s, {'hook_event_name': 'UserPromptSubmit', 'prompt': 'Build'})
+        b.event(self.s, {'hook_event_name': 'UserPromptSubmit', 'source': 'user', 'prompt': 'Build'})
         self.g = self.s['generation']
 
     def control(self, action, **data):
@@ -40,7 +40,7 @@ class Repairs(unittest.TestCase):
     def test_stale_wait_reconciles_reactivated_task(self):
         self.task('a')
         self.control('wait', id='a', kind='approval', pointer='request:1')
-        b.event(self.s, dict(hook_event_name='UserPromptSubmit', prompt='New request'))
+        b.invalidate(self.s)  # exercise stale wait handling independently of ingress
         self.task('a', status='in_progress')
         self.assertEqual(self.stop().get('decision'), 'block')
         self.assertIn('reconcile', self.s['next'].lower())
@@ -94,7 +94,7 @@ class Repairs(unittest.TestCase):
             self.control('handoff', blocker='Missing artifact', pointer=dict(type='transcript-message', path=str(path), message_id='m1', messageHash=b.digest(text)))
             self.assertEqual(self.s['handoff']['generation'], self.s['generation'])
             self.assertEqual(self.stop(text, transcript_path=str(path)), {})
-            b.event(self.s, dict(hook_event_name='UserPromptSubmit', prompt='Change'))
+            b.invalidate(self.s)  # actual generation transition, not a serialized claim
             self.assertIsNone(self.s['handoff'])
 
     def test_nonexistent_untyped_and_wrong_receipt_rejected(self):
@@ -163,13 +163,13 @@ class Repairs(unittest.TestCase):
             self.assertNotIn('prompt', stop_hooks[0])
             self.assertNotIn('model', stop_hooks[0])
             result = subprocess.run(['python3', '-I', str(relocated/'hooks/bridge.py')],
-                input=json.dumps(dict(hook_event_name='UserPromptSubmit', session_id='relocated', prompt='test')),
+                input=json.dumps(dict(hook_event_name='UserPromptSubmit', source='user', session_id='relocated', prompt='test')),
                 text=True, capture_output=True, check=True)
             context = json.loads(result.stdout)['hookSpecificOutput']['additionalContext']
             self.assertIn(str(relocated/'hooks/bridge.py'), context)
             self.assertTrue((relocated/'runtime/relocated.json').is_file())
             state = json.loads((relocated/'runtime/relocated.json').read_text())
-            self.assertEqual(state['generation'], 1)
+            self.assertEqual(state['generation'], 0)  # CLI source claim is not host authority
             result = subprocess.run(['python3', '-I', str(relocated/'hooks/bridge.py'), 'pause', '--session', 'relocated'],
                 text=True, capture_output=True, check=True)
             self.assertTrue(json.loads(result.stdout)['paused'])
