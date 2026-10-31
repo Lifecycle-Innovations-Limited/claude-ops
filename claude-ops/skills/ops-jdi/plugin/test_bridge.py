@@ -15,10 +15,12 @@ SPEC.loader.exec_module(b)
 class BridgeTests(unittest.TestCase):
     def setUp(self):
         self.s = b.fresh('fixture')
-        self.prompt('Build both outcomes')
+        # Seed a pre-existing generation; serialized prompts no longer create it.
+        self.s['generation'] = 1
+        self.s['intentText'] = 'Build both outcomes'
 
     def prompt(self, text):
-        return b.event(self.s, dict(hook_event_name='UserPromptSubmit', prompt=text))
+        return b.event(self.s, dict(hook_event_name='UserPromptSubmit', source='user', prompt=text))
 
     def contract(self):
         b.control(self.s, 'contract', dict(generation=self.s['generation'], issue='TEAM-1',
@@ -80,7 +82,8 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.stop()['decision'], 'block')
         self.deliver()
         self.assertEqual(self.stop(), {})
-        self.assertTrue(self.s['phase'].startswith('accepted; verified and delivered'))
+        self.assertTrue(self.s['phase'].startswith('delivered; semantic review pending'))
+        self.assertNotIn('accepted', self.s['phase'])
         self.assertIn('semantic audit advised', self.s['phase'])
 
     def test_delivery_by_observed_hash_is_accepted(self):
@@ -127,11 +130,14 @@ class BridgeTests(unittest.TestCase):
         self.verified()
         old = self.s['generation']
         self.deliver()
-        self.prompt('Also include the second result')
+        b.invalidate(self.s)  # exercise stale generation independently of ingress
         self.assertFalse(self.s['deliveries'])
         with self.assertRaises(ValueError):
             b.control(self.s, 'deliver', dict(generation=old, text='Result delivered', outcomes=['result']))
         self.contract()
+        self.assertNotEqual(self.s['outcomes']['result']['generation'], self.s['generation'])
+        with self.assertRaisesRegex(ValueError, 'protected human provenance'):
+            b.control(self.s, 'reconcile', dict(generation=self.s['generation'], items=[dict(id='result', disposition='retain')]))
         self.tool(tid='tool-2')
         b.control(self.s, 'evidence', dict(generation=self.s['generation'], collection='outcomes', id='result', receipt='tool-2',
             pointer=dict(type='transcript', tool='Bash', tool_use_id='tool-2', outputHash=self.s['receipts']['tool-2']['outputHash']), inspection='fresh'))
@@ -208,8 +214,8 @@ class BridgeTests(unittest.TestCase):
         self.tool()
         self.evidence()
         old = self.s['generation']
-        self.prompt('Also include the second result')
-        self.assertFalse(self.s['outcomes']['result']['evidence'])
+        b.invalidate(self.s)  # exercise stale generation independently of ingress
+        self.assertFalse(b.has_evidence(self.s, self.s['outcomes']['result']))
         with self.assertRaises(ValueError):
             b.control(self.s, 'contract', {'generation': old})
         with self.assertRaises(ValueError):
@@ -227,9 +233,13 @@ class BridgeTests(unittest.TestCase):
 
     def test_plain_stop_pauses_new_generation(self):
         self.contract()
+        before = b.digest(self.s['outcomes'])
+        generation = self.s['generation']
         self.prompt('stop')
-        self.assertTrue(self.s['paused'])
-        self.assertEqual(self.stop(), {})
+        self.assertFalse(self.s['paused'])
+        self.assertEqual(self.s['generation'], generation)
+        self.assertEqual(b.digest(self.s['outcomes']), before)
+        self.assertEqual(self.stop()['decision'], 'block')
 
     def test_duplicate_callback_idempotent(self):
         self.tool(failure=True)
@@ -241,7 +251,8 @@ class BridgeTests(unittest.TestCase):
         self.tool(failure=True, tid='a', inp={'command': 'make a'}, response={'stderr': 'boom a'})
         self.tool(failure=True, tid='b', inp={'command': 'make b'}, response={'stderr': 'boom b'})
         self.tool(failure=True, tid='c', inp={'command': 'make a'}, response={'stderr': 'boom a'})
-        self.assertEqual(len(self.s['incidents']), 2)
+        self.assertEqual(len(self.s['incidents']), 3)
+        self.assertEqual({i['sourceReceipt']['id'] for i in self.s['incidents'].values()}, {'a', 'b', 'c'})
 
     def test_wait_has_concrete_pointer(self):
         self.tool('TaskUpdate', inp={'taskId': '1', 'status': 'pending'})
@@ -325,8 +336,10 @@ class BridgeTests(unittest.TestCase):
         self.contract()
         self.prompt('What does DoD mean?')
         self.assertIn('result', self.s['outcomes'])
-        self.assertTrue(self.s['outcomes']['result']['needsReconciliation'])
+        self.assertFalse(self.s['outcomes']['result'].get('needsReconciliation', False))
         self.assertEqual(self.stop(), {})
+        self.assertEqual(self.s['phase'], 'question answered; prompt binding unresolved')
+        self.assertTrue(self.s['promptBindingPending'])
 
     def test_multiline_error_content_and_metadata(self):
         self.assertTrue(b.failed({'content': [{'type': 'text', 'text': 'line 1\nline 2', 'is_error': True}]}))
@@ -392,15 +405,15 @@ class BridgeTests(unittest.TestCase):
         # A thin note is refused.
         with self.assertRaises(ValueError):
             b.control(self.s, 'waive-incident', dict(generation=1, id=key, receipt='inspect',
-                classification='pretooluse-refusal', note='ok',
+                classification='pretooluse-refusal', effect='not-started', note='ok',
                 pointer=pointer, inspection='read the refusal'))
         # A stale generation is refused.
         with self.assertRaises(ValueError):
             b.control(self.s, 'waive-incident', dict(generation=0, id=key, receipt='inspect',
-                classification='pretooluse-refusal', note='the guard refused the call before it ran',
+                classification='pretooluse-refusal', effect='not-started', note='the guard refused the call before it ran',
                 pointer=pointer, inspection='read the refusal'))
         b.control(self.s, 'waive-incident', dict(generation=1, id=key, receipt='inspect',
-            classification='pretooluse-refusal', note='the guard refused the call before it ran',
+            classification='pretooluse-refusal', effect='not-started', note='the guard refused the call before it ran',
             pointer=pointer, inspection='read the refusal'))
         item = self.s['incidents'][key]
         self.assertEqual(item['status'], 'waived')
@@ -418,17 +431,17 @@ class BridgeTests(unittest.TestCase):
         # Without inspected evidence on the incident the waiver is refused.
         with self.assertRaises(ValueError):
             b.control(self.s, 'waive-incident', dict(generation=1, id=key, receipt='inspect',
-                classification='pretooluse-refusal', note='the guard refused the call before it ran',
+                classification='pretooluse-refusal', effect='not-started', note='the guard refused the call before it ran',
                 pointer=pointer, inspection='read the refusal'))
         b.control(self.s, 'evidence', dict(generation=1, collection='incidents', id=key,
             receipt='inspect', pointer=pointer, inspection='read the guard refusal output'))
         b.control(self.s, 'waive-incident', dict(generation=1, id=key, receipt='inspect',
-            classification='pretooluse-refusal', note='the guard refused the call before it ran',
+            classification='pretooluse-refusal', effect='not-started', note='the guard refused the call before it ran',
             pointer=pointer, inspection='read the refusal'))
         # A second waiver on the same incident is refused.
         with self.assertRaises(ValueError):
             b.control(self.s, 'waive-incident', dict(generation=1, id=key, receipt='inspect',
-                classification='pretooluse-refusal', note='the guard refused the call before it ran',
+                classification='pretooluse-refusal', effect='not-started', note='the guard refused the call before it ran',
                 pointer=pointer, inspection='read the refusal'))
 
     def test_every_waiver_class_is_accepted(self):
@@ -442,7 +455,7 @@ class BridgeTests(unittest.TestCase):
             b.control(self.s, 'evidence', dict(generation=1, collection='incidents', id=key,
                 receipt='inspect', pointer=pointer, inspection='read the failure output'))
             b.control(self.s, 'waive-incident', dict(generation=1, id=key, receipt='inspect',
-                classification=classification, note='the failing call produced no wrong output',
+                classification=classification, effect='confirmed-no-effect', note='the failing call produced no wrong output',
                 pointer=pointer, inspection='read the failure output'))
             self.assertEqual(self.s['incidents'][key]['status'], 'waived')
 
@@ -562,11 +575,15 @@ class BridgeTests(unittest.TestCase):
         for suffix in ('.json', '.lock'):
             self.addCleanup(lambda s=suffix: (b.ROOT / (sid + s)).unlink(missing_ok=True))
         with tempfile.TemporaryDirectory() as tmp:
-            script = str(Path(__file__).parent / 'hooks/bridge.py')
+            import shutil
+            plugin = Path(tmp) / 'plugin'
+            (plugin / 'hooks').mkdir(parents=True)
+            script = str(plugin / 'hooks/bridge.py')
+            shutil.copyfile(Path(__file__).parent / 'hooks/bridge.py', script)
             def run(*a, data=''):
                 return subprocess.run(['python3', '-I', script, *a, '--session', sid], input=data,
                                       capture_output=True, text=True, cwd=tmp)
-            run('hook', data=json.dumps(dict(hook_event_name='UserPromptSubmit', prompt='Build it')))
+            run('hook', data=json.dumps(dict(hook_event_name='UserPromptSubmit', source='user', prompt='Build it')))
             first = json.loads(run('status').stdout)
             run('hook', data=json.dumps(dict(hook_event_name='PostToolUseFailure', tool_name='Bash', tool_use_id='x',
                                               tool_input={'command': 'a'}, tool_response={'stderr': 'e'})))
@@ -578,18 +595,19 @@ class BridgeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'state'
             payloads = [dict(hook_event_name='SessionStart', session_id='fixture'),
-                        dict(hook_event_name='UserPromptSubmit', session_id='fixture', prompt='Test'),
+                        dict(hook_event_name='UserPromptSubmit', source='user', session_id='fixture', prompt='Test'),
                         dict(hook_event_name='PostToolUse', session_id='fixture', tool_name='Bash',
                              tool_use_id='native', tool_input={'command': 'true'}, tool_response={'exit_code': 0}),
                         dict(hook_event_name='Stop', session_id='fixture', stop_hook_active=False,
                              last_assistant_message='Output')]
             for p in payloads:
                 with b.store('fixture', root) as s:
-                    b.event(s, p)
+                    with unittest.mock.patch.object(b, 'automatic_maintenance'):
+                        b.event(s, p)
             with b.store('fixture', root) as s:
                 self.assertEqual(s['stopInvocations'], 1)
                 self.assertTrue(s['receipts']['native']['ok'])
-                self.assertEqual(s['delivery']['generation'], 1)
+                self.assertEqual(s['delivery']['generation'], 0)  # serialized source cannot advance intent
 
 
 if __name__ == '__main__':

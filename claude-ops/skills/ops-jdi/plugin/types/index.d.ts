@@ -19,7 +19,21 @@ export type WorkState = {
   stalled: number
   lastStep: string
   interrupted: boolean
+  refreshedAt?: number
+  stale?: boolean
   bridge?: BridgeState
+  promptObservation?: {
+    sessionId: string
+    sequence: number
+    generation: number
+    promptHash: string
+    observationId: string
+    turnId?: string
+    origin: { kind: string }
+    isMeta: boolean
+    human: boolean
+    authorityTransport: 'unavailable'
+  }
 }
 
 export type BridgeState = {
@@ -27,6 +41,8 @@ export type BridgeState = {
   session_id: string
   revision: number
   generation: number
+  observationRevision?: number
+  promptBindingPending?: boolean
   paused: boolean
   interrupted: boolean
   phase: string
