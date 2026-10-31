@@ -1,4 +1,4 @@
-"""TEST-1 regressions for contract continuity and bounded own diagnosis."""
+"""TEAM-1 regressions for contract continuity and bounded own diagnosis."""
 import importlib.util
 import json
 from pathlib import Path

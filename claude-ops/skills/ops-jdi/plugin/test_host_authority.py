@@ -13,7 +13,7 @@ class HostAuthority(unittest.TestCase):
         s = b.fresh('authority')
         s.update(intentText='Actual human request', intentHash=b.digest('Actual human request'),
                  intentSource=dict(source='user', generation=s['generation'], promptHash=b.digest('Actual human request')))
-        b.control(s, 'contract', dict(generation=s['generation'], issue='TEST-1', outcomes=[dict(id='x', dod='Required result', owner='session')]))
+        b.control(s, 'contract', dict(generation=s['generation'], issue='TEAM-1', outcomes=[dict(id='x', dod='Required result', owner='session')]))
         b.control(s, 'wait', dict(generation=s['generation'], collection='outcomes', id='x', kind='approval', pointer='actual approval pending'))
         return s
 

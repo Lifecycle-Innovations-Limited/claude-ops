@@ -12,7 +12,7 @@ spec.loader.exec_module(b)
 class DeliveryBarrier(unittest.TestCase):
     def ready(self):
         s = b.fresh('barrier')
-        b.control(s, 'contract', dict(generation=0, issue='TEST-1', outcomes=[dict(id='x', dod='Required result', owner='session')]))
+        b.control(s, 'contract', dict(generation=0, issue='TEAM-1', outcomes=[dict(id='x', dod='Required result', owner='session')]))
         b.event(s, dict(hook_event_name='PostToolUse', tool_name='Bash', tool_use_id='proof', tool_response={'result': 'actual'}))
         r = s['receipts']['proof']
         self.evidence = dict(generation=0, id='x', receipt='proof', inspection='Inspected actual result',

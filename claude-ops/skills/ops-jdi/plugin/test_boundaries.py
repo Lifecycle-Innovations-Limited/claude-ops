@@ -1,4 +1,4 @@
-"""TEST-1: automatic reads and native ingress provenance regressions."""
+"""TEAM-1: automatic reads and native ingress provenance regressions."""
 import importlib.util
 import json
 import os
