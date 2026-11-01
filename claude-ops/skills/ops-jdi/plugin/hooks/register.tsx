@@ -1,6 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 import type { WorkState, BridgeState } from '../types'
+import { configureFleet, fleetStart, fleetEnd, fleetComplete } from './fleet-entry'
 
 // Keep the old shape so reload cannot silently reset a user's pause.
 const initial: WorkState = {
@@ -127,7 +128,8 @@ const maintain = async ($: import('claude-code').EngineInterface, mode: string) 
   return [head, ...shown, ...more, ...applied].join('\n')
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  configureFleet(options.fleetConfigPath)
   // Observe only this documented event. Managed policy may skip it; no fallback
   // event or serialized CLI claim may recreate the engine's pinned metadata.
   on('prompt.submit', async ($, e, next) => {
@@ -158,8 +160,10 @@ export const register: Register = on => {
     const result = await next(e)
     await $.command.register({ name: 'just-do-it', description: 'Voortgang, pause, resume, diagnose, audit of onderhoud.' })
     await refresh($)
+    await fleetStart($)
     return result
   })
+  on('session.end', async (_, e, next) => { fleetEnd(); return next(e) })
   on('command.run', { command: 'just-do-it' }, async ($, e) => {
     const action = e.args.trim().toLowerCase()
     if (action === 'maintain' || action.startsWith('maintain ')) {
@@ -183,6 +187,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId === undefined) await refresh($, e.isAborted || e.reason !== 'answer' ? 'interrupt' : 'status')
+    await fleetComplete($, e.agentId, e.isAborted, e.reason)
     return result
   })
   on('ui.render', { component: 'Pane', requestId: 'just-do-it' }, async ($, e) => {
