@@ -26,6 +26,14 @@ def engine_command():
         return [resolved, '-I', '-c',
                 'import runpy,sys; sys.path.insert(0,sys.argv.pop(1)); '
                 'runpy.run_module("mixforge",run_name="__main__")', str(root)]
+    bundled = Path(__file__).resolve().parent.parent / 'skills' / 'ops-mix' / 'engine'
+    if (bundled / 'mixforge' / '__main__.py').is_file():
+        interpreter = shutil.which(os.path.expanduser(os.environ.get('MIXFORGE_PYTHON', sys.executable)))
+        if not interpreter:
+            raise ValueError('MIXFORGE_PYTHON is not an executable file')
+        return [interpreter, '-I', '-c',
+                'import runpy,sys; sys.path.insert(0,sys.argv.pop(1)); '
+                'runpy.run_module("mixforge",run_name="__main__")', str(bundled)]
     executable = shutil.which('mixforge')
     if not executable:
         raise ValueError('Mixforge is unavailable: configure MIXFORGE_EXECUTABLE or MIXFORGE_SOURCE with MIXFORGE_PYTHON')

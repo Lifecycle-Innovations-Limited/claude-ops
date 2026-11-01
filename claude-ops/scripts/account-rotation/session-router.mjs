@@ -35,10 +35,11 @@
  * time. It never touches the global "Claude Code-credentials" keychain entry.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync, spawn } from 'child_process';
+import { registerSettings, bindSettings, reconcileSettings, registryRoot } from './job-settings.mjs';
 import { cachedUtilizationMax } from './rotation-policy.mjs';
 import { isLegacyRelayToken, scrubLegacyRelayEnv } from './route-state.mjs';
 
@@ -269,7 +270,12 @@ export function pickAccountForSession(sessionId, config, state) {
  * those keys blanked and point THIS spawn at it via --settings, only when we
  * have actually assigned a direct OAuth token.
  */
-function buildDirectOauthSettingsOverride() {
+function buildDirectOauthSettingsOverride(
+  args,
+  directOauth = true,
+  outputDir = DIRECT_OAUTH_SETTINGS_DIR,
+  settingsEnv = process.env,
+) {
   try {
     // --settings loads ADDITIONAL settings merged on top of the base
     // settings.json (confirmed empirically: "--help" says "load additional
@@ -278,27 +284,68 @@ function buildDirectOauthSettingsOverride() {
     // base URL for this one spawn, explicitly override the keys to "".
     // The API-key fields go too: if we only clear BASE_URL, Claude Code
     // dual-auths (OAuth + external API key) and surfaces "Invalid API key".
+    const rest = [];
+    let caller = {};
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '--') {
+        rest.push(...args.slice(i));
+        break;
+      }
+      let document;
+      if (arg === '--settings') {
+        if (args[i + 1] == null) throw new Error('--settings requires a value');
+        document = args[++i];
+      } else if (arg.startsWith('--settings=')) {
+        document = arg.slice('--settings='.length);
+      } else {
+        rest.push(arg);
+        continue;
+      }
+      caller = JSON.parse(document.trimStart().startsWith('{') ? document : readFileSync(document, 'utf8'));
+      if (!caller || Array.isArray(caller) || typeof caller !== 'object') throw new Error('settings must be an object');
+    }
     const overrideDoc = {
+      ...caller,
       env: {
-        ANTHROPIC_BASE_URL: '',
-        ANTHROPIC_API_BASE: '',
-        ANTHROPIC_API_KEY: '',
-        ANTHROPIC_AUTH_TOKEN: '',
+        ...caller.env,
+        ...(directOauth
+          ? { ANTHROPIC_BASE_URL: '', ANTHROPIC_API_BASE: '', ANTHROPIC_API_KEY: '', ANTHROPIC_AUTH_TOKEN: '' }
+          : {}),
       },
     };
-    if (!existsSync(DIRECT_OAUTH_SETTINGS_DIR)) {
-      mkdirSync(DIRECT_OAUTH_SETTINGS_DIR, { recursive: true });
+    if (outputDir === DIRECT_OAUTH_SETTINGS_DIR) {
+      const composed = spawnSync('python3', ['-I', join(__dirname, '../lib/headless-settings.py'), '--document'], {
+        input: JSON.stringify(overrideDoc),
+        encoding: 'utf8',
+        env: { ...settingsEnv, CLAUDE_SETTINGS_OWNER_PID: String(process.pid) },
+      });
+      if (composed.status !== 0) throw new Error('foreground settings registration failed');
+      const path = composed.stdout.trim();
+      return { args: ['--settings', path, ...rest], path };
     }
-    const outPath = join(DIRECT_OAUTH_SETTINGS_DIR, 'direct-oauth.settings.json');
-    const tmpPath = `${outPath}.${process.pid}.tmp`;
-    writeFileSync(tmpPath, JSON.stringify(overrideDoc, null, 2));
-    renameSync(tmpPath, outPath); // atomic replace — safe under concurrent spawns
-    return outPath;
+    const composed = spawnSync('python3', ['-I', join(__dirname, '../lib/headless-settings.py'), '--background'], {
+      input: JSON.stringify(overrideDoc),
+      encoding: 'utf8',
+      env: { ...settingsEnv, CLAUDE_SETTINGS_OWNER_PID: String(process.pid) },
+    });
+    if (composed.status !== 0) throw new Error('background settings registration failed');
+    const { path, record } = JSON.parse(composed.stdout);
+    return { args: ['--settings', path, ...rest], path, record };
   } catch {
-    return null;
+    const error = new Error('direct OAuth settings composition failed');
+    error.code = 'DIRECT_OAUTH_SETTINGS_COMPOSITION_FAILED';
+    throw error;
   }
 }
 
+/**
+ * Compose the direct-OAuth credential-clearing overlay into a claude arg list.
+ * Single composition path: the caller's --settings (inline JSON, file path, or
+ * --settings=VALUE) is kept and the four credential keys are overridden in one
+ * private per-spawn file. Throws a typed error on unreadable caller settings
+ * so the launcher fails closed instead of spawning without the overlay.
+ */
 /**
  * Every spawned session authenticates directly, with its own OAuth token.
  *
@@ -400,19 +447,51 @@ export function spawnWithAccount(args, config, state, opts = {}) {
 
   const directOauthToken = childEnv.CLAUDE_CODE_OAUTH_TOKEN && !isLegacyRelayToken(childEnv.CLAUDE_CODE_OAUTH_TOKEN);
   let spawnArgs = args;
-  if (directOauthToken && !childEnv.ANTHROPIC_BASE_URL && !args.includes('--settings')) {
-    const overridePath = buildDirectOauthSettingsOverride();
-    if (overridePath) {
-      spawnArgs = [...args, '--settings', overridePath];
-    }
+  let settingsOverride;
+  const options = args.slice(0, args.indexOf('--') < 0 ? args.length : args.indexOf('--'));
+  const background = options.includes('--bg');
+  const directOauth = !!(directOauthToken && !childEnv.ANTHROPIC_BASE_URL);
+  const callerSettings = options.some((a) => a === '--settings' || a.startsWith('--settings='));
+  if (directOauth || (background && callerSettings)) {
+    settingsOverride = buildDirectOauthSettingsOverride(
+      args,
+      directOauth,
+      background ? join(registryRoot(childEnv), 'documents') : DIRECT_OAUTH_SETTINGS_DIR,
+      childEnv,
+    );
+    spawnArgs = settingsOverride.args;
   }
 
+  reconcileSettings(childEnv);
+  const settingsRecord = background && settingsOverride ? settingsOverride.record : null;
   const proc = spawn(childEnv.CLAUDE_REAL_BIN || 'claude', spawnArgs, {
     env: childEnv,
     detached: opts.detached ?? false,
-    stdio: opts.stdio ?? 'inherit',
+    stdio: settingsRecord ? ['inherit', 'pipe', 'inherit'] : (opts.stdio ?? 'inherit'),
   });
+  if (settingsRecord) {
+    let banner = '';
+    proc.stdout.on('data', (chunk) => {
+      if (opts.stdio !== 'ignore') process.stdout.write(chunk);
+      banner = (banner + chunk.toString()).slice(-2048);
+      const match = banner.match(/backgrounded[^a-f0-9]+([a-f0-9]{8,})/);
+      if (match) bindSettings(settingsRecord, match[1]);
+    });
+    proc.once('exit', () => reconcileSettings(childEnv));
+  }
 
+  if (settingsOverride && !background) {
+    const cleanup = () => {
+      try {
+        unlinkSync(settingsOverride.path);
+      } catch {}
+    };
+    // Registered before the launcher receives proc: its exit handler may exit
+    // the parent before close fires, so remove caller settings synchronously.
+    proc.once('exit', cleanup);
+    proc.once('close', cleanup);
+    proc.once('error', cleanup);
+  }
   if (assignedKey) {
     recordSessionLease(sessionId, assignedKey, proc.pid);
     proc.once('exit', () => releaseSessionLease(sessionId));

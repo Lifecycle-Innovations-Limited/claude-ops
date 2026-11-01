@@ -424,7 +424,7 @@ $commits
 
 Diffstat:
 $diffstat"
-    ai_out="$(printf '%s' "$ai_prompt" | claude -p 2>/dev/null || true)"
+    ai_out="$(printf '%s' "$ai_prompt" | claude --settings '{"enabledPlugins":{"telegram@claude-plugins-official":false}}' -p 2>/dev/null || true)"
     ai_out="$(printf '%s\n' "$ai_out" | sed -E '/^```/d')"   # strip any stray code fences
     if printf '%s' "$ai_out" | grep -qE '^### (Added|Changed|Fixed|Removed)'; then
       notes="$ai_out"; ai_used=1

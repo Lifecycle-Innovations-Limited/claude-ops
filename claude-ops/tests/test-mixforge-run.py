@@ -1,4 +1,5 @@
 """Exercise the OPS adapter through its real subprocess interface."""
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -50,6 +51,12 @@ class AdapterTests(unittest.TestCase):
             result = self.run_adapter({'MIXFORGE_SOURCE': tmp}, '--help')
             self.assertEqual(result.returncode, 2)
             self.assertIn('MIXFORGE_SOURCE', result.stderr)
+
+    @unittest.skipUnless(importlib.util.find_spec('numpy'), 'bundled engine needs numpy')
+    def test_bundled_engine_is_default_and_has_judge(self):
+        result = self.run_adapter({}, 'judge', '--help')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--approve-audio-upload', result.stdout)
 
     def test_runtime_model_configuration_is_not_rewritten(self):
         with tempfile.TemporaryDirectory() as tmp:

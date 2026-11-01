@@ -30,7 +30,7 @@ Configuration is outside the plugin, through the current process environment:
 
 - `MIXFORGE_EXECUTABLE`: the existing executable path/name. This takes precedence.
 - Otherwise `MIXFORGE_SOURCE`: the directory containing `mixforge/__main__.py`, with optional `MIXFORGE_PYTHON` selecting its existing interpreter.
-- Otherwise the adapter resolves `mixforge` on PATH.
+- Otherwise the engine bundled with this skill (`skills/ops-mix/engine`) runs, with `MIXFORGE_PYTHON` selecting an interpreter that has numpy (and ffmpeg on PATH). This is the default and the single engine.
 
 An explicit invalid setting fails; no provider, interpreter or installation fallback. Model configuration and credentials stay in the existing scoped runtime environment. Do not print or request secrets in chat, pin model IDs, or weaken existing routing.
 
@@ -39,6 +39,19 @@ An explicit invalid setting fails; no provider, interpreter or installation fall
 For an existing project, read its brief and reports first; ask only missing questions. For a new mix, gather name, length, intended audience/use, genre, BPM range, reference mixes, source tracks, required/excluded tracks, opening/closing, energy curve, transition length and output format/directory. Use one relevant question per turn, offering sensible defaults. Distinguish hard requirements from preferences. Never infer a clean version, rights clearance, catalog availability, musical drop or reviewed cue from a filename or timestamp.
 
 Save a versioned `mixbrief.json` using the engine's supported schema. Run `project <brief>` for preflight. Show the proposed tracklist, duration, output and blockers. After the user approves the actual plan, run `project <brief> --render`. Preserve unresolved requirements and refuse existing outputs; choose a new output directory. Generated music requires separate approval for requests and cost limit. Read the actual output duration/files before reporting a render.
+
+## Local full draft on a shared clock
+
+For a full-length draft that must keep every overlap on one beat clock, run the engine's `full-shared-clock-draft --help` first, then `full-shared-clock-draft --task-root <task-dir> --output <new-dir>` through the adapter. The output directory must be new; never overwrite an earlier variant. Runs are heavy and serial: one render at a time, low priority, and respect the operator's resource-broker or load guard if one exists.
+
+Report only what the produced files prove. Read `final-manifest.json` and re-hash every listed file before quoting a result. A draft is `ready_for_final_delivery=false` and unlistened until a human has listened. Keep these measurements separate:
+
+- Formal placement of every overlap (map based, tolerance 1 ms) is not physical beat phase. Report both, per transition, with the method.
+- Groove phase per deck against the track's own grid, per band (low, mid, high). Where bands disagree, label the transition phase-uncertain; do not average it away.
+- Bass ownership: seconds in each overlap without bass, split into source empty versus automation, measured on the mix audio in the same band the rule uses.
+- Sum and reconstruction error, total length in frames, true peak and integrated loudness, and the end fade.
+
+Alternative variants (different bass switch moments, cue fixes) are new output directories, each with its own manifest. Name the listening candidate explicitly and say why. Never push, upload or send a draft because it measures well.
 
 ## Judge
 

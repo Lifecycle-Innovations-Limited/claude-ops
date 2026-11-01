@@ -154,6 +154,7 @@ The background memory extractor now prefers the Claude Code OAuth token stored i
 
 - [Claude Code](https://claude.ai/code) 1.0+
 - GitHub CLI (`gh`) — for PRs and CI status
+- `python3` or `flock(1)` — the task-reminder hook needs one of them for its per-session lock (macOS has no `flock`, so it needs `python3`). With neither, the hook prints a message on stderr and counts nothing. `/ops:doctor` checks this.
 
 Everything else is optional. The setup wizard (`/ops:setup`) auto-detects what's installed and configures accordingly.
 

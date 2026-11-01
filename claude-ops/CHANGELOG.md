@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+- `ops-task-reminder`: the portable (no `flock(1)`) lock no longer uses a `.lockd` directory with age-based reclaim, which let one worker remove another's fresh lock and lose counter updates. It now runs the whole counter transaction in `scripts/lib/task-reminder-lock.py` under a real `fcntl.flock` on the same `.flock` file the `flock(1)` branch uses. Killed holders release at once; a live holder is never evicted on age. The `flock(1)` branch is unchanged; `OPS_TASK_REMINDER_LOCK_IMPL=mkdir` remains an alias of `portable`.
+
+### Changed (dependency + rollout)
+- The portable path now requires `python3`. If it is missing and `flock(1)` is absent, the hook says so on stderr and counts nothing (exit 0). `ops-doctor` warns about this.
+- Mixed-version rollout: old mkdir-protocol workers do not take the kernel lock. Do not run old and new hooks against the same state directory at once. Let in-flight hooks finish, then update; no live install or restart is performed by this change.
+
 ## [3.12.0] - 2026-10-27
 
 ### Changed

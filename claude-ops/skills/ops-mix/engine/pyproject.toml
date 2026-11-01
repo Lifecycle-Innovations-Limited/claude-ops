@@ -1,0 +1,18 @@
+[project]
+name = "mixforge"
+version = "0.1.0"
+description = "Een lokale mixtapeplanner en renderer met referentieprofielen"
+requires-python = ">=3.12"
+dependencies = ["numpy>=2"]
+
+[project.optional-dependencies]
+full = ["librosa", "soundfile", "pyrubberband", "scipy"]
+dev = ["pytest"]
+audio-judge = ["google-genai"]
+
+[project.scripts]
+mixforge = "mixforge.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

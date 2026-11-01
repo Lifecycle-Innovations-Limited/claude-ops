@@ -107,6 +107,10 @@
       "summary": "This skill should be used when the user asks to \"add an API\", \"integrate SaaS\", or \"/ops:ops-integrate\". Add any SaaS API as a first-class integration. Provide the service name — ops-integrate discovers auth patterns, tests connectivity, and registers the API in your partner registry so it's available to other skills."
     },
     {
+      "name": "ops-jdi",
+      "summary": "This skill should be used when the user asks to \"just do it\", \"install jdi\", \"keep going until delivered\", or \"/ops:ops-jdi\". Manages the bundled, opt-in Just Do It Claude Code plugin: a model-free Stop gate that keeps an authorized task going until it is verified and delivered, with scoped self-maintenance and an on-demand audit. Installs, updates, uninstalls and rolls back the plugin through a transactional installer that validates marketplace ownership, backs up managed source and preserves runtime state."
+    },
+    {
       "name": "ops-leadgen",
       "summary": "This skill should be used when the user asks to \"leadgen drafts\", \"cold email approve\", or \"/ops:ops-leadgen\". My-Project B2B wholesale leadgen review and send flow. Shows pending cold-email drafts from my-project-b2b-leadgen, lets you approve/skip each one, and fires approved drafts one-at-a-time via Rule-6-gated `my-project-leadgen send`. Never batches sends."
     },
