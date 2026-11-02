@@ -11,9 +11,10 @@ const ci = readFileSync(`${root}/.github/workflows/ci.yml`, 'utf8');
 const jobs = Object.fromEntries([...ci.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:|$(?![\s\S]))/gm)].map(m => [m[1], m[2]]));
 const routed = ['optimize-ci', 'lint-and-check', 'pii-gate', 'pii-gate-metadata', 'test-suite', 'ci-summary'];
 const cases = [
-  ['same-repo PR', 'pull_request', 'example/repo', ['self-hosted', 'Linux', 'aws']],
+  // X64 is required: the AWS scale-up lambda only accepts jobs that request it.
+  ['same-repo PR', 'pull_request', 'example/repo', ['self-hosted', 'Linux', 'X64', 'aws']],
   ['fork PR', 'pull_request', 'example/fork', 'ubuntu-latest'],
-  ['push', 'push', null, ['self-hosted', 'Linux', 'aws']],
+  ['push', 'push', null, ['self-hosted', 'Linux', 'X64', 'aws']],
 ];
 for (const job of routed) {
   const match = jobs[job]?.match(/^    runs-on: \$\{\{ (.+) \}\}$/m);
