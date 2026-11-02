@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   audit:
-    runs-on: [self-hosted, Linux, aws]
+    runs-on: [self-hosted, Linux, X64, aws]
     steps:
       - uses: actions/checkout@v7
 
