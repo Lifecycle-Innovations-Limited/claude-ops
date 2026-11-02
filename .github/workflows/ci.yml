@@ -23,7 +23,7 @@ jobs:
     permissions: {}
     # A fork pull_request checks out untrusted code. That stays on GitHub-hosted
     # ubuntu-latest. Same-repo pull requests and pushes use the AWS runner.
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","aws"]') }}
     outputs:
       skip: ${{ steps.check-skip.outputs.skip }}
     steps:
@@ -41,7 +41,7 @@ jobs:
     # element stays so the check name remains "lint-and-check (ubuntu-latest)".
     # The matrix value is only the required check label. Same-repo work runs
     # on the AWS runner; a fork pull_request stays on GitHub-hosted ubuntu-latest.
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","aws"]') }}
     strategy:
       matrix:
         os: [ubuntu-latest]
@@ -90,7 +90,7 @@ jobs:
   # the optimizer or secret-scan job's state. Catches the class that leaked into
   # history (scrubbed 2026-06-07).
   pii-gate:
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","aws"]') }}
     steps:
       - uses: actions/checkout@v7
       - name: PII / personal-data scan
@@ -114,7 +114,7 @@ jobs:
   # behaves identically on a fork PR, where secrets are unavailable.
   pii-gate-metadata:
     name: pii-gate-metadata
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","aws"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -150,7 +150,7 @@ jobs:
     # The single matrix element keeps the required check name
     # "test-suite (ubuntu-latest)". Same-repo work runs on the AWS runner;
     # a fork pull_request stays on GitHub-hosted ubuntu-latest.
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","aws"]') }}
     needs: [optimize-ci, lint-and-check]
     strategy:
       matrix:
@@ -175,7 +175,7 @@ jobs:
   # skipped (path-gated or Graphite optimizer skip) is treated as passing.
   ci-summary:
     name: CI Summary
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","aws"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","aws"]') }}
     timeout-minutes: 5
     permissions: {}
     needs: [optimize-ci, lint-and-check, pii-gate, pii-gate-metadata, test-suite]
