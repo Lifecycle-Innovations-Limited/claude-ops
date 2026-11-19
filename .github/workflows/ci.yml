@@ -18,6 +18,7 @@ permissions:
 
 jobs:
   optimize-ci:
+    timeout-minutes: 60
     name: Graphite CI Optimizer
     if: github.event_name == 'pull_request'
     permissions: {}
@@ -32,6 +33,7 @@ jobs:
           graphite_token: ${{ secrets.GRAPHITE_CI_TOKEN }}
 
   lint-and-check:
+    timeout-minutes: 60
     if: always() && (github.event_name != 'pull_request' || needs.optimize-ci.outputs.skip == 'false')
     needs: optimize-ci
     # ubuntu-latest is ubuntu-24.04. A second matrix leg ran the same
@@ -42,8 +44,8 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "20"
 
@@ -86,9 +88,10 @@ jobs:
   # the optimizer or secret-scan job's state. Catches the class that leaked into
   # history (scrubbed 2026-06-07).
   pii-gate:
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: PII / personal-data scan
         run: bash claude-ops/tests/test-no-secrets.sh
       - name: Hashed identity scan of every tracked file
@@ -109,10 +112,11 @@ jobs:
   # git history that checkout already fetched. No gh api call, no secret, so it
   # behaves identically on a fork PR, where secrets are unavailable.
   pii-gate-metadata:
+    timeout-minutes: 60
     name: pii-gate-metadata
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # The PR range needs both endpoints, so the shallow default will not
           # do. `fetch-depth: 0` is the honest way to say "we need history".
@@ -142,6 +146,7 @@ jobs:
         run: bash claude-ops/bin/ops-pii-scan --manifests
 
   test-suite:
+    timeout-minutes: 60
     if: always() && needs.lint-and-check.result == 'success' && (github.event_name != 'pull_request' || needs.optimize-ci.outputs.skip == 'false')
     runs-on: ${{ matrix.os }}
     needs: [optimize-ci, lint-and-check]
@@ -149,7 +154,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install test dependencies
         run: |
           sudo apt-get install -y shellcheck 2>/dev/null || true

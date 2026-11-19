@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   log-query:
+    timeout-minutes: 60
     environment: production
     runs-on: ubuntu-latest
     steps:

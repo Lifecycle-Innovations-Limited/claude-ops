@@ -17,12 +17,13 @@ permissions:
 jobs:
   # ─── 1. GitHub Release from CHANGELOG ───────────────────────────────────────
   create-release:
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
       notes_file: ${{ steps.changelog.outputs.NOTES_FILE }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -68,10 +69,11 @@ jobs:
   # We now open a PR against main with the bumps and let the maintainer
   # squash-merge.
   bump-version-pr:
+    timeout-minutes: 60
     needs: create-release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
