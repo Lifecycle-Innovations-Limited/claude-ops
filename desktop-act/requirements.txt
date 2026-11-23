@@ -1,8 +1,8 @@
 aiohttp==3.14.4
 anthropic==0.120.2
 claude-agent-sdk==0.2.128
-fastmcp==3.4.5
-fastmcp-slim==3.4.5
+fastmcp==3.4.10
+fastmcp-slim==3.4.10
 httpx==0.28.1
 httpx-sse==0.4.3
 # mcp 2.x exists on PyPI but claude-agent-sdk and fastmcp require mcp<2.0.
