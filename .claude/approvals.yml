@@ -1,0 +1,17 @@
+version: 1
+rules:
+  - purpose: "A change takes two people."
+    paths: ["**"]
+    verdict: { claude: comments, seats: 2 }
+    override:
+      - if: "claude/code_review = pass"
+        verdict: { claude: approves, seats: 1 }
+    advisory: [claude/code_review]
+  - purpose: "Changes to CI, deploy configuration and reviewer instructions take two people."
+    paths: [".github/**", "CODEOWNERS", "CLAUDE.md", "AGENTS.md", ".mcp.json", "REVIEW.md", "infra/**", "terraform/**"]
+    nested: inherit
+    verdict: { claude: comments, seats: 2 }
+  - purpose: "A change to the review rules takes two people."
+    paths: ["**/.claude/**"]
+    nested: inherit
+    verdict: { claude: comments, seats: 2 }
