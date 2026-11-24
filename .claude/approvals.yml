@@ -1,0 +1,13 @@
+version: 1
+rules:
+  - purpose: "A change takes two people."
+    paths: ["**"]
+    verdict: { claude: comments, seats: 2 }
+    override:
+      - if: "claude/code_review = pass"
+        verdict: { claude: approves, seats: 1 }
+    advisory: [claude/code_review]
+  - purpose: "A change to the review rules takes two people."
+    paths: ["**/.claude/**"]
+    nested: inherit
+    verdict: { claude: comments, seats: 2 }
